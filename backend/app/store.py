@@ -73,6 +73,19 @@ class BaseStore:
     async def set_trade_tags(self, client_id: str, fingerprint: str, tag_ids: list[str]) -> dict: ...
     async def set_trade_note(self, client_id: str, fingerprint: str, note: str) -> dict: ...
 
+    # news pipeline — a PDF upload (scope: "manager" | "client") kicks off async OCR +
+    # NLP processing; news_items are the resulting stories, news_links the symbol edges
+    # (kept alongside news_items.symbols per the LLD's denormalized-for-read rationale).
+    async def create_pdf_upload(self, doc: dict) -> dict: ...
+    async def update_pdf_upload(self, upload_id: str, patch: dict) -> dict | None: ...
+    async def get_pdf_upload(self, upload_id: str) -> dict | None: ...
+    async def list_pdf_uploads(self, scope: str, owner_id: str) -> list[dict]: ...
+    async def pdf_upload_exists(self, scope: str, owner_id: str, file_hash: str) -> bool: ...
+    async def insert_news_items(self, items: list[dict]) -> int: ...
+    async def insert_news_links(self, links: list[dict]) -> int: ...
+    async def news_for_symbol(self, symbol: str, limit: int = 20) -> list[dict]: ...
+    async def news_for_symbols(self, symbols: list[str], limit: int = 50) -> list[dict]: ...
+
 
 # --------------------------------------------------------------------------- #
 # JSON fallback
@@ -84,13 +97,17 @@ class JsonStore(BaseStore):
         self._db = {
             "managers": [], "clients": [], "uploads": [], "trades": [], "watchlists": [],
             "tags": [], "trade_tags": [],
+            "pdf_uploads": [], "news_items": [], "news_links": [],
         }
 
     async def init(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             self._db = json.loads(self.path.read_text() or "{}")
-            for k in ("managers", "clients", "uploads", "trades", "watchlists", "tags", "trade_tags"):
+            for k in (
+                "managers", "clients", "uploads", "trades", "watchlists", "tags", "trade_tags",
+                "pdf_uploads", "news_items", "news_links",
+            ):
                 self._db.setdefault(k, [])
 
     def _flush(self) -> None:
@@ -128,6 +145,7 @@ class JsonStore(BaseStore):
                 w for w in self._db["watchlists"]
                 if not (w["owner_type"] == "MANAGER" and w["owner_id"] == mid)
             ]
+            self._cascade_delete_news("manager", mid)
             self._flush()
             return len(self._db["managers"]) < before
 
@@ -170,8 +188,27 @@ class JsonStore(BaseStore):
             ]
             self._db["tags"] = [t for t in self._db["tags"] if t["client_id"] != cid]
             self._db["trade_tags"] = [t for t in self._db["trade_tags"] if t["client_id"] != cid]
+            self._cascade_delete_news("client", cid)
             self._flush()
             return len(self._db["clients"]) < before
+
+    def _cascade_delete_news(self, scope: str, owner_id: str) -> None:
+        dead_uploads = {
+            u["id"] for u in self._db["pdf_uploads"]
+            if u["scope"] == scope and u["owner_id"] == owner_id
+        }
+        self._db["pdf_uploads"] = [
+            u for u in self._db["pdf_uploads"] if u["id"] not in dead_uploads
+        ]
+        dead_items = {
+            i["id"] for i in self._db["news_items"] if i["pdf_upload_id"] in dead_uploads
+        }
+        self._db["news_items"] = [
+            i for i in self._db["news_items"] if i["id"] not in dead_items
+        ]
+        self._db["news_links"] = [
+            link for link in self._db["news_links"] if link["item_id"] not in dead_items
+        ]
 
     def _wl(self, owner_type, owner_id):
         return next(
@@ -320,6 +357,65 @@ class JsonStore(BaseStore):
             self._flush()
             return {"tag_ids": link.get("tag_ids", []), "note": link["note"]}
 
+    async def create_pdf_upload(self, doc):
+        doc["id"] = doc.get("id") or _new_id()
+        async with self._lock:
+            self._db["pdf_uploads"].append(doc)
+            self._flush()
+        return doc
+
+    async def update_pdf_upload(self, upload_id, patch):
+        async with self._lock:
+            u = next((u for u in self._db["pdf_uploads"] if u["id"] == upload_id), None)
+            if u:
+                u.update(patch)
+                self._flush()
+            return u
+
+    async def get_pdf_upload(self, upload_id):
+        return next((u for u in self._db["pdf_uploads"] if u["id"] == upload_id), None)
+
+    async def list_pdf_uploads(self, scope, owner_id):
+        return sorted(
+            [u for u in self._db["pdf_uploads"] if u["scope"] == scope and u["owner_id"] == owner_id],
+            key=lambda u: u.get("uploaded_at", ""),
+            reverse=True,
+        )
+
+    async def pdf_upload_exists(self, scope, owner_id, file_hash):
+        return any(
+            u["scope"] == scope and u["owner_id"] == owner_id and u.get("file_hash") == file_hash
+            for u in self._db["pdf_uploads"]
+        )
+
+    async def insert_news_items(self, items):
+        async with self._lock:
+            for it in items:
+                it["id"] = it.get("id") or _new_id()
+                self._db["news_items"].append(it)
+            self._flush()
+        return len(items)
+
+    async def insert_news_links(self, links):
+        async with self._lock:
+            for lk in links:
+                lk["id"] = lk.get("id") or _new_id()
+                self._db["news_links"].append(lk)
+            self._flush()
+        return len(links)
+
+    async def news_for_symbol(self, symbol, limit=20):
+        symbol = symbol.upper()
+        items = [i for i in self._db["news_items"] if symbol in i.get("symbols", [])]
+        items.sort(key=lambda i: i.get("published_at", i.get("created_at", "")), reverse=True)
+        return items[:limit]
+
+    async def news_for_symbols(self, symbols, limit=50):
+        wanted = {s.upper() for s in symbols}
+        items = [i for i in self._db["news_items"] if wanted & set(i.get("symbols", []))]
+        items.sort(key=lambda i: i.get("published_at", i.get("created_at", "")), reverse=True)
+        return items[:limit]
+
 
 # --------------------------------------------------------------------------- #
 # Mongo backend
@@ -348,6 +444,11 @@ class MongoStore(BaseStore):
             [("client_id", 1), ("fingerprint", 1)], unique=True
         )
         await self.db.tags.create_index([("client_id", 1)])
+        await self.db.pdf_uploads.create_index([("scope", 1), ("owner_id", 1), ("file_hash", 1)])
+        await self.db.news_items.create_index("symbols")
+        await self.db.news_items.create_index("pdf_upload_id")
+        await self.db.news_links.create_index("item_id")
+        await self.db.news_links.create_index("symbol")
 
     async def close(self):
         if self.client:
@@ -377,6 +478,7 @@ class MongoStore(BaseStore):
     async def delete_manager(self, mid):
         res = await self.db.managers.delete_one({"id": mid})
         await self.db.watchlists.delete_many({"owner_type": "MANAGER", "owner_id": mid})
+        await self._cascade_delete_news("manager", mid)
         return res.deleted_count > 0
 
     async def list_clients(self, manager_id=None):
@@ -405,7 +507,25 @@ class MongoStore(BaseStore):
         await self.db.watchlists.delete_many({"owner_type": "CLIENT", "owner_id": cid})
         await self.db.tags.delete_many({"client_id": cid})
         await self.db.trade_tags.delete_many({"client_id": cid})
+        await self._cascade_delete_news("client", cid)
         return res.deleted_count > 0
+
+    async def _cascade_delete_news(self, scope, owner_id):
+        upload_ids = [
+            u["id"] async for u in self.db.pdf_uploads.find(
+                {"scope": scope, "owner_id": owner_id}, {"id": 1}
+            )
+        ]
+        if not upload_ids:
+            return
+        item_ids = [
+            i["id"] async for i in self.db.news_items.find(
+                {"pdf_upload_id": {"$in": upload_ids}}, {"id": 1}
+            )
+        ]
+        await self.db.news_links.delete_many({"item_id": {"$in": item_ids}})
+        await self.db.news_items.delete_many({"pdf_upload_id": {"$in": upload_ids}})
+        await self.db.pdf_uploads.delete_many({"id": {"$in": upload_ids}})
 
     async def get_watchlist(self, owner_type, owner_id):
         w = await self.db.watchlists.find_one({"owner_type": owner_type, "owner_id": owner_id})
@@ -520,6 +640,56 @@ class MongoStore(BaseStore):
         )
         d = await self.db.trade_tags.find_one({"client_id": client_id, "fingerprint": fingerprint})
         return {"tag_ids": d.get("tag_ids", []), "note": d.get("note", "")}
+
+    async def create_pdf_upload(self, doc):
+        doc["id"] = doc.get("id") or _new_id()
+        await self.db.pdf_uploads.insert_one(dict(doc))
+        return self._clean(doc)
+
+    async def update_pdf_upload(self, upload_id, patch):
+        await self.db.pdf_uploads.update_one({"id": upload_id}, {"$set": patch})
+        return self._clean(await self.db.pdf_uploads.find_one({"id": upload_id}))
+
+    async def get_pdf_upload(self, upload_id):
+        return self._clean(await self.db.pdf_uploads.find_one({"id": upload_id}))
+
+    async def list_pdf_uploads(self, scope, owner_id):
+        cur = self.db.pdf_uploads.find({"scope": scope, "owner_id": owner_id}).sort("uploaded_at", -1)
+        return [self._clean(d) async for d in cur]
+
+    async def pdf_upload_exists(self, scope, owner_id, file_hash):
+        return await self.db.pdf_uploads.find_one(
+            {"scope": scope, "owner_id": owner_id, "file_hash": file_hash}
+        ) is not None
+
+    async def insert_news_items(self, items):
+        if not items:
+            return 0
+        for it in items:
+            it["id"] = it.get("id") or _new_id()
+        await self.db.news_items.insert_many([dict(i) for i in items])
+        return len(items)
+
+    async def insert_news_links(self, links):
+        if not links:
+            return 0
+        for lk in links:
+            lk["id"] = lk.get("id") or _new_id()
+        await self.db.news_links.insert_many([dict(lk) for lk in links])
+        return len(links)
+
+    async def news_for_symbol(self, symbol, limit=20):
+        cur = self.db.news_items.find({"symbols": symbol.upper()}).sort(
+            [("published_at", -1), ("created_at", -1)]
+        ).limit(limit)
+        return [self._clean(d) async for d in cur]
+
+    async def news_for_symbols(self, symbols, limit=50):
+        wanted = [s.upper() for s in symbols]
+        cur = self.db.news_items.find({"symbols": {"$in": wanted}}).sort(
+            [("published_at", -1), ("created_at", -1)]
+        ).limit(limit)
+        return [self._clean(d) async for d in cur]
 
 
 # --------------------------------------------------------------------------- #
