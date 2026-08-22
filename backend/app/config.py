@@ -27,6 +27,17 @@ class Settings(BaseSettings):
     # CORS — the React dev server / GitHub Pages origin
     cors_origins: str = "*"
 
+    # News pipeline — offline-first (see docs/06-news-pipeline.md). "rules" needs no
+    # setup at all; "local" needs Ollama running; "claude" needs an API key. Any tier
+    # falls back to rules automatically if its dependency isn't actually available.
+    news_pdf_min_page_chars: int = 400  # below this, a page is ad/light and skipped
+    news_enricher: str = "rules"  # rules | local | claude
+    ollama_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2"
+    anthropic_api_key: str = ""  # only used when news_enricher=claude
+    news_rss_enrichment: bool = True  # set false for fully air-gapped operation
+    news_rss_max_related: int = 3
+
     @property
     def use_mongo(self) -> bool:
         return bool(self.mongodb_url.strip())

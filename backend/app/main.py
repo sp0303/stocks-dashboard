@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import admin, clients, market, portfolio, watchlists
+from app.routers import admin, clients, market, news, portfolio, watchlists
 from app.seed import seed_if_empty
 from app.store import init_store
 
@@ -39,6 +39,7 @@ app.include_router(clients.router)
 app.include_router(portfolio.router)
 app.include_router(watchlists.router)
 app.include_router(market.router)
+app.include_router(news.router)
 
 
 @app.get("/api/health")
