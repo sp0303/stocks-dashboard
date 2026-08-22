@@ -53,6 +53,15 @@ async def performance(client_id: str):
     return {"data": analytics.performance_series(trades)}
 
 
+@router.get("/{client_id}/benchmark")
+async def benchmark(client_id: str, from_date: str | None = Query(None, alias="from")):
+    """Mark-to-market portfolio value vs Nifty 50 / Sensex, indexed to 100 at the
+    window start. Can be slow on first call for large/old portfolios (fetches one
+    full price history per symbol) — the underlying Yahoo calls aren't cached yet."""
+    trades = await _trades_or_404(client_id)
+    return {"data": analytics.benchmark_comparison(trades, from_date)}
+
+
 @router.get("/{client_id}/trades")
 async def trades(
     client_id: str,

@@ -44,9 +44,12 @@ class BaseStore:
     async def delete_client(self, cid: str) -> bool: ...
 
     # watchlists  (owner_type: "MANAGER" | "CLIENT")
-    async def get_watchlist(self, owner_type: str, owner_id: str) -> list[str]: ...
-    async def add_watchlist_symbol(self, owner_type: str, owner_id: str, symbol: str) -> list[str]: ...
-    async def remove_watchlist_symbol(self, owner_type: str, owner_id: str, symbol: str) -> list[str]: ...
+    # each entry: {"symbol": str, "checkpoint_date": str | None} — the checkpoint is an
+    # optional "watching since" date so the UI can show performance since that date.
+    async def get_watchlist(self, owner_type: str, owner_id: str) -> list[dict]: ...
+    async def add_watchlist_symbol(self, owner_type: str, owner_id: str, symbol: str, checkpoint_date: str | None = None) -> list[dict]: ...
+    async def remove_watchlist_symbol(self, owner_type: str, owner_id: str, symbol: str) -> list[dict]: ...
+    async def set_watchlist_checkpoint(self, owner_type: str, owner_id: str, symbol: str, checkpoint_date: str | None) -> list[dict]: ...
 
     # uploads + trades
     async def create_upload(self, doc: dict) -> dict: ...
@@ -217,30 +220,62 @@ class JsonStore(BaseStore):
             None,
         )
 
-    async def get_watchlist(self, owner_type, owner_id):
-        w = self._wl(owner_type, owner_id)
-        return list(w["symbols"]) if w else []
+    @staticmethod
+    def _entries(w):
+        """Normalizes both the legacy `symbols: [str]` shape and the current
+        `entries: [{symbol, checkpoint_date}]` shape into the latter."""
+        if not w:
+            return []
+        if "entries" in w:
+            return w["entries"]
+        return [{"symbol": s, "checkpoint_date": None} for s in w.get("symbols", [])]
 
-    async def add_watchlist_symbol(self, owner_type, owner_id, symbol):
+    async def get_watchlist(self, owner_type, owner_id):
+        return [dict(e) for e in self._entries(self._wl(owner_type, owner_id))]
+
+    async def add_watchlist_symbol(self, owner_type, owner_id, symbol, checkpoint_date=None):
         symbol = symbol.upper()
         async with self._lock:
             w = self._wl(owner_type, owner_id)
             if not w:
-                w = {"owner_type": owner_type, "owner_id": owner_id, "symbols": []}
+                w = {"owner_type": owner_type, "owner_id": owner_id, "entries": []}
                 self._db["watchlists"].append(w)
-            if symbol not in w["symbols"]:
-                w["symbols"].append(symbol)
+            entries = self._entries(w)
+            w["entries"] = entries
+            w.pop("symbols", None)
+            existing = next((e for e in entries if e["symbol"] == symbol), None)
+            if existing:
+                if checkpoint_date is not None:
+                    existing["checkpoint_date"] = checkpoint_date
+            else:
+                entries.append({"symbol": symbol, "checkpoint_date": checkpoint_date})
             self._flush()
-            return list(w["symbols"])
+            return [dict(e) for e in entries]
 
     async def remove_watchlist_symbol(self, owner_type, owner_id, symbol):
         symbol = symbol.upper()
         async with self._lock:
             w = self._wl(owner_type, owner_id)
-            if w and symbol in w["symbols"]:
-                w["symbols"].remove(symbol)
+            entries = [e for e in self._entries(w) if e["symbol"] != symbol]
+            if w:
+                w["entries"] = entries
+                w.pop("symbols", None)
                 self._flush()
-            return list(w["symbols"]) if w else []
+            return [dict(e) for e in entries]
+
+    async def set_watchlist_checkpoint(self, owner_type, owner_id, symbol, checkpoint_date):
+        symbol = symbol.upper()
+        async with self._lock:
+            w = self._wl(owner_type, owner_id)
+            entries = self._entries(w)
+            for e in entries:
+                if e["symbol"] == symbol:
+                    e["checkpoint_date"] = checkpoint_date
+            if w:
+                w["entries"] = entries
+                w.pop("symbols", None)
+                self._flush()
+            return [dict(e) for e in entries]
 
     async def create_upload(self, doc):
         doc["id"] = doc.get("id") or _new_id()
@@ -527,26 +562,57 @@ class MongoStore(BaseStore):
         await self.db.news_items.delete_many({"pdf_upload_id": {"$in": upload_ids}})
         await self.db.pdf_uploads.delete_many({"id": {"$in": upload_ids}})
 
+    @staticmethod
+    def _entries_from_doc(w):
+        if not w:
+            return []
+        if "entries" in w:
+            return w["entries"]
+        return [{"symbol": s, "checkpoint_date": None} for s in w.get("symbols", [])]
+
     async def get_watchlist(self, owner_type, owner_id):
         w = await self.db.watchlists.find_one({"owner_type": owner_type, "owner_id": owner_id})
-        return list(w["symbols"]) if w else []
+        return self._entries_from_doc(w)
 
-    async def add_watchlist_symbol(self, owner_type, owner_id, symbol):
+    async def add_watchlist_symbol(self, owner_type, owner_id, symbol, checkpoint_date=None):
         symbol = symbol.upper()
+        w = await self.db.watchlists.find_one({"owner_type": owner_type, "owner_id": owner_id})
+        entries = self._entries_from_doc(w)
+        existing = next((e for e in entries if e["symbol"] == symbol), None)
+        if existing:
+            if checkpoint_date is not None:
+                existing["checkpoint_date"] = checkpoint_date
+        else:
+            entries.append({"symbol": symbol, "checkpoint_date": checkpoint_date})
         await self.db.watchlists.update_one(
             {"owner_type": owner_type, "owner_id": owner_id},
-            {"$addToSet": {"symbols": symbol}},
+            {"$set": {"entries": entries}, "$unset": {"symbols": ""}},
             upsert=True,
         )
-        return await self.get_watchlist(owner_type, owner_id)
+        return entries
 
     async def remove_watchlist_symbol(self, owner_type, owner_id, symbol):
         symbol = symbol.upper()
+        w = await self.db.watchlists.find_one({"owner_type": owner_type, "owner_id": owner_id})
+        entries = [e for e in self._entries_from_doc(w) if e["symbol"] != symbol]
         await self.db.watchlists.update_one(
             {"owner_type": owner_type, "owner_id": owner_id},
-            {"$pull": {"symbols": symbol}},
+            {"$set": {"entries": entries}, "$unset": {"symbols": ""}},
         )
-        return await self.get_watchlist(owner_type, owner_id)
+        return entries
+
+    async def set_watchlist_checkpoint(self, owner_type, owner_id, symbol, checkpoint_date):
+        symbol = symbol.upper()
+        w = await self.db.watchlists.find_one({"owner_type": owner_type, "owner_id": owner_id})
+        entries = self._entries_from_doc(w)
+        for e in entries:
+            if e["symbol"] == symbol:
+                e["checkpoint_date"] = checkpoint_date
+        await self.db.watchlists.update_one(
+            {"owner_type": owner_type, "owner_id": owner_id},
+            {"$set": {"entries": entries}},
+        )
+        return entries
 
     async def create_upload(self, doc):
         doc["id"] = doc.get("id") or _new_id()

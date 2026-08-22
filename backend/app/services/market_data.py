@@ -19,8 +19,17 @@ class MarketDataProvider(ABC):
 
 
 def _yf_ticker(symbol: str, exchange: str = "NSE") -> str:
+    if exchange.upper() == "INDEX":
+        return symbol  # raw ticker, e.g. ^NSEI, ^BSESN — no NSE/BSE suffix
     suffix = ".BO" if exchange.upper() == "BSE" else ".NS"
     return f"{symbol}{suffix}"
+
+
+# Well-known Indian benchmark indices, keyed by a short id used across the API.
+BENCHMARKS = {
+    "nifty50": {"label": "Nifty 50", "ticker": "^NSEI"},
+    "sensex": {"label": "Sensex", "ticker": "^BSESN"},
+}
 
 
 _CHART_HOSTS = ("https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com")
@@ -121,7 +130,7 @@ def get_history(symbol: str, from_date: str | None = None, interval: str = "1d",
 
     primary = _yf_ticker(symbol, exchange)
     res = fetch(primary)
-    if not res or "timestamp" not in res:
+    if exchange.upper() != "INDEX" and (not res or "timestamp" not in res):
         res = fetch(f"{symbol}.BO" if primary.endswith(".NS") else f"{symbol}.NS")
     if not res or "timestamp" not in res:
         return {"symbol": symbol, "interval": interval, "points": []}
@@ -145,6 +154,31 @@ def get_history(symbol: str, from_date: str | None = None, interval: str = "1d",
             if points[0]["close"] else None,
         }
     return {"symbol": symbol, "interval": interval, "from": from_date, "points": points, "stats": stats}
+
+
+def get_checkpoint_prices(entries: list[tuple[str, str]], exchanges: dict[str, str] | None = None) -> dict[str, float | None]:
+    """For watchlist checkpoints: close price on (or just after) each (symbol, date).
+
+    `entries` is a list of (symbol, checkpoint_date) pairs. Threaded — one history
+    fetch per entry, each already efficient (single daily-series call per symbol).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    exchanges = exchanges or {}
+
+    def fetch(pair):
+        symbol, date = pair
+        h = get_history(symbol, from_date=date, interval="1d", exchange=exchanges.get(symbol, "NSE"))
+        pts = h.get("points") or []
+        return symbol, (pts[0]["close"] if pts else None)
+
+    out: dict[str, float | None] = {}
+    if not entries:
+        return out
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        for symbol, price in ex.map(fetch, entries):
+            out[symbol] = price
+    return out
 
 
 class YFinanceProvider(MarketDataProvider):

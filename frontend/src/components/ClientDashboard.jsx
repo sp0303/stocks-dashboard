@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import {
-  PieChart, Pie, Cell, Sector, ResponsiveContainer, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid,
+  PieChart, Pie, Cell, Sector, ResponsiveContainer, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, Legend,
 } from 'recharts'
 import { api, inr, inrFull, pct, pctPlain } from '../api.js'
 import { Stat, PnL, Loading, ErrorBox, useAsync, PALETTE, NewsUploadBar } from './common.jsx'
@@ -290,6 +290,62 @@ function Performance({ client, reload }) {
           </LineChart>
         </ResponsiveContainer>
       </div>
+
+      <h2>Vs. Nifty 50 &amp; Sensex</h2>
+      <BenchmarkChart client={client} reload={reload} />
+    </div>
+  )
+}
+
+function monthsAgoISO(n) {
+  const d = new Date()
+  d.setMonth(d.getMonth() - n)
+  return d.toISOString().slice(0, 10)
+}
+const BENCH_PRESETS = [
+  { key: '3M', from: () => monthsAgoISO(3) },
+  { key: '6M', from: () => monthsAgoISO(6) },
+  { key: '1Y', from: () => monthsAgoISO(12) },
+  { key: 'All', from: () => null },
+]
+
+function BenchmarkChart({ client, reload }) {
+  const [preset, setPreset] = useState('All')
+  const [from, setFrom] = useState(null)
+  const b = useAsync(() => api.benchmark(client.id, from), [client.id, reload, from])
+
+  return (
+    <div>
+      <div className="presets" style={{ marginTop: 0 }}>
+        {BENCH_PRESETS.map((p) => (
+          <button key={p.key} className={preset === p.key ? 'on' : ''}
+            onClick={() => { setPreset(p.key); setFrom(p.from()) }}>{p.key}</button>
+        ))}
+      </div>
+      {b.loading ? <Loading what="benchmark comparison" /> : b.error ? <ErrorBox error={b.error} /> :
+        !b.data.series?.length ? <div className="empty">Not enough price history yet for this range.</div> : (
+        <>
+          <div className="panel" style={{ padding: 16 }}>
+            <ResponsiveContainer width="100%" height={330}>
+              <LineChart data={b.data.series} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
+                <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--muted)' }} minTickGap={40} />
+                <YAxis tick={{ fontSize: 11, fill: 'var(--muted)' }} tickFormatter={(v) => `${v}%`} width={54} />
+                <Tooltip formatter={(v) => (v === null || v === undefined ? '—' : `${v}%`)} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Line type="monotone" dataKey="portfolio_pct" name="My Portfolio" stroke="#0f7a5a" dot={false} strokeWidth={2.5} />
+                <Line type="monotone" dataKey="nifty50_pct" name="Nifty 50" stroke="#3a86c8" dot={false} strokeWidth={1.75} />
+                <Line type="monotone" dataKey="sensex_pct" name="Sensex" stroke="#c88a3a" dot={false} strokeWidth={1.75} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="sub" style={{ marginTop: 10 }}>
+            All three lines indexed to 0% at {b.data.start_date} so they're directly comparable — "if you'd put the
+            same money in the index instead." Approximate: it doesn't correct for capital added or withdrawn mid-period,
+            so a portfolio that started very small can show an outsized % move.
+          </p>
+        </>
+      )}
     </div>
   )
 }

@@ -169,6 +169,112 @@ def performance_series(trades: list[dict]) -> list[dict]:
     return cumulative
 
 
+def portfolio_value_series(trades: list[dict], from_date: str | None = None) -> list[dict]:
+    """True day-by-day mark-to-market portfolio value, using each held symbol's real
+    historical closing price (not cost basis). One history fetch per symbol ever
+    traded, not per day, so this stays cheap even over a multi-year window.
+
+    Forward-fills a symbol's price on days it didn't trade (holidays, illiquidity).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services.market_data import get_history
+
+    ts = sorted(trades, key=lambda t: t["trade_date"])
+    if not ts:
+        return []
+    start = from_date or ts[0]["trade_date"]
+    symbols = sorted({t["symbol"] for t in ts})
+    exchanges = _exchange_map(ts)
+
+    def fetch(sym: str):
+        h = get_history(sym, from_date=ts[0]["trade_date"], interval="1d", exchange=exchanges.get(sym, "NSE"))
+        return sym, {p["date"]: p["close"] for p in h.get("points", [])}
+
+    price_by_symbol: dict[str, dict[str, float]] = {}
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        for sym, series in ex.map(fetch, symbols):
+            price_by_symbol[sym] = series
+
+    all_dates = sorted({d for series in price_by_symbol.values() for d in series if d >= start})
+    if not all_dates:
+        return []
+
+    trades_by_date: dict[str, list[dict]] = defaultdict(list)
+    for t in ts:
+        trades_by_date[t["trade_date"]].append(t)
+    trade_dates_sorted = sorted(trades_by_date.keys())
+
+    qty: dict[str, float] = defaultdict(float)
+    last_price: dict[str, float] = {}
+    out = []
+    ti = 0
+    for day in all_dates:
+        while ti < len(trade_dates_sorted) and trade_dates_sorted[ti] <= day:
+            for t in trades_by_date[trade_dates_sorted[ti]]:
+                delta = t["quantity"] if t["trade_type"] == "buy" else -t["quantity"]
+                qty[t["symbol"]] += delta
+            ti += 1
+        mv = 0.0
+        for sym, q in qty.items():
+            if q <= 1e-9:
+                continue
+            series = price_by_symbol.get(sym, {})
+            if day in series:
+                last_price[sym] = series[day]
+            px = last_price.get(sym)
+            if px is not None:
+                mv += px * q
+        out.append({"date": day, "market_value": round(mv, 2)})
+    return out
+
+
+def benchmark_comparison(trades: list[dict], from_date: str | None = None) -> dict:
+    """Portfolio market value vs Nifty 50 / Sensex, all indexed to 100 at the start
+    of the window so the three lines are directly comparable ("mine vs Nifty vs
+    Sensex"). Approximate — it does not correct for mid-period cash flows the way
+    a true time-weighted return would, but it's the standard retail-app comparison.
+    """
+    from app.services.market_data import BENCHMARKS, get_history
+
+    pv = portfolio_value_series(trades, from_date)
+    if not pv:
+        return {"series": [], "start_date": from_date}
+    start = pv[0]["date"]
+    base_mv = pv[0]["market_value"]
+
+    portfolio_by_date = {p["date"]: p["market_value"] for p in pv}
+
+    benchmark_series: dict[str, dict[str, float]] = {}
+    benchmark_base: dict[str, float | None] = {}
+    for key, meta in BENCHMARKS.items():
+        h = get_history(meta["ticker"], from_date=start, interval="1d", exchange="INDEX")
+        pts = h.get("points", [])
+        benchmark_series[key] = {p["date"]: p["close"] for p in pts}
+        benchmark_base[key] = pts[0]["close"] if pts else None
+
+    all_dates = sorted(set(portfolio_by_date) | {d for s in benchmark_series.values() for d in s})
+    all_dates = [d for d in all_dates if d >= start]
+
+    last_bm: dict[str, float] = {}
+    last_pv = base_mv
+    out = []
+    for day in all_dates:
+        if day in portfolio_by_date:
+            last_pv = portfolio_by_date[day]
+        row = {"date": day, "portfolio_pct": round((last_pv - base_mv) / base_mv * 100, 2) if base_mv else 0.0}
+        for key, series in benchmark_series.items():
+            if day in series:
+                last_bm[key] = series[day]
+            base_bm = benchmark_base[key]
+            row[f"{key}_pct"] = (
+                round((last_bm[key] - base_bm) / base_bm * 100, 2)
+                if base_bm and key in last_bm else None
+            )
+        out.append(row)
+    return {"series": out, "start_date": start, "benchmarks": {k: v["label"] for k, v in BENCHMARKS.items()}}
+
+
 def manager_metrics(clients: list[dict]) -> dict:
     """Aggregate across all of a manager's clients.
 

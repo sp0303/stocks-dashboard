@@ -38,9 +38,15 @@ export const api = {
   deleteClient: (id) => req(`/api/clients/${id}`, { method: 'DELETE' }).then((r) => r.data),
   // watchlists — scope: 'managers' | 'clients'
   watchlist: (scope, id) => req(`/api/${scope}/${id}/watchlist`).then((r) => r.data),
-  watchlistAdd: (scope, id, symbol) =>
+  watchlistAdd: (scope, id, symbol, checkpointDate = null) =>
     req(`/api/${scope}/${id}/watchlist`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, checkpoint_date: checkpointDate }),
+    }).then((r) => r.data),
+  watchlistSetCheckpoint: (scope, id, symbol, checkpointDate) =>
+    req(`/api/${scope}/${id}/watchlist/${symbol}/checkpoint`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ checkpoint_date: checkpointDate }),
     }).then((r) => r.data),
   watchlistRemove: (scope, id, symbol) =>
     req(`/api/${scope}/${id}/watchlist/${symbol}`, { method: 'DELETE' }).then((r) => r.data),
@@ -59,6 +65,8 @@ export const api = {
     req(`/api/clients/${clientId}/allocation?by=${by}&basis=${basis}`).then((r) => r.data),
   concentration: (clientId) => req(`/api/clients/${clientId}/concentration`).then((r) => r.data),
   performance: (clientId) => req(`/api/clients/${clientId}/performance`).then((r) => r.data),
+  benchmark: (clientId, from) =>
+    req(`/api/clients/${clientId}/benchmark${from ? `?from=${from}` : ''}`).then((r) => r.data),
   trades: (clientId, { tag } = {}) =>
     req(`/api/clients/${clientId}/trades${tag ? `?tag=${tag}` : ''}`).then((r) => r),
   tags: (clientId) => req(`/api/clients/${clientId}/tags`).then((r) => r.data),
