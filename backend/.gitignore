@@ -1,0 +1,6 @@
+stocks/
+__pycache__/
+*.pyc
+.env
+app/data/store.json
+uploads/

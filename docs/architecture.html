@@ -1,0 +1,485 @@
+<title>Portfolio Platform Blueprint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#f1f4f1; --surface:#ffffff; --surface-2:#f7f9f7;
+    --ink:#16201c; --muted:#586761; --faint:#8b968f;
+    --line:#dde4df; --line-strong:#c8d2cb;
+    --accent:#0f7a5a; --accent-ink:#0a5f47; --accent-wash:#e4f1eb;
+    --amber:#a86b12; --amber-wash:#f6edda;
+    --danger:#a83a30; --danger-wash:#f6e4e1;
+    --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+    --display:'Archivo','IBM Plex Sans',system-ui,sans-serif;
+    --maxw:1180px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --bg:#0c110e; --surface:#121a15; --surface-2:#0f1712;
+      --ink:#e7efe9; --muted:#9aa8a0; --faint:#6c7a72;
+      --line:#233029; --line-strong:#32433a;
+      --accent:#3fbf92; --accent-ink:#5fd0a6; --accent-wash:#13251d;
+      --amber:#d69a4a; --amber-wash:#241d0f;
+      --danger:#e0705f; --danger-wash:#26120f;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0c110e; --surface:#121a15; --surface-2:#0f1712;
+    --ink:#e7efe9; --muted:#9aa8a0; --faint:#6c7a72;
+    --line:#233029; --line-strong:#32433a;
+    --accent:#3fbf92; --accent-ink:#5fd0a6; --accent-wash:#13251d;
+    --amber:#d69a4a; --amber-wash:#241d0f;
+    --danger:#e0705f; --danger-wash:#26120f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px}
+  a{color:var(--accent-ink);text-decoration:none}
+  h1,h2,h3{text-wrap:balance;margin:0}
+  code,.mono{font-family:var(--mono)}
+
+  /* ---- Hero ---- */
+  header.hero{border-bottom:1px solid var(--line);background:
+    radial-gradient(120% 90% at 88% -10%,var(--accent-wash) 0%,transparent 55%);}
+  .hero-inner{max-width:var(--maxw);margin:0 auto;padding:52px 28px 40px}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.22em;
+    text-transform:uppercase;color:var(--accent-ink);font-weight:600}
+  h1{font-family:var(--display);font-weight:800;letter-spacing:-.02em;
+    font-size:clamp(34px,5.4vw,62px);line-height:1.02;margin:14px 0 0}
+  .lede{font-size:clamp(16px,2vw,19px);color:var(--muted);max-width:58ch;margin:20px 0 0}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
+  .chip{font-family:var(--mono);font-size:12.5px;padding:6px 11px;border:1px solid var(--line-strong);
+    border-radius:999px;background:var(--surface);color:var(--ink);display:inline-flex;gap:7px;align-items:center}
+  .chip b{color:var(--accent-ink);font-weight:600}
+  .chip.warn b{color:var(--amber)}
+
+  /* ---- Layout with rail ---- */
+  .shell{display:grid;grid-template-columns:210px 1fr;gap:46px;
+    max-width:var(--maxw);margin:0 auto;padding:0 28px}
+  nav.rail{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
+    padding:40px 0;font-family:var(--mono);font-size:13px}
+  nav.rail ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+  nav.rail a{display:flex;gap:10px;padding:6px 10px;border-radius:7px;color:var(--muted);
+    border-left:2px solid transparent}
+  nav.rail a:hover{color:var(--ink);background:var(--surface-2)}
+  nav.rail a .n{color:var(--faint);font-variant-numeric:tabular-nums}
+  main{padding:40px 0 90px;min-width:0}
+
+  section{padding:34px 0;border-top:1px solid var(--line)}
+  section:first-child{border-top:none;padding-top:8px}
+  .sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px}
+  .sec-n{font-family:var(--mono);font-size:13px;color:var(--accent-ink);font-weight:600;
+    letter-spacing:.1em}
+  h2{font-family:var(--display);font-weight:700;font-size:clamp(22px,3vw,30px);letter-spacing:-.01em}
+  .sec-sub{color:var(--muted);margin:6px 0 22px;max-width:64ch}
+
+  /* ---- Principle cards ---- */
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 18px}
+  .card h3{font-family:var(--display);font-size:15.5px;font-weight:600;margin-bottom:6px}
+  .card p{margin:0;font-size:14px;color:var(--muted)}
+  .card .k{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent-ink);font-weight:600;display:block;margin-bottom:9px}
+
+  /* ---- Diagram block ---- */
+  .diagram{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;
+    padding:20px;overflow-x:auto}
+  .diagram pre{margin:0;font-family:var(--mono);font-size:13px;line-height:1.55;color:var(--ink);
+    white-space:pre}
+  .diagram pre .ac{color:var(--accent-ink);font-weight:600}
+  .diagram pre .mu{color:var(--faint)}
+  .diagram pre .am{color:var(--amber);font-weight:600}
+
+  /* ---- Schema cards ---- */
+  .schemas{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .schema{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .schema.derived{border-color:color-mix(in srgb,var(--amber) 40%,var(--line))}
+  .schema-h{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:12px 16px;border-bottom:1px solid var(--line);background:var(--surface-2)}
+  .schema-h .name{font-family:var(--mono);font-weight:600;font-size:14px}
+  .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+    padding:3px 8px;border-radius:999px;font-weight:600}
+  .tag.truth{color:var(--accent-ink);background:var(--accent-wash)}
+  .tag.der{color:var(--amber);background:var(--amber-wash)}
+  .tag.ref{color:var(--muted);background:var(--surface-2);border:1px solid var(--line)}
+  .schema ul{list-style:none;margin:0;padding:10px 16px 14px;font-family:var(--mono);font-size:12.5px}
+  .schema li{padding:3px 0;color:var(--muted);display:flex;gap:8px}
+  .schema li b{color:var(--ink);font-weight:600}
+  .schema li .idx{color:var(--accent-ink)}
+  .schema li .uq{color:var(--amber)}
+
+  /* ---- Tables ---- */
+  .tbl-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:520px}
+  th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line)}
+  th{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--faint);font-weight:600;background:var(--surface-2)}
+  tr:last-child td{border-bottom:none}
+  td.m,th.m{font-family:var(--mono)}
+  td .method{font-family:var(--mono);font-weight:600;font-size:12px;color:var(--accent-ink)}
+  tbody tr:hover{background:var(--surface-2)}
+  .num{font-variant-numeric:tabular-nums}
+
+  /* ---- Roadmap ---- */
+  .phases{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .phase{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;
+    position:relative}
+  .phase .ph{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--faint);font-weight:600}
+  .phase.now{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+  .phase.now .ph{color:var(--accent-ink)}
+  .phase h3{font-family:var(--display);font-size:16px;margin:6px 0 10px}
+  .phase ul{margin:0;padding-left:16px;font-size:13px;color:var(--muted)}
+  .phase li{margin:3px 0}
+
+  /* ---- Anti-patterns ---- */
+  .nevers{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+  .never{display:flex;gap:11px;background:var(--danger-wash);border:1px solid
+    color-mix(in srgb,var(--danger) 30%,var(--line));border-radius:10px;padding:12px 14px;font-size:13.5px}
+  .never .x{color:var(--danger);font-weight:700;font-family:var(--mono)}
+  .never b{color:var(--ink)}
+
+  /* ---- FIFO worked example ---- */
+  .fifo{display:grid;grid-template-columns:1.1fr .9fr;gap:14px}
+  .ledger{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:6px 4px}
+  .ledger .row{display:grid;grid-template-columns:64px 1fr auto;gap:10px;padding:9px 14px;
+    font-family:var(--mono);font-size:13px;border-bottom:1px solid var(--line);align-items:center}
+  .ledger .row:last-child{border-bottom:none}
+  .ledger .buy{color:var(--accent-ink);font-weight:600}
+  .ledger .sell{color:var(--amber);font-weight:600}
+  .ledger .row span:last-child{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+  .result{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .result .big{font-family:var(--display);font-size:34px;font-weight:800;letter-spacing:-.02em}
+  .result .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--faint)}
+  .result .split{display:flex;gap:26px;margin-top:16px}
+  .result .split .lbl{margin-bottom:3px}
+  .result .split div b{font-family:var(--mono);font-size:16px;color:var(--ink)}
+
+  .note{font-size:13px;color:var(--muted);border-left:2px solid var(--accent);
+    padding:4px 0 4px 14px;margin-top:18px}
+  .note b{color:var(--ink)}
+
+  footer{border-top:1px solid var(--line);padding:26px 0 60px;color:var(--faint);
+    font-family:var(--mono);font-size:12px}
+
+  @media (max-width:900px){
+    .shell{grid-template-columns:1fr}
+    nav.rail{display:none}
+    .g2,.g3,.schemas,.nevers,.fifo{grid-template-columns:1fr}
+    .phases{grid-template-columns:repeat(2,1fr)}
+  }
+  @media (prefers-reduced-motion:no-preference){
+    html{scroll-behavior:smooth}
+  }
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+</style>
+
+<header class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow">HLD · LLD — Planning Spec · 2026-08-22</div>
+    <h1>Portfolio Intelligence Platform</h1>
+    <p class="lede">Multi-tenant portfolio analytics for portfolio managers. Trades are the
+      source of truth; holdings and P&amp;L are <em>derived</em> by a FIFO engine; market
+      prices only enrich. This is the blueprint agreed before a line of code.</p>
+    <div class="chips">
+      <span class="chip">Frontend <b>React → GitHub Pages</b></span>
+      <span class="chip">Backend <b>FastAPI → Azure Functions</b></span>
+      <span class="chip">Database <b>MongoDB only</b></span>
+      <span class="chip">Tradebook <b>Zerodha export</b></span>
+      <span class="chip">Cost basis <b>FIFO + charges</b></span>
+      <span class="chip warn">Client login <b>Phase 4</b></span>
+    </div>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="rail" aria-label="Sections">
+    <ol>
+      <li><a href="#principles"><span class="n">01</span> Principles</a></li>
+      <li><a href="#context"><span class="n">02</span> System context</a></li>
+      <li><a href="#components"><span class="n">03</span> Components</a></li>
+      <li><a href="#data"><span class="n">04</span> Data model</a></li>
+      <li><a href="#ingestion"><span class="n">05</span> Ingestion</a></li>
+      <li><a href="#engine"><span class="n">06</span> FIFO engine</a></li>
+      <li><a href="#api"><span class="n">07</span> API contracts</a></li>
+      <li><a href="#roadmap"><span class="n">08</span> Roadmap</a></li>
+      <li><a href="#avoid"><span class="n">09</span> Never do</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <!-- 01 -->
+    <section id="principles">
+      <div class="sec-head"><span class="sec-n">01</span><h2>Five principles that decide everything</h2></div>
+      <p class="sec-sub">Every downstream design choice traces back to one of these. When a
+        later decision is ambiguous, the tie-breaker is whichever option honors these best.</p>
+      <div class="grid g3">
+        <div class="card"><span class="k">Truth</span><h3>Trades are the ledger</h3>
+          <p>The transaction stream is the only source of transaction truth. Holdings are a view of it.</p></div>
+        <div class="card"><span class="k">Derived</span><h3>P&amp;L is computed</h3>
+          <p>Never store hand-entered holdings. The engine derives positions, realized &amp; unrealized P&amp;L.</p></div>
+        <div class="card"><span class="k">Authority</span><h3>Ownership is server-side</h3>
+          <p>The backend verifies a manager owns a client on every request. Path IDs are never trusted.</p></div>
+        <div class="card"><span class="k">Idempotent</span><h3>Uploads are versioned</h3>
+          <p>Re-uploading a wider date range dedupes by fingerprint — P&amp;L never doubles.</p></div>
+        <div class="card"><span class="k">Enrichment</span><h3>Market data only values</h3>
+          <p>yfinance says what holdings are <em>worth</em>, never what a client <em>owns</em>. Outage ≠ empty portfolio.</p></div>
+        <div class="card" style="background:var(--accent-wash);border-color:color-mix(in srgb,var(--accent) 30%,var(--line))">
+          <span class="k">Mongo-only trade-off</span><h3>Integrity moves to the app</h3>
+          <p>No FK / joins / schema from the DB — enforced in FastAPI via Pydantic, ownership guards &amp; unique indexes.</p></div>
+      </div>
+    </section>
+
+    <!-- 02 -->
+    <section id="context">
+      <div class="sec-head"><span class="sec-n">02</span><h2>System context</h2></div>
+      <p class="sec-sub">The browser is static and secret-free. It only ever talks to the API —
+        never to Mongo or yfinance directly.</p>
+      <div class="diagram"><pre><span class="ac">Super Admin ─┐</span>
+<span class="ac">Manager     ─┼─▶</span> React SPA <span class="mu">(GitHub Pages)</span> ──<span class="ac">HTTPS · JWT</span>──▶ FastAPI <span class="mu">(Azure Functions)</span>
+<span class="mu">Client (P4) ─┘</span>                                              │
+                                                              ├─▶ <span class="ac">MongoDB</span> <span class="mu">(Azure)</span>
+                                                              └─▶ Market Data Service ─▶ <span class="am">yfinance</span>
+                                                                                         <span class="mu">(Kite later)</span></pre></div>
+      <p class="note"><b>Why the split matters:</b> provider keys, JWT secret and the Mongo URI
+        live only in Azure Functions app settings. GitHub Pages knows nothing but the API base URL.</p>
+    </section>
+
+    <!-- 03 -->
+    <section id="components">
+      <div class="sec-head"><span class="sec-n">03</span><h2>Backend components</h2></div>
+      <p class="sec-sub">Strict layering: routers → services → db. The <code>engine</code> is pure
+        Python — no Mongo, no FastAPI — so it is unit-testable and reusable when Kite arrives.</p>
+      <div class="diagram"><pre>FastAPI app
+├── <span class="ac">auth</span>          login / refresh / logout · JWT issue + verify
+├── <span class="ac">rbac</span>          role + ownership guards (injected dependency)
+├── users         super-admin manages managers
+├── clients       managers manage their own clients
+├── tradebooks    upload → validate → import → version history
+├── trades        query / filter the raw ledger
+├── <span class="am">engine</span>        FIFO positions + P&amp;L  <span class="mu">— pure, DB-agnostic</span>
+├── portfolio     holdings · pnl · allocation · performance  <span class="mu">(reads snapshots)</span>
+├── securities    security master: symbol → sector / asset class
+├── market_data   MarketDataProvider ⇢ YFinanceProvider + cache
+├── watchlists    manager-level &amp; client-level
+└── audit         append-only action log</pre></div>
+    </section>
+
+    <!-- 04 -->
+    <section id="data">
+      <div class="sec-head"><span class="sec-n">04</span><h2>Data model — MongoDB</h2></div>
+      <p class="sec-sub">References by <code>ObjectId</code>; integrity in the app layer. Money is
+        stored as integer <b>paise</b> to avoid float drift. <span style="color:var(--accent-ink)">■</span> source of truth ·
+        <span style="color:var(--amber)">■</span> engine-derived · <span style="color:var(--muted)">■</span> reference data.</p>
+      <div class="schemas">
+        <div class="schema">
+          <div class="schema-h"><span class="name">users</span><span class="tag truth">Truth</span></div>
+          <ul>
+            <li><b>_id</b> ObjectId</li>
+            <li><b>email</b> <span class="uq">· unique</span></li>
+            <li><b>role</b> SUPER_ADMIN | PORTFOLIO_MANAGER</li>
+            <li><b>password_hash</b> · status · created_by</li>
+            <li><span class="idx">idx</span> {role, status}</li>
+          </ul>
+        </div>
+        <div class="schema">
+          <div class="schema-h"><span class="name">clients</span><span class="tag truth">Truth</span></div>
+          <ul>
+            <li><b>_id</b> ObjectId</li>
+            <li><b>portfolio_manager_id</b> → users</li>
+            <li><b>onboarded_at</b> <span class="mu">journey start</span></li>
+            <li>name · email · external_reference · status</li>
+            <li><span class="idx">idx</span> {portfolio_manager_id, status}</li>
+          </ul>
+        </div>
+        <div class="schema">
+          <div class="schema-h"><span class="name">tradebook_uploads</span><span class="tag truth">Truth</span></div>
+          <ul>
+            <li><b>_id</b> · client_id · <b>version</b></li>
+            <li><b>file_hash</b> <span class="mu">blocks exact re-upload</span></li>
+            <li>status · row_count · imported · duplicate · error</li>
+            <li>trade_date_from / _to · uploaded_by</li>
+            <li><span class="idx">idx</span> {client_id, version:-1}</li>
+          </ul>
+        </div>
+        <div class="schema">
+          <div class="schema-h"><span class="name">trades</span><span class="tag truth">Truth</span></div>
+          <ul>
+            <li><b>_id</b> · client_id · tradebook_upload_id</li>
+            <li><b>fingerprint</b> sha1(client|date|sym|type|qty|price|ext)</li>
+            <li>symbol · exchange · BUY/SELL · qty · price</li>
+            <li>charges{brokerage,taxes,other,total}</li>
+            <li><span class="uq">uniq</span> {client_id, fingerprint} <span class="mu">← no double-count</span></li>
+          </ul>
+        </div>
+        <div class="schema derived">
+          <div class="schema-h"><span class="name">positions</span><span class="tag der">Derived</span></div>
+          <ul>
+            <li><b>client_id · symbol</b></li>
+            <li>quantity = buys − sells · avg_cost <span class="mu">(incl. charges)</span></li>
+            <li>invested_value · realized_pnl</li>
+            <li>open_lots[] {qty, unit_cost, trade_date}</li>
+            <li><span class="uq">uniq</span> {client_id, symbol}</li>
+          </ul>
+        </div>
+        <div class="schema derived">
+          <div class="schema-h"><span class="name">portfolio_daily_snapshots</span><span class="tag der">Derived</span></div>
+          <ul>
+            <li><b>client_id · date</b></li>
+            <li>portfolio_value · invested_value</li>
+            <li>realized · unrealized · total_pnl</li>
+            <li><span class="mu">makes performance charts O(1)</span></li>
+            <li><span class="uq">uniq</span> {client_id, date}</li>
+          </ul>
+        </div>
+        <div class="schema">
+          <div class="schema-h"><span class="name">securities</span><span class="tag ref">Reference</span></div>
+          <ul>
+            <li><b>_id</b> = symbol · isin</li>
+            <li>company_name · exchange</li>
+            <li><b>sector</b> · industry</li>
+            <li><b>asset_class</b> EQUITY|ETF|DEBT|GOLD|CASH</li>
+            <li><span class="mu">stored, not fetched at render</span></li>
+          </ul>
+        </div>
+        <div class="schema">
+          <div class="schema-h"><span class="name">market_quotes_cache · watchlists · audit_logs</span><span class="tag ref">Support</span></div>
+          <ul>
+            <li><b>quotes</b> _id=symbol · price · as_of · stale</li>
+            <li><b>watchlists</b> owner_type · owner_id · symbols[]</li>
+            <li><b>audit_logs</b> actor · action · entity · at</li>
+            <li><span class="mu">Phase 2 adds: news_articles, ai_summaries</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 05 -->
+    <section id="ingestion">
+      <div class="sec-head"><span class="sec-n">05</span><h2>Ingestion pipeline</h2></div>
+      <p class="sec-sub">The "I uploaded it twice" problem is solved structurally: exact files are
+        blocked by hash, overlapping rows by a unique fingerprint index.</p>
+      <div class="diagram"><pre>POST file ─▶ parse xlsx ─▶ map columns <span class="mu">(zerodha profile)</span> ─▶ validate rows ─▶ file_hash
+                                                                          │
+                     <span class="am">exact file exists? ─── reject 409</span> ◀────────────────────┘
+                                                                          │
+        insert upload(vN, PENDING) ─▶ build per-row fingerprint ─▶ insertMany(<span class="ac">ordered:false</span>)
+                                                                          │
+        <span class="am">overlapping rows fail dup-key → counted, not doubled</span> ◀────────────┘
+                                                                          │
+                     update upload → IMPORTED / PARTIAL ─▶ <span class="ac">trigger recompute</span></pre></div>
+      <p class="note"><b>Column mapping is a named profile</b> (<code>zerodha.yaml</code>), not
+        hardcoded. A new broker is a new profile with zero engine changes. Zerodha's Trade ID
+        becomes the strongest fingerprint component when present.</p>
+    </section>
+
+    <!-- 06 -->
+    <section id="engine">
+      <div class="sec-head"><span class="sec-n">06</span><h2>FIFO engine — worked example</h2></div>
+      <p class="sec-sub">Sells match against the oldest open buy lots. Charges fold into cost basis:
+        <code>buy = price·qty + charges</code>, <code>sell proceeds = price·qty − charges</code>.</p>
+      <div class="fifo">
+        <div class="ledger">
+          <div class="row"><span class="buy">BUY</span><span>INFY · 100 @ ₹1,400</span><span>lot A</span></div>
+          <div class="row"><span class="buy">BUY</span><span>INFY · 50 @ ₹1,450</span><span>lot B</span></div>
+          <div class="row"><span class="sell">SELL</span><span>INFY · 70 @ ₹1,550</span><span>↳ 70 from lot A</span></div>
+          <div class="row"><span class="mu">OPEN</span><span>30 @ ₹1,400 &nbsp;+&nbsp; 50 @ ₹1,450</span><span>= 80 sh</span></div>
+        </div>
+        <div class="result">
+          <div class="lbl">Remaining position</div>
+          <div class="big num">80 <span style="font-size:18px;color:var(--muted)">shares</span></div>
+          <div class="split">
+            <div><div class="lbl">Realized</div><b class="num" style="color:var(--accent-ink)">70 × (1550−1400)</b></div>
+            <div><div class="lbl">Unrealized</div><b class="num">qty × (LTP − avg_cost)</b></div>
+          </div>
+          <p style="margin:16px 0 0;font-size:13px;color:var(--muted)">
+            Total P&amp;L = realized + unrealized · Return % = total ÷ invested.</p>
+        </div>
+      </div>
+      <p class="note"><b>The engine is pure.</b> It takes an ordered list of trades and returns
+        positions + realized P&amp;L with no database access — the single most-tested unit in the
+        system, and the reason a future Kite integration is a provider swap, not a rewrite.</p>
+    </section>
+
+    <!-- 07 -->
+    <section id="api">
+      <div class="sec-head"><span class="sec-n">07</span><h2>API contracts</h2></div>
+      <p class="sec-sub">Base <code>/api</code>, bearer JWT carrying <code>sub</code> + <code>role</code>.
+        Every client-scoped route runs <code>require_client_access</code> before touching data.</p>
+      <div class="tbl-scroll">
+        <table>
+          <thead><tr><th>Method · Path</th><th>Role</th><th>Returns</th></tr></thead>
+          <tbody>
+            <tr><td class="m"><span class="method">POST</span> /auth/login</td><td>public</td><td>access + refresh token, role</td></tr>
+            <tr><td class="m"><span class="method">POST</span> /admin/managers</td><td>Super Admin</td><td>create portfolio manager</td></tr>
+            <tr><td class="m"><span class="method">PATCH</span> /admin/managers/:id</td><td>Super Admin</td><td>activate / deactivate / edit</td></tr>
+            <tr><td class="m"><span class="method">POST</span> /manager/clients</td><td>Manager</td><td>create own client</td></tr>
+            <tr><td class="m"><span class="method">POST</span> /clients/:id/tradebooks</td><td>Manager</td><td>upload summary + dup count</td></tr>
+            <tr><td class="m"><span class="method">GET</span> /clients/:id/portfolio</td><td>Manager</td><td>value · invested · realized · unrealized · return%</td></tr>
+            <tr><td class="m"><span class="method">GET</span> /clients/:id/holdings</td><td>Manager</td><td>positions + LTP + P&amp;L + sector + weight</td></tr>
+            <tr><td class="m"><span class="method">GET</span> /clients/:id/allocation</td><td>Manager</td><td>?by=sector|asset|stock</td></tr>
+            <tr><td class="m"><span class="method">GET</span> /clients/:id/performance</td><td>Manager</td><td>snapshot time series</td></tr>
+            <tr><td class="m"><span class="method">GET</span> /clients/:id/stocks/:symbol</td><td>Manager</td><td>stock journey + transaction timeline</td></tr>
+            <tr><td class="m"><span class="method">GET</span> /clients/:id/concentration</td><td>Manager</td><td>top-5 · largest stock · largest sector</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">Money returns as integer paise; the frontend formats to ₹/lakh. Any
+        price-dependent response carries <code>priced_at</code> and <code>stale:bool</code>.</p>
+    </section>
+
+    <!-- 08 -->
+    <section id="roadmap">
+      <div class="sec-head"><span class="sec-n">08</span><h2>Phased roadmap</h2></div>
+      <p class="sec-sub">Broker-agnostic from day one: tradebook today, Kite tomorrow, no engine rewrite.</p>
+      <div class="phases">
+        <div class="phase now">
+          <div class="ph">Phase 1 · now</div><h3>Core MVP</h3>
+          <ul><li>Auth + RBAC</li><li>Managers &amp; clients</li><li>Tradebook upload + dedupe</li>
+            <li>FIFO engine</li><li>Holdings + realized/unrealized</li><li>Sector &amp; asset allocation</li></ul>
+        </div>
+        <div class="phase">
+          <div class="ph">Phase 2</div><h3>Intelligence</h3>
+          <ul><li>Historical performance</li><li>Stock analysis</li><li>Watchlists</li>
+            <li>News ingestion → Mongo</li><li>AI summaries</li><li>Concentration / risk</li></ul>
+        </div>
+        <div class="phase">
+          <div class="ph">Phase 3</div><h3>Automation</h3>
+          <ul><li>Kite integration</li><li>Broker sync</li><li>Auto portfolio refresh</li>
+            <li>Scheduled market updates</li></ul>
+        </div>
+        <div class="phase">
+          <div class="ph">Phase 4</div><h3>Reach</h3>
+          <ul><li>Read-only client login</li><li>PDF / email reports</li><li>WhatsApp</li>
+            <li>Claude MCP portfolio tools</li></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 09 -->
+    <section id="avoid">
+      <div class="sec-head"><span class="sec-n">09</span><h2>What we explicitly won't do</h2></div>
+      <p class="sec-sub">Carried over from the prototype's mistakes — each is a decision, not an oversight.</p>
+      <div class="nevers">
+        <div class="never"><span class="x">✕</span><span><b>In-memory storage</b> as the store of record.</span></div>
+        <div class="never"><span class="x">✕</span><span><b>Analytics in the frontend</b> — the engine owns P&amp;L.</span></div>
+        <div class="never"><span class="x">✕</span><span><b>One giant server.js</b> — layered services instead.</span></div>
+        <div class="never"><span class="x">✕</span><span><b>Storing only current holdings</b> — keep the trade ledger.</span></div>
+        <div class="never"><span class="x">✕</span><span><b>Deleting previous uploads</b> — version &amp; dedupe.</span></div>
+        <div class="never"><span class="x">✕</span><span><b>Trusting client IDs</b> from the frontend.</span></div>
+        <div class="never"><span class="x">✕</span><span><b>Hardcoded sector maps</b> — use the security master.</span></div>
+        <div class="never"><span class="x">✕</span><span><b>Browser → yfinance</b> directly, ever.</span></div>
+      </div>
+    </section>
+
+    <footer class="wrap">
+      PORTFOLIO INTELLIGENCE PLATFORM · design spec · planning phase · no application code yet
+    </footer>
+  </main>
+</div>

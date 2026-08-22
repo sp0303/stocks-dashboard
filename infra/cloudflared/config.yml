@@ -1,0 +1,22 @@
+# Cloudflare Tunnel config — ready for later, not required for local dev.
+#
+# Setup (run once, when you're ready to expose the backend publicly):
+#   1. cloudflared tunnel login
+#   2. cloudflared tunnel create stocks-api
+#      -> writes a credentials JSON and prints a Tunnel UUID
+#   3. put the UUID below as `tunnel:` and set the credentials-file path
+#   4. add a DNS route:  cloudflared tunnel route dns stocks-api api.yourdomain.com
+#   5. run:  cloudflared tunnel --config infra/cloudflared/config.yml run
+#
+# Then point the frontend at it by building with:
+#   VITE_API_BASE=https://api.yourdomain.com npm run build
+
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: /home/sumanth/.cloudflared/REPLACE_WITH_TUNNEL_UUID.json
+
+ingress:
+  # FastAPI backend (uvicorn on :8010)
+  - hostname: api.yourdomain.com
+    service: http://localhost:8010
+  # Everything else -> 404
+  - service: http_status:404
