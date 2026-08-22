@@ -4,9 +4,18 @@ OCR is slow (~50s/page, so a 16-page paper is ~13 min) — far too long for a
 synchronous request. Upload returns immediately with a PENDING upload id; processing
 runs as a FastAPI background task, updating status as it progresses so the frontend
 can poll. See docs/06-news-pipeline.md and the news-pipeline plan for the full design.
+
+IMPORTANT: a FastAPI `BackgroundTasks` coroutine still runs on the *same* asyncio
+event loop as request handling — it does not get its own thread automatically. Both
+`pdf_extract.extract_pdf` (CPU-bound OCR, using its own internal ThreadPoolExecutor
+whose `.map()` still blocks the *calling* thread until done) and
+`pdf_pipeline.ingest_pdf` (makes synchronous blocking httpx calls to RSS per linked
+story) must be run via `asyncio.to_thread` here, or the entire app — every endpoint,
+every user — freezes for the full ~13 minutes a large PDF takes to process.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
@@ -73,14 +82,15 @@ async def _process_pdf_upload(upload_id: str, content: bytes) -> None:
         await store.update_pdf_upload(upload_id, {"status": "PROCESSING"})
         upload = await store.get_pdf_upload(upload_id)
 
-        result = pdf_extract.extract_pdf(content)
+        result = await asyncio.to_thread(pdf_extract.extract_pdf, content)
         enricher = nlp.get_enricher(
             settings.news_enricher,
             ollama_url=settings.ollama_url,
             ollama_model=settings.ollama_model,
             anthropic_api_key=settings.anthropic_api_key,
         )
-        stories = pdf_pipeline.ingest_pdf(
+        stories = await asyncio.to_thread(
+            pdf_pipeline.ingest_pdf,
             result.pages,
             {"pdf_upload_id": upload_id, "published_at": upload.get("edition_date") if upload else None},
             enricher=enricher,
