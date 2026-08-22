@@ -61,8 +61,47 @@ class ExtractResult:
         return out
 
 
+# Common English function words — a dictionary-free "does this read as English" probe.
+# Rotated/garbled OCR contains almost none of these; clean prose is dense with them.
+_STOPWORDS = frozenset(
+    "the and of to in for is that on with as are be by this it from at an or was "
+    "will has have not its had which their can may also more than been".split()
+)
+_TOKEN_RE = None  # compiled lazily
+
+
+def _readability(text: str) -> float:
+    """Density of English function words among all word tokens — a scale-free
+    "does this read as English" score in [0, 1]. Upright prose lands ~0.15-0.30;
+    rotated/garbled OCR lands near 0 even when it emits many stray fragments, so
+    density separates the two far more reliably than a raw count."""
+    global _TOKEN_RE
+    if _TOKEN_RE is None:
+        import re
+
+        _TOKEN_RE = re.compile(r"[a-z]+")
+    toks = _TOKEN_RE.findall(text.lower())
+    if len(toks) < 20:
+        return 1.0  # too little text to judge; don't trigger a rotation retry
+    return sum(1 for t in toks if t in _STOPWORDS) / len(toks)
+
+
+_OCR_CONFIG = "--oem 1 --psm 3"
+# Below this function-word density, a text-heavy page is almost certainly rotated or
+# garbled; we retry the other orientations and keep the most readable result.
+_MIN_READABILITY = 0.04
+
+
 def _ocr_page(page, dpi: int = _OCR_DPI) -> str:
-    """Render a PyMuPDF page to a bitmap and OCR it with Tesseract."""
+    """Render a PyMuPDF page to a bitmap and OCR it, self-correcting orientation.
+
+    Newspaper e-papers occasionally print a continuation page (e.g. prospectus
+    back-matter) rotated 180°/90°. Tesseract's PSM 3 doesn't auto-rotate, and its
+    OSD is unreliable on dense pages, so instead of trusting OSD we OCR upright, and
+    only if the result reads as garbled (very few English function words despite
+    ample text) do we try the other 3 rotations and keep the most readable one. The
+    expensive retry therefore fires only on the rare bad page.
+    """
     import io
 
     import pytesseract  # lazy: only needed on the OCR path
@@ -78,8 +117,19 @@ def _ocr_page(page, dpi: int = _OCR_DPI) -> str:
     matrix = fitz.Matrix(zoom, zoom)
     pix = page.get_pixmap(matrix=matrix, colorspace=fitz.csGRAY)
     img = Image.open(io.BytesIO(pix.tobytes("png")))
-    # PSM 3 = automatic page segmentation with OSD off; good for multi-column layouts.
-    return pytesseract.image_to_string(img, config="--oem 1 --psm 3")
+
+    text = pytesseract.image_to_string(img, config=_OCR_CONFIG)
+    score = _readability(text)
+    # Only bother retrying when there's real text volume but it doesn't read as English.
+    if score < _MIN_READABILITY and len(text) > 200:
+        best_text, best_score = text, score
+        for angle in (180, 90, 270):
+            cand = pytesseract.image_to_string(img.rotate(-angle, expand=True), config=_OCR_CONFIG)
+            cscore = _readability(cand)
+            if cscore > best_score:
+                best_text, best_score = cand, cscore
+        text = best_text
+    return text
 
 
 def extract_pdf(

@@ -29,7 +29,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.services.news.pdf_extract import extract_pdf, extract_pdf_file
+from app.services.news.pdf_extract import _readability, extract_pdf, extract_pdf_file
 
 ET_PDF = "/home/sumanth/Downloads/ET.pdf"
 HAVE_ET_PDF = Path(ET_PDF).exists()
@@ -108,6 +108,86 @@ def test_page_filter_limits_extraction():
     assert len(result.pages) == 1
     assert result.pages[0].page == 2
     assert "second" in result.pages[0].text
+
+
+# ---------------------------------------------------------------------------
+# Tier 1b — orientation self-correction (regression for rotated pages)
+#
+# Found while testing 3 ET editions: prospectus continuation pages are sometimes
+# printed upside-down, which OCR'd to 4% gibberish until pdf_extract learned to
+# retry rotations. These lock that behaviour in with a synthetic fixture (no
+# dependency on any downloaded PDF).
+# ---------------------------------------------------------------------------
+
+# Dense with English function words so the readability signal has something to latch
+# onto — the same property real article prose has.
+_ROT_TEXT = (
+    "The board of the company said that the results for the quarter were in line with "
+    "what the analysts had expected and that the demand for the products would continue "
+    "to grow in the year ahead as more of the customers move to the new platform."
+)
+
+
+def _make_rotated_image_pdf(text: str, angle: int) -> bytes:
+    """Render `text` to a bitmap, rotate it by `angle`, and embed it as an image-only
+    PDF page (no text layer) — forcing the OCR path on deliberately-rotated content."""
+    import io
+
+    import fitz
+    from PIL import Image, ImageDraw, ImageFont
+
+    W, H = 1200, 1600
+    img = Image.new("L", (W, H), color=255)
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.load_default(size=34)
+    except TypeError:  # very old Pillow without size arg
+        font = ImageFont.load_default()
+
+    # naive word-wrap
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        trial = f"{cur} {w}".strip()
+        if len(trial) > 42:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = trial
+    lines.append(cur)
+    y = 80
+    for ln in lines:
+        draw.text((80, y), ln, fill=0, font=font)
+        y += 60
+
+    img = img.rotate(angle, expand=True)
+    png = io.BytesIO()
+    img.save(png, format="PNG")
+
+    doc = fitz.open()
+    page = doc.new_page(width=W, height=H)
+    page.insert_image(page.rect, stream=png.getvalue())
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def test_readability_density_separates_english_from_garbled():
+    # Pure/fast: no OCR. Upright prose scores high; the same text reversed (what a
+    # 180-degree page looks like to OCR) scores near zero.
+    assert _readability(_ROT_TEXT) > 0.10
+    assert _readability(_ROT_TEXT[::-1]) < 0.04
+    assert _readability("x9 z2 qk vv") == 1.0  # too little text to judge -> no retry
+
+
+def test_upside_down_page_is_recovered_by_ocr():
+    pdf = _make_rotated_image_pdf(_ROT_TEXT, angle=180)
+    result = extract_pdf(pdf, ocr_fallback=True)
+    page = result.pages[0]
+    assert page.method == "ocr"
+    # Without orientation self-correction this comes back as gibberish; with it, the
+    # real words are recovered.
+    assert word_recall("the board of the company said the results", page.text) >= 0.7
+    assert word_recall("demand for the products would continue to grow", page.text) >= 0.7
 
 
 # ---------------------------------------------------------------------------

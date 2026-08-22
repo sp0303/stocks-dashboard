@@ -410,6 +410,7 @@ function Trades({ client, reload, onOpenStock }) {
   const [tagFilter, setTagFilter] = useState('')
   const [expanded, setExpanded] = useState(null) // fingerprint of the row being tagged
   const [override, setOverride] = useState({}) // fingerprint -> tag_ids, optimistic local wins
+  const [page, setPage] = useState(0) // pagination
   const t = useAsync(() => api.trades(client.id, { tag: tagFilter || undefined }), [client.id, reload, tagFilter])
   const tagsQ = useAsync(() => api.tags(client.id), [client.id, reload])
 
@@ -420,6 +421,9 @@ function Trades({ client, reload, onOpenStock }) {
   const rows = t.data.data.filter((r) => !q || r.symbol.includes(q.toUpperCase()))
 
   const appliedFor = (r) => override[r.fingerprint] ?? r.tag_ids ?? []
+  const pageSize = 10
+  const paged = rows.slice(page * pageSize, (page + 1) * pageSize)
+  const totalPages = Math.ceil(rows.length / pageSize)
 
   const toggleTag = (r, tagId) => {
     const current = appliedFor(r)
@@ -443,20 +447,20 @@ function Trades({ client, reload, onOpenStock }) {
   return (
     <div>
       <div className="row" style={{ marginBottom: 10, flexWrap: 'wrap' }}>
-        <input placeholder="Filter by symbol…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <select value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}>
+        <input placeholder="Filter by symbol…" value={q} onChange={(e) => { setQ(e.target.value); setPage(0) }} />
+        <select value={tagFilter} onChange={(e) => { setTagFilter(e.target.value); setPage(0) }}>
           <option value="">All tags</option>
           {allTags.map((tg) => <option key={tg.id} value={tg.id}>{tg.name}</option>)}
         </select>
         <span className="sub" style={{ margin: 0 }}>{rows.length} of {t.data.meta.total} trades</span>
       </div>
       <p className="sub">Why you took a trade, plus tags to categorize it — click a trade's tags to add or create one.</p>
-      <div className="panel tbl-scroll" style={{ maxHeight: 560, overflowY: 'auto' }}>
+      <div className="panel tbl-scroll">
         <table className="trades-table">
           <colgroup>
-            <col style={{ width: '7%' }} /><col style={{ width: '12%' }} /><col style={{ width: '4%' }} />
+            <col style={{ width: '7%' }} /><col style={{ width: '12%' }} /><col style={{ width: '6%' }} />
             <col style={{ width: '6%' }} /><col style={{ width: '8%' }} /><col style={{ width: '11%' }} />
-            <col style={{ width: '26%' }} /><col style={{ width: '26%' }} />
+            <col style={{ width: '25%' }} /><col style={{ width: '25%' }} />
           </colgroup>
           <thead>
             <tr>
@@ -464,7 +468,7 @@ function Trades({ client, reload, onOpenStock }) {
             </tr>
           </thead>
           <tbody>
-            {rows.slice(0, 500).map((r) => {
+            {paged.map((r) => {
               const applied = appliedFor(r).map((id) => tagsById[id]).filter(Boolean)
               const isOpen = expanded === r.fingerprint
               return (
@@ -504,6 +508,15 @@ function Trades({ client, reload, onOpenStock }) {
           </tbody>
         </table>
       </div>
+      {totalPages > 1 && (
+        <div className="row" style={{ justifyContent: 'center', marginTop: 12, gap: 8 }}>
+          <button className="btn ghost" disabled={page === 0}
+            onClick={() => { setPage((p) => Math.max(0, p - 1)); setExpanded(null) }}>← Prev</button>
+          <span className="sub" style={{ margin: 0 }}>Page {page + 1} of {totalPages}</span>
+          <button className="btn ghost" disabled={page >= totalPages - 1}
+            onClick={() => { setPage((p) => Math.min(totalPages - 1, p + 1)); setExpanded(null) }}>Next →</button>
+        </div>
+      )}
     </div>
   )
 }
