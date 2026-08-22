@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { api } from '../api.js'
-import { Loading, ErrorBox, useAsync } from './common.jsx'
+import { Loading, ErrorBox, useAsync, NewsUploadBar } from './common.jsx'
 import Watchlist from './Watchlist.jsx'
 import ManagerMetrics from './ManagerMetrics.jsx'
 
@@ -53,6 +53,7 @@ export default function ManagerView({ managers, manager, setManager, onOpenClien
         <>
           <h2>Book metrics — all clients</h2>
           <ManagerMetrics managerId={manager.id} reload={reload} />
+          <NewsUploadBar scope="manager" ownerId={manager.id} />
         </>
       )}
 

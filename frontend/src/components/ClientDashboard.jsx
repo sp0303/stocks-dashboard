@@ -3,7 +3,7 @@ import {
   PieChart, Pie, Cell, Sector, ResponsiveContainer, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid,
 } from 'recharts'
 import { api, inr, inrFull, pct, pctPlain } from '../api.js'
-import { Stat, PnL, Loading, ErrorBox, useAsync, PALETTE } from './common.jsx'
+import { Stat, PnL, Loading, ErrorBox, useAsync, PALETTE, NewsUploadBar } from './common.jsx'
 import StockAnalysis from './StockAnalysis.jsx'
 import Watchlist from './Watchlist.jsx'
 
@@ -30,6 +30,7 @@ export default function ClientDashboard({ client }) {
       <p className="sub mono">{client.client_code || 'no broker code'} · onboarded {String(client.onboarded_at || '').slice(0, 10)}</p>
 
       <UploadBar client={client} onDone={() => setReload((n) => n + 1)} />
+      <NewsUploadBar scope="client" ownerId={client.id} />
 
       <div className="dash-shell">
         <nav className="dash-nav">

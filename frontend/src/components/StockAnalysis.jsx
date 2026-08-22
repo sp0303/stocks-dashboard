@@ -9,13 +9,62 @@ export default function StockAnalysis({ client, symbol, onBack }) {
     <div>
       <button className="btn ghost" onClick={onBack} style={{ marginBottom: 14 }}>← Back to {client.name}</button>
       {s.loading ? <Loading what={`${symbol} analysis`} /> : s.error ? <ErrorBox error={s.error} /> : (
-        <Body d={s.data} />
+        <Body d={s.data} symbol={symbol} />
       )}
     </div>
   )
 }
 
-function Body({ d }) {
+// Reuse the existing buy/sell badge colors (already themed + dark-mode aware) for
+// sentiment, rather than adding new CSS — same green/red meaning either way.
+const SENTIMENT_TONE = { POSITIVE: 'buy', NEGATIVE: 'sell', NEUTRAL: '' }
+
+function News({ symbol }) {
+  const n = useAsync(() => api.newsForStock(symbol), [symbol])
+  if (n.loading) return <Loading what="news" />
+  if (n.error) return <ErrorBox error={n.error} />
+  if (!n.data.length) {
+    return <div className="empty">No news yet — upload a newspaper PDF to start building this stock's news feed.</div>
+  }
+  return (
+    <div className="panel" style={{ padding: 0 }}>
+      {n.data.map((item, i) => (
+        <div
+          key={item.id}
+          style={{
+            padding: '14px 16px',
+            borderBottom: i < n.data.length - 1 ? '1px solid var(--line)' : 'none',
+          }}
+        >
+          <div className="row" style={{ gap: 8, marginBottom: 6 }}>
+            <strong>{item.title}</strong>
+          </div>
+          {item.summary && <p className="sub" style={{ margin: '0 0 8px' }}>{item.summary}</p>}
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <span className={`badge ${SENTIMENT_TONE[item.sentiment] || ''}`}>{item.sentiment}</span>
+            <span className="badge">{item.event_type}</span>
+            <span className="sub" style={{ margin: 0 }}>{item.published_at}</span>
+          </div>
+          {item.related_articles && item.related_articles.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div className="label" style={{ marginBottom: 4 }}>Related coverage</div>
+              {item.related_articles.map((a, j) => (
+                <div key={j}>
+                  <a href={a.url} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>
+                    {a.title}
+                  </a>
+                  {a.source && <span className="sub" style={{ margin: '0 0 0 6px' }}>— {a.source}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function Body({ d, symbol }) {
   const held = d.current_quantity > 0
   return (
     <div>
@@ -36,6 +85,10 @@ function Body({ d }) {
         <Stat label="Unrealized P&L" value={d.unrealized_pnl === null ? '—' : inr(d.unrealized_pnl)} tone={(d.unrealized_pnl || 0) >= 0 ? 'up' : 'down'} />
         <Stat label="Total P&L" value={inr(d.total_pnl)} tone={d.total_pnl >= 0 ? 'up' : 'down'} />
       </div>
+
+      {/* News */}
+      <h2>News</h2>
+      <News symbol={symbol} />
 
       {/* Position strip */}
       <div className="cards">

@@ -77,6 +77,16 @@ export const api = {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note }),
     }).then((r) => r.data),
   stock: (clientId, symbol) => req(`/api/clients/${clientId}/stocks/${symbol}`).then((r) => r.data),
+  // news pipeline
+  uploadNewsPdf: (scope, id, file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return req(`/api/news/pdf?scope=${scope}&id=${id}`, { method: 'POST', body: fd }).then((r) => r.data)
+  },
+  newsPdfUpload: (uploadId) => req(`/api/news/pdf-uploads/${uploadId}`).then((r) => r.data),
+  newsPdfUploads: (scope, id) => req(`/api/news/pdf-uploads?scope=${scope}&id=${id}`).then((r) => r.data),
+  newsForStock: (symbol, limit = 20) => req(`/api/news/stock/${symbol}?limit=${limit}`).then((r) => r.data),
+  newsForClient: (clientId, limit = 50) => req(`/api/news/client/${clientId}?limit=${limit}`).then((r) => r.data),
 }
 
 // ── formatting helpers ──────────────────────────────────────────────
