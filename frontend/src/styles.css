@@ -207,6 +207,10 @@ input.journal-cell:focus{background:var(--surface-2);border-color:var(--line-str
 /* keep grid/flex children from forcing the page wider than the screen */
 .dash-main,.card,.panel,.result,.ledger{min-width:0}
 img,svg{max-width:100%}
+/* the native file-picker button+filename has an intrinsic min-content width
+   that flexbox won't shrink below by default, so it can overflow a narrow
+   flex slot (e.g. the upload row on phones) even with max-width set */
+input[type="file"]{max-width:100%}
 
 /* tablets */
 @media (max-width:820px){
@@ -237,6 +241,9 @@ img,svg{max-width:100%}
   /* stack the manager header (title + "acting as" select) */
   .row.stack-sm{flex-direction:column;align-items:stretch}
   .row.stack-sm select{width:100%}
+  /* let the file input shrink to the screen instead of forcing sideways scroll */
+  .upload-file-row{width:100%}
+  .upload-file-row input[type="file"]{width:100%}
 
   /* --- trade journal / tag UI on mobile --- */
   /* the trades table scrolls sideways; pin the inline tag editor to the visible

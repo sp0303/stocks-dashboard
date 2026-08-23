@@ -158,7 +158,7 @@ function UploadBar({ client, onDone }) {
           <strong>Upload tradebook</strong>
           <div className="sub" style={{ margin: 0 }}>Zerodha equity export (.xlsx). Re-uploads dedupe automatically.</div>
         </div>
-        <div className="row">
+        <div className="row upload-file-row">
           <input ref={inputRef} type="file" accept=".xlsx,.xls" onChange={(e) => upload(e.target.files[0])} disabled={busy} />
         </div>
       </div>
