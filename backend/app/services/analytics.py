@@ -6,8 +6,9 @@ market valuation, allocation, concentration, performance series and per-stock an
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date, datetime
 
-from app.services.engine import compute_positions
+from app.services.engine import compute_positions, compute_round_trips
 from app.services.market_data import get_quotes
 from app.services.securities import classify
 
@@ -28,6 +29,7 @@ def build_holdings(trades: list[dict], with_prices: bool = True) -> dict:
     symbols = [p.symbol for p in open_pos]
     quotes = get_quotes(symbols, _exchange_map(trades)) if (with_prices and symbols) else {}
 
+    today = date.today()
     holdings = []
     total_market = total_invested = total_unrealized = 0.0
     for p in open_pos:
@@ -41,6 +43,14 @@ def build_holdings(trades: list[dict], with_prices: bool = True) -> dict:
         if market_value is not None:
             total_market += market_value
             total_unrealized += unrealized
+        # entry date = oldest buy lot still open (FIFO) — i.e. when this holding was first built
+        entry_date = min((lot.trade_date for lot in p.open_lots), default=None)
+        holding_days = None
+        if entry_date:
+            try:
+                holding_days = (today - date.fromisoformat(entry_date[:10])).days
+            except ValueError:
+                holding_days = None
         holdings.append(
             {
                 "symbol": p.symbol,
@@ -57,6 +67,8 @@ def build_holdings(trades: list[dict], with_prices: bool = True) -> dict:
                 "asset_class": meta["asset_class"],
                 "cap": meta["cap"],
                 "stale": q.get("stale", True),
+                "entry_date": entry_date,
+                "holding_days": holding_days,
             }
         )
     # portfolio weight
@@ -169,6 +181,175 @@ def performance_series(trades: list[dict]) -> list[dict]:
     return cumulative
 
 
+def xirr(cashflows: list[tuple[str, float]], guess: float = 0.1) -> float | None:
+    """Solve for the rate r such that sum(cf / (1+r)^(days/365)) == 0.
+    Newton-Raphson with a bisection fallback. Returns None if it can't converge
+    (e.g. all cashflows same sign, or fewer than 2 cashflows)."""
+    if len(cashflows) < 2:
+        return None
+    parsed = sorted(
+        (datetime.strptime(d, "%Y-%m-%d").date() if isinstance(d, str) else d, v)
+        for d, v in cashflows
+    )
+    t0 = parsed[0][0]
+    if not any(v > 0 for _, v in parsed) or not any(v < 0 for _, v in parsed):
+        return None
+
+    def npv(r: float) -> float:
+        return sum(v / (1 + r) ** ((d - t0).days / 365) for d, v in parsed)
+
+    def dnpv(r: float) -> float:
+        return sum(
+            -((d - t0).days / 365) * v / (1 + r) ** ((d - t0).days / 365 + 1)
+            for d, v in parsed
+        )
+
+    r = guess
+    for _ in range(50):
+        f = npv(r)
+        fp = dnpv(r)
+        if abs(fp) < 1e-12:
+            break
+        r_new = r - f / fp
+        if r_new <= -0.999:
+            r_new = (r - 0.999) / 2
+        if abs(r_new - r) < 1e-8:
+            return round(r_new, 6)
+        r = r_new
+    else:
+        r = None
+
+    if r is not None and abs(npv(r)) < 1e-4:
+        return round(r, 6)
+
+    # bisection fallback over a wide, plausible range
+    lo, hi = -0.999, 10.0
+    f_lo, f_hi = npv(lo), npv(hi)
+    if f_lo * f_hi > 0:
+        return None
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        f_mid = npv(mid)
+        if abs(f_mid) < 1e-4:
+            return round(mid, 6)
+        if f_lo * f_mid < 0:
+            hi = mid
+        else:
+            lo, f_lo = mid, f_mid
+    return round((lo + hi) / 2, 6)
+
+
+def portfolio_cashflows(trades: list[dict], dividends: list[dict], market_value: float) -> list[tuple[str, float]]:
+    cfs: list[tuple[str, float]] = []
+    for t in trades:
+        gross = t["price"] * t["quantity"]
+        charges = t.get("charges") or 0.0
+        if t["trade_type"] == "buy":
+            cfs.append((t["trade_date"], -(gross + charges)))
+        else:
+            cfs.append((t["trade_date"], gross - charges))
+    for d in dividends:
+        cfs.append((d["ex_date"], d["amount_per_share"] * d["quantity"]))
+    if market_value:
+        cfs.append((date.today().strftime("%Y-%m-%d"), market_value))
+    return cfs
+
+
+def portfolio_xirr(trades: list[dict], dividends: list[dict] | None = None) -> float | None:
+    if not trades:
+        return None
+    data = build_holdings(trades)
+    cfs = portfolio_cashflows(trades, dividends or [], data["totals"]["market_value"])
+    return xirr(cfs)
+
+
+def cagr(trades: list[dict]) -> float | None:
+    """Simple CAGR from total invested to current market value over the holding span.
+    Cruder than XIRR (ignores the timing of interim buys/sells) but easy to sanity-check."""
+    if not trades:
+        return None
+    data = build_holdings(trades)
+    invested = data["totals"]["invested_value"]
+    mv = data["totals"]["market_value"]
+    if not invested or not mv:
+        return None
+    first_date = datetime.strptime(min(t["trade_date"] for t in trades), "%Y-%m-%d").date()
+    days = (date.today() - first_date).days
+    if days <= 0:
+        return None
+    return round((mv / invested) ** (365 / days) - 1, 6)
+
+
+def benchmark_series(trades: list[dict], prices: dict[str, float]) -> list[dict]:
+    """Simulate investing each buy/sell's cash amount into the benchmark index on the
+    same date, using the caller-supplied {date: close} price map (already resolved from
+    cache + live fetch — this function does no I/O). Produces {date, benchmark_value}
+    aligned to the same trade-days as `performance_series` so the two can be merged."""
+    ts = sorted(trades, key=lambda t: t["trade_date"])
+    by_day: dict[str, list[dict]] = defaultdict(list)
+    for t in ts:
+        by_day[t["trade_date"]].append(t)
+
+    price_dates = sorted(prices.keys())
+
+    def price_on_or_before(day: str) -> float | None:
+        import bisect
+
+        idx = bisect.bisect_right(price_dates, day) - 1
+        return prices[price_dates[idx]] if idx >= 0 else None
+
+    units = 0.0
+    last_price: float | None = None
+    out: list[dict] = []
+    for day in sorted(by_day):
+        px = price_on_or_before(day)
+        if px:
+            last_price = px
+            for t in by_day[day]:
+                amt = t["price"] * t["quantity"]
+                units += amt / px if t["trade_type"] == "buy" else -amt / px
+        value = units * (px or last_price or 0)
+        out.append({"date": day, "benchmark_value": round(value, 2)})
+    return out
+
+
+def holding_summary(trades: list[dict]) -> list[dict]:
+    """One row per position — open or closed — in a single unified shape:
+    {symbol, status, days_held, return_pct, pnl, value}. This is the raw material
+    for the LLM narration in llm.narrate(); kept purely structured (no I/O) so it's
+    also directly usable as a table on its own, LLM or not.
+    """
+    rows: list[dict] = []
+
+    data = build_holdings(trades)
+    for h in data["holdings"]:
+        rows.append(
+            {
+                "symbol": h["symbol"],
+                "status": "open",
+                "days_held": h["holding_days"],
+                "return_pct": h["unrealized_pct"],
+                "pnl": h["unrealized_pnl"],
+                "value": h["market_value"],
+            }
+        )
+
+    for r in compute_round_trips(trades):
+        rows.append(
+            {
+                "symbol": r["symbol"],
+                "status": "closed",
+                "days_held": r["days"],
+                "return_pct": r["pnl_pct"],
+                "pnl": r["pnl"],
+                "value": round(r["quantity"] * r["sell_price"], 2),
+            }
+        )
+
+    rows.sort(key=lambda r: (r["return_pct"] is None, r["return_pct"]), reverse=True)
+    return rows
+
+
 def manager_metrics(clients: list[dict]) -> dict:
     """Aggregate across all of a manager's clients.
 
@@ -264,6 +445,27 @@ def manager_metrics(clients: list[dict]) -> dict:
         "worst_performer": {"symbol": worst[0], "pct": round(worst[1], 2)} if worst else None,
         "by_client": by_client,
     }
+
+
+def playbook(
+    trades: list[dict],
+    journal: dict[str, dict] | None = None,
+    tags: list[dict] | None = None,
+) -> list[dict]:
+    """Closed round trips ("bought X, sold X, made/lost Y") — the trading playbook.
+    'reason' is the buy trade's note if set, else its tag names joined."""
+    journal = journal or {}
+    tag_names = {t["id"]: t["name"] for t in (tags or [])}
+    rows = compute_round_trips(trades)
+    for r in rows:
+        j = journal.get(r.pop("buy_fingerprint"), {})
+        r.pop("sell_fingerprint", None)
+        reason = j.get("note", "")
+        if not reason and j.get("tag_ids"):
+            reason = ", ".join(tag_names[tid] for tid in j["tag_ids"] if tid in tag_names)
+        r["reason"] = reason
+    rows.sort(key=lambda r: (r["sell_date"], r["buy_date"]))
+    return rows
 
 
 def stock_analysis(trades: list[dict], symbol: str) -> dict | None:

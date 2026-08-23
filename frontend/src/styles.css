@@ -51,6 +51,17 @@ h2{font-size:16px;margin:26px 0 12px;letter-spacing:-.01em}
 .card .value{font-size:22px;font-weight:700;letter-spacing:-.02em}
 .card .value.sm{font-size:18px}
 
+/* AI summary card */
+.ai-summary{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:12px;padding:16px 20px;margin-top:8px}
+.ai-summary-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.ai-summary-badge{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  padding:3px 8px;border-radius:999px;background:var(--accent-wash);color:var(--accent-ink);font-weight:700}
+.ai-summary-head h2{font-size:13px;margin:0;color:var(--muted);font-weight:600;letter-spacing:.02em}
+.ai-summary ul{margin:0;padding-left:18px;display:grid;gap:6px}
+.ai-summary li{font-size:14px;line-height:1.45}
+.ai-summary li b{color:var(--ink)}
+
 /* tables */
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .tbl-scroll{overflow-x:auto}
@@ -157,9 +168,21 @@ input.journal-cell:focus{background:var(--surface-2);border-color:var(--line-str
   .dash-nav button.on{border-left:none;border-bottom-color:var(--accent);background:transparent}
 }
 
+/* continuously-scrolling dashboard: each tab is a section on the same page.
+   scroll-margin-top keeps a jumped-to (or scrollspied-past) section clear of
+   the sticky topbar. Sections are visually separated and their own <h2> title
+   distinguishes them from the panel headings inside. */
+.dash-section{scroll-margin-top:90px;margin-bottom:36px}
+.dash-section:last-child{margin-bottom:0}
+.section-title{font-size:20px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+
 .empty{color:var(--muted);padding:30px;text-align:center;background:var(--surface-2);border-radius:12px;
   border:1px dashed var(--line-strong)}
-.loading{color:var(--muted);padding:20px}
+.loading{color:var(--muted);padding:20px;display:flex;align-items:center;gap:10px}
+.spinner{width:16px;height:16px;border-radius:50%;border:2px solid var(--line-strong);
+  border-top-color:var(--accent);animation:spin .7s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spinner{animation-duration:1.4s}}
 .err{color:var(--down);padding:12px;background:#f6e4e1;border-radius:8px;font-size:13px}
 @media (prefers-color-scheme:dark){.err{background:#26120f}}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:middle}

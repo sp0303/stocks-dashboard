@@ -1,6 +1,6 @@
-"""Zerodha equity tradebook (.xlsx) parser.
+"""Equity tradebook (.xlsx) parser — Zerodha and Upstox exports.
 
-Observed layout:
+Zerodha layout:
   row 1 : ["Client ID", "<client>"]
   row 4 : ["Tradebook for Equity from <from> to <to>"]
   row 6 : header  -> Symbol, ISIN, Trade Date, Exchange, Segment, Series,
@@ -8,8 +8,21 @@ Observed layout:
                      Order Execution Time
   row 7+: data rows
 
-No charges column exists in the export, so cost basis is price-based (charges = 0).
+Upstox layout:
+  row 5 : ["UCC", "<client code>"]
+  row 11: header  -> Date, Company, Amount, Exchange, Segment, Scrip Code,
+                     Instrument Type, Strike Price, Expiry, Trade Num,
+                     Trade Time, Side, Quantity, Price
+  row 12+: data rows
+  Upstox has no dedicated "Symbol" column — "Company" holds a display name
+  (often truncated), resolved to an NSE ticker via company_lookup. It also has
+  no ISIN, series, auction flag or order id, so those are left blank.
+
+No charges column exists in either export, so cost basis is price-based (charges = 0).
 Dedupe fingerprint is built per row; the store enforces uniqueness on it.
+
+Upstox workbooks sometimes omit a correct <dimension> tag, which makes openpyxl's
+read_only mode stop after the first row — so we always load fully (not read_only).
 """
 from __future__ import annotations
 
@@ -19,7 +32,9 @@ from dataclasses import dataclass
 
 import openpyxl
 
-HEADER_MAP = {
+from . import company_lookup
+
+ZERODHA_HEADER_MAP = {
     "symbol": "symbol",
     "isin": "isin",
     "trade date": "trade_date",
@@ -33,6 +48,18 @@ HEADER_MAP = {
     "trade id": "trade_id",
     "order id": "order_id",
     "order execution time": "order_execution_time",
+}
+
+UPSTOX_HEADER_MAP = {
+    "date": "trade_date",
+    "company": "symbol",
+    "exchange": "exchange",
+    "segment": "segment",
+    "trade num": "trade_id",
+    "trade time": "trade_time",
+    "side": "trade_type",
+    "quantity": "quantity",
+    "price": "price",
 }
 
 
@@ -70,8 +97,13 @@ def _norm(v):
 
 
 def parse_tradebook(source, client_id_hint: str | None = None) -> ParsedTradebook:
-    """Parse an xlsx path or file-like object into normalized trades."""
-    wb = openpyxl.load_workbook(source, read_only=True, data_only=True)
+    """Parse an xlsx path or file-like object into normalized trades.
+
+    Supports both Zerodha and Upstox equity tradebook exports (detected from the
+    header row). Loaded fully (not read_only) since some Upstox exports carry a
+    stale <dimension> tag that truncates read_only iteration to a single row.
+    """
+    wb = openpyxl.load_workbook(source, data_only=True)
     ws = wb.active
 
     rows = list(ws.iter_rows(values_only=True))
@@ -79,31 +111,35 @@ def parse_tradebook(source, client_id_hint: str | None = None) -> ParsedTradeboo
     date_from = date_to = None
     header_idx = None
     header_cols: list[str] = []
+    header_map: dict[str, str] = {}
     errors: list[str] = []
 
-    # Zerodha exports may include a leading blank column, so scan every cell in a
-    # row rather than assuming a fixed column index.
+    # Exports may include a leading blank column, so scan every cell in a row
+    # rather than assuming a fixed column index.
     for i, row in enumerate(rows):
         if not row:
             continue
         cells = [_norm(c) for c in row]
         lower = [c.lower() for c in cells]
         for j, c in enumerate(lower):
-            if c == "client id" and j + 1 < len(cells) and cells[j + 1]:
+            if c in ("client id", "ucc") and j + 1 < len(cells) and cells[j + 1]:
                 client_id = cells[j + 1]
             if c.startswith("tradebook for"):
                 m = re.search(r"from\s+([\d-]+)\s+to\s+([\d-]+)", cells[j])
                 if m:
                     date_from, date_to = m.group(1), m.group(2)
         if "symbol" in lower and "isin" in lower:
-            header_idx = i
-            header_cols = lower
+            header_idx, header_cols, header_map = i, lower, ZERODHA_HEADER_MAP
+            break
+        if "company" in lower and "side" in lower:
+            header_idx, header_cols, header_map = i, lower, UPSTOX_HEADER_MAP
             break
 
     if header_idx is None:
         return ParsedTradebook(client_id, date_from, date_to, [], ["Header row not found"])
 
-    fields = [HEADER_MAP.get(h) for h in header_cols]
+    is_upstox = header_map is UPSTOX_HEADER_MAP
+    fields = [header_map.get(h) for h in header_cols]
     trades: list[dict] = []
     for r_i, row in enumerate(rows[header_idx + 1 :], start=header_idx + 2):
         if not row or all(c is None or _norm(c) == "" for c in row):
@@ -116,10 +152,17 @@ def parse_tradebook(source, client_id_hint: str | None = None) -> ParsedTradeboo
         if not rec.get("symbol"):
             continue
         try:
+            trade_date = _norm(rec.get("trade_date"))[:10]
+            order_execution_time = _norm(rec.get("order_execution_time"))
+            if not order_execution_time and rec.get("trade_time"):
+                order_execution_time = f"{trade_date} {_norm(rec.get('trade_time'))}"
+            symbol = _norm(rec.get("symbol")).upper()
+            if is_upstox:
+                symbol = company_lookup.resolve_symbol(symbol)
             trade = {
-                "symbol": _norm(rec.get("symbol")).upper(),
+                "symbol": symbol,
                 "isin": _norm(rec.get("isin")),
-                "trade_date": _norm(rec.get("trade_date"))[:10],
+                "trade_date": trade_date,
                 "exchange": _norm(rec.get("exchange")).upper(),
                 "segment": _norm(rec.get("segment")),
                 "series": _norm(rec.get("series")),
@@ -129,7 +172,7 @@ def parse_tradebook(source, client_id_hint: str | None = None) -> ParsedTradeboo
                 "price": float(rec.get("price") or 0),
                 "trade_id": _norm(rec.get("trade_id")),
                 "order_id": _norm(rec.get("order_id")),
-                "order_execution_time": _norm(rec.get("order_execution_time")),
+                "order_execution_time": order_execution_time,
                 "charges": 0.0,
             }
             trade["trade_value"] = round(trade["quantity"] * trade["price"], 4)

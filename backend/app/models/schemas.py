@@ -56,3 +56,18 @@ class TradeNoteUpdate(BaseModel):
     """One-off free-text note on a trade — the specific 'why' this time, alongside
     the reusable tags."""
     note: str
+
+
+class DividendCreate(BaseModel):
+    symbol: str
+    ex_date: str
+    amount_per_share: float
+    quantity: float
+    source: str = "manual"
+
+
+class DividendUpdate(BaseModel):
+    symbol: str | None = None
+    ex_date: str | None = None
+    amount_per_share: float | None = None
+    quantity: float | None = None

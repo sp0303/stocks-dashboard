@@ -17,7 +17,12 @@ export function PnL({ value }) {
 }
 
 export function Loading({ what = 'data' }) {
-  return <div className="loading">Loading {what}…</div>
+  return (
+    <div className="loading">
+      <span className="spinner" aria-hidden="true" />
+      <span>Loading {what}…</span>
+    </div>
+  )
 }
 
 export function ErrorBox({ error }) {

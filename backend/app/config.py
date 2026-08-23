@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # CORS — the React dev server / GitHub Pages origin
     cors_origins: str = "*"
 
+    # Cloudflare Workers AI — narration for the holding-summary insight card.
+    # Leave cf_api_token empty to disable narration (structured metrics still work).
+    cf_account_id: str = ""
+    cf_api_token: str = ""
+    cf_model: str = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+
     @property
     def use_mongo(self) -> bool:
         return bool(self.mongodb_url.strip())

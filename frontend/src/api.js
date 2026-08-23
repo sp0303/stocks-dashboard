@@ -59,6 +59,22 @@ export const api = {
     req(`/api/clients/${clientId}/allocation?by=${by}&basis=${basis}`).then((r) => r.data),
   concentration: (clientId) => req(`/api/clients/${clientId}/concentration`).then((r) => r.data),
   performance: (clientId) => req(`/api/clients/${clientId}/performance`).then((r) => r.data),
+  xirr: (clientId) => req(`/api/clients/${clientId}/xirr`).then((r) => r.data),
+  holdingSummary: (clientId) => req(`/api/clients/${clientId}/holding-summary`).then((r) => r.data),
+  holdingSummaryNarrative: (clientId) => req(`/api/clients/${clientId}/holding-summary/narrative`).then((r) => r.data),
+  dividends: (clientId) => req(`/api/clients/${clientId}/dividends`).then((r) => r.data),
+  createDividend: (clientId, body) =>
+    req(`/api/clients/${clientId}/dividends`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }).then((r) => r.data),
+  updateDividend: (clientId, divId, body) =>
+    req(`/api/clients/${clientId}/dividends/${divId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }).then((r) => r.data),
+  deleteDividend: (clientId, divId) =>
+    req(`/api/clients/${clientId}/dividends/${divId}`, { method: 'DELETE' }).then((r) => r.data),
+  dividendSuggestions: (clientId, symbol) =>
+    req(`/api/clients/${clientId}/dividends/suggestions${symbol ? `?symbol=${symbol}` : ''}`).then((r) => r.data),
   trades: (clientId, { tag } = {}) =>
     req(`/api/clients/${clientId}/trades${tag ? `?tag=${tag}` : ''}`).then((r) => r),
   tags: (clientId) => req(`/api/clients/${clientId}/tags`).then((r) => r.data),
@@ -77,6 +93,10 @@ export const api = {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note }),
     }).then((r) => r.data),
   stock: (clientId, symbol) => req(`/api/clients/${clientId}/stocks/${symbol}`).then((r) => r.data),
+  playbook: (clientId, { sort = 'sell_date', order = 'desc', symbol, page = 1, pageSize = 10 } = {}) =>
+    req(
+      `/api/clients/${clientId}/playbook?sort=${sort}&order=${order}&page=${page}&page_size=${pageSize}${symbol ? `&symbol=${symbol}` : ''}`
+    ).then((r) => r),
 }
 
 // ── formatting helpers ──────────────────────────────────────────────

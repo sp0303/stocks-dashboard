@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from datetime import date as _date
 from typing import Iterable
 
 
@@ -20,6 +21,7 @@ class Lot:
     qty: float
     unit_cost: float          # per-share cost incl. allocated charges
     trade_date: str
+    fingerprint: str | None = None
 
 
 @dataclass
@@ -48,6 +50,15 @@ def _num(v) -> float:
     if v is None or v == "":
         return 0.0
     return float(v)
+
+
+def _days_between(start: str, end: str) -> int | None:
+    try:
+        d1 = _date.fromisoformat(start[:10])
+        d2 = _date.fromisoformat(end[:10])
+        return (d2 - d1).days
+    except (ValueError, TypeError):
+        return None
 
 
 def compute_positions(trades: Iterable[dict]) -> tuple[list[Position], float]:
@@ -79,7 +90,7 @@ def compute_positions(trades: Iterable[dict]) -> tuple[list[Position], float]:
 
         if ttype == "buy":
             unit_cost = (price * qty + charges) / qty
-            lots[symbol].append(Lot(qty=qty, unit_cost=unit_cost, trade_date=date))
+            lots[symbol].append(Lot(qty=qty, unit_cost=unit_cost, trade_date=date, fingerprint=t.get("fingerprint")))
             p.total_bought_qty += qty
             p.total_bought_value += price * qty + charges
             if p.first_buy_date is None:
@@ -115,3 +126,64 @@ def compute_positions(trades: Iterable[dict]) -> tuple[list[Position], float]:
         p.avg_cost = (p.invested_value / p.quantity) if p.quantity > 1e-9 else 0.0
 
     return list(pos.values()), round(total_realized, 4)
+
+
+def compute_round_trips(trades: Iterable[dict]) -> list[dict]:
+    """FIFO-matched closed round trips ("playbook" rows): each row is one buy-lot
+    slice matched against a sell. A sell spanning multiple buy lots produces one row
+    per lot consumed; a buy sold off in pieces produces one row per piece sold.
+    Only closed (bought-and-sold) quantity is returned — open positions have no row.
+    """
+    trades = sorted(
+        trades,
+        key=lambda t: (str(t.get("trade_date", "")), str(t.get("order_execution_time", ""))),
+    )
+
+    lots: dict[str, deque[Lot]] = defaultdict(deque)
+    round_trips: list[dict] = []
+
+    for t in trades:
+        symbol = t["symbol"]
+        qty = _num(t.get("quantity"))
+        price = _num(t.get("price"))
+        charges = _num(t.get("charges"))
+        ttype = str(t.get("trade_type", "")).lower()
+        date = str(t.get("trade_date", ""))
+        if qty <= 0:
+            continue
+
+        if ttype == "buy":
+            unit_cost = (price * qty + charges) / qty
+            lots[symbol].append(Lot(qty=qty, unit_cost=unit_cost, trade_date=date, fingerprint=t.get("fingerprint")))
+
+        elif ttype == "sell":
+            remaining = qty
+            sell_charge_per_unit = charges / qty
+            dq = lots[symbol]
+            while remaining > 1e-9 and dq:
+                lot = dq[0]
+                take = min(remaining, lot.qty)
+                buy_price = lot.unit_cost
+                sell_price = price - sell_charge_per_unit
+                pnl = (sell_price - buy_price) * take
+                round_trips.append(
+                    {
+                        "symbol": symbol,
+                        "quantity": round(take, 6),
+                        "buy_price": round(buy_price, 4),
+                        "buy_date": lot.trade_date,
+                        "sell_price": round(sell_price, 4),
+                        "sell_date": date,
+                        "days": _days_between(lot.trade_date, date),
+                        "pnl": round(pnl, 2),
+                        "pnl_pct": round((sell_price - buy_price) / buy_price * 100, 2) if buy_price else 0.0,
+                        "buy_fingerprint": lot.fingerprint,
+                        "sell_fingerprint": t.get("fingerprint"),
+                    }
+                )
+                lot.qty -= take
+                remaining -= take
+                if lot.qty <= 1e-9:
+                    dq.popleft()
+
+    return round_trips

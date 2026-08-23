@@ -73,6 +73,18 @@ class BaseStore:
     async def set_trade_tags(self, client_id: str, fingerprint: str, tag_ids: list[str]) -> dict: ...
     async def set_trade_note(self, client_id: str, fingerprint: str, note: str) -> dict: ...
 
+    # dividends — persisted once entered/accepted; never re-fetched from the market
+    # data provider once stored (see analytics.dividends suggestions flow).
+    async def list_dividends(self, client_id: str) -> list[dict]: ...
+    async def create_dividend(self, doc: dict) -> dict: ...
+    async def update_dividend(self, client_id: str, div_id: str, patch: dict) -> dict | None: ...
+    async def delete_dividend(self, client_id: str, div_id: str) -> bool: ...
+
+    # benchmark index price cache (date -> close), keyed by index symbol, so the
+    # Performance chart doesn't hit the market data provider on every load.
+    async def get_benchmark_prices(self, symbol: str) -> dict[str, float]: ...
+    async def save_benchmark_prices(self, symbol: str, prices: dict[str, float]) -> None: ...
+
 
 # --------------------------------------------------------------------------- #
 # JSON fallback
@@ -83,15 +95,16 @@ class JsonStore(BaseStore):
         self._lock = asyncio.Lock()
         self._db = {
             "managers": [], "clients": [], "uploads": [], "trades": [], "watchlists": [],
-            "tags": [], "trade_tags": [],
+            "tags": [], "trade_tags": [], "dividends": [], "benchmark_prices": {},
         }
 
     async def init(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             self._db = json.loads(self.path.read_text() or "{}")
-            for k in ("managers", "clients", "uploads", "trades", "watchlists", "tags", "trade_tags"):
+            for k in ("managers", "clients", "uploads", "trades", "watchlists", "tags", "trade_tags", "dividends"):
                 self._db.setdefault(k, [])
+            self._db.setdefault("benchmark_prices", {})
 
     def _flush(self) -> None:
         tmp = self.path.with_suffix(".tmp")
@@ -170,6 +183,7 @@ class JsonStore(BaseStore):
             ]
             self._db["tags"] = [t for t in self._db["tags"] if t["client_id"] != cid]
             self._db["trade_tags"] = [t for t in self._db["trade_tags"] if t["client_id"] != cid]
+            self._db["dividends"] = [d for d in self._db["dividends"] if d["client_id"] != cid]
             self._flush()
             return len(self._db["clients"]) < before
 
@@ -320,6 +334,46 @@ class JsonStore(BaseStore):
             self._flush()
             return {"tag_ids": link.get("tag_ids", []), "note": link["note"]}
 
+    async def list_dividends(self, client_id):
+        return [d for d in self._db["dividends"] if d["client_id"] == client_id]
+
+    async def create_dividend(self, doc):
+        doc["id"] = doc.get("id") or _new_id()
+        async with self._lock:
+            self._db["dividends"].append(doc)
+            self._flush()
+        return doc
+
+    async def update_dividend(self, client_id, div_id, patch):
+        async with self._lock:
+            d = next(
+                (d for d in self._db["dividends"] if d["client_id"] == client_id and d["id"] == div_id),
+                None,
+            )
+            if d:
+                d.update(patch)
+                self._flush()
+            return d
+
+    async def delete_dividend(self, client_id, div_id):
+        async with self._lock:
+            before = len(self._db["dividends"])
+            self._db["dividends"] = [
+                d for d in self._db["dividends"]
+                if not (d["client_id"] == client_id and d["id"] == div_id)
+            ]
+            self._flush()
+            return len(self._db["dividends"]) < before
+
+    async def get_benchmark_prices(self, symbol):
+        return dict(self._db["benchmark_prices"].get(symbol, {}))
+
+    async def save_benchmark_prices(self, symbol, prices):
+        async with self._lock:
+            existing = self._db["benchmark_prices"].setdefault(symbol, {})
+            existing.update(prices)
+            self._flush()
+
 
 # --------------------------------------------------------------------------- #
 # Mongo backend
@@ -348,6 +402,8 @@ class MongoStore(BaseStore):
             [("client_id", 1), ("fingerprint", 1)], unique=True
         )
         await self.db.tags.create_index([("client_id", 1)])
+        await self.db.dividends.create_index([("client_id", 1), ("symbol", 1)])
+        await self.db.benchmark_prices.create_index([("symbol", 1), ("date", 1)], unique=True)
 
     async def close(self):
         if self.client:
@@ -405,26 +461,49 @@ class MongoStore(BaseStore):
         await self.db.watchlists.delete_many({"owner_type": "CLIENT", "owner_id": cid})
         await self.db.tags.delete_many({"client_id": cid})
         await self.db.trade_tags.delete_many({"client_id": cid})
+        await self.db.dividends.delete_many({"client_id": cid})
         return res.deleted_count > 0
 
     async def get_watchlist(self, owner_type, owner_id):
         w = await self.db.watchlists.find_one({"owner_type": owner_type, "owner_id": owner_id})
-        return list(w["symbols"]) if w else []
+        if not w:
+            return []
+        if "symbols" in w:
+            return list(w["symbols"])
+        if "entries" in w:
+            return [e["symbol"] for e in w["entries"] if isinstance(e, dict) and "symbol" in e]
+        return []
 
     async def add_watchlist_symbol(self, owner_type, owner_id, symbol):
         symbol = symbol.upper()
-        await self.db.watchlists.update_one(
-            {"owner_type": owner_type, "owner_id": owner_id},
-            {"$addToSet": {"symbols": symbol}},
-            upsert=True,
-        )
+        # Find if the watchlist exists and has 'entries'
+        w = await self.db.watchlists.find_one({"owner_type": owner_type, "owner_id": owner_id})
+        if w and "entries" in w:
+            # If it uses the 'entries' schema, add to entries
+            if not any(isinstance(e, dict) and e.get("symbol") == symbol for e in w["entries"]):
+                await self.db.watchlists.update_one(
+                    {"owner_type": owner_type, "owner_id": owner_id},
+                    {"$push": {"entries": {"symbol": symbol, "checkpoint_date": None}}}
+                )
+        else:
+            # Otherwise use the default 'symbols' schema
+            await self.db.watchlists.update_one(
+                {"owner_type": owner_type, "owner_id": owner_id},
+                {"$addToSet": {"symbols": symbol}},
+                upsert=True,
+            )
         return await self.get_watchlist(owner_type, owner_id)
 
     async def remove_watchlist_symbol(self, owner_type, owner_id, symbol):
         symbol = symbol.upper()
         await self.db.watchlists.update_one(
             {"owner_type": owner_type, "owner_id": owner_id},
-            {"$pull": {"symbols": symbol}},
+            {
+                "$pull": {
+                    "symbols": symbol,
+                    "entries": {"symbol": symbol}
+                }
+            }
         )
         return await self.get_watchlist(owner_type, owner_id)
 
@@ -520,6 +599,41 @@ class MongoStore(BaseStore):
         )
         d = await self.db.trade_tags.find_one({"client_id": client_id, "fingerprint": fingerprint})
         return {"tag_ids": d.get("tag_ids", []), "note": d.get("note", "")}
+
+    async def list_dividends(self, client_id):
+        return [self._clean(d) async for d in self.db.dividends.find({"client_id": client_id})]
+
+    async def create_dividend(self, doc):
+        doc["id"] = doc.get("id") or _new_id()
+        await self.db.dividends.insert_one(dict(doc))
+        return self._clean(doc)
+
+    async def update_dividend(self, client_id, div_id, patch):
+        await self.db.dividends.update_one({"client_id": client_id, "id": div_id}, {"$set": patch})
+        return self._clean(await self.db.dividends.find_one({"client_id": client_id, "id": div_id}))
+
+    async def delete_dividend(self, client_id, div_id):
+        res = await self.db.dividends.delete_one({"client_id": client_id, "id": div_id})
+        return res.deleted_count > 0
+
+    async def get_benchmark_prices(self, symbol):
+        cur = self.db.benchmark_prices.find({"symbol": symbol})
+        return {d["date"]: d["close"] async for d in cur}
+
+    async def save_benchmark_prices(self, symbol, prices):
+        from pymongo import UpdateOne
+
+        if not prices:
+            return
+        ops = [
+            UpdateOne(
+                {"symbol": symbol, "date": d},
+                {"$set": {"symbol": symbol, "date": d, "close": c}},
+                upsert=True,
+            )
+            for d, c in prices.items()
+        ]
+        await self.db.benchmark_prices.bulk_write(ops, ordered=False)
 
 
 # --------------------------------------------------------------------------- #

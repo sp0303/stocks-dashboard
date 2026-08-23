@@ -1,13 +1,78 @@
 """Portfolio analytics routes (read-only, derived)."""
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from fastapi import APIRouter, HTTPException, Query
 
-from app.models.schemas import TagCreate, TagUpdate, TradeNoteUpdate, TradeTagsUpdate
+from app.models.schemas import DividendCreate, DividendUpdate, TagCreate, TagUpdate, TradeNoteUpdate, TradeTagsUpdate
 from app.services import analytics
+from app.services.engine import compute_positions
+from app.services.llm import narrate
+from app.services.market_data import get_dividend_history
 from app.store import get_store
 
 router = APIRouter(prefix="/api/clients", tags=["portfolio"])
+
+BENCHMARK_SYMBOL = "^NSEI"
+
+
+async def _benchmark_price_map(trades: list[dict]) -> dict[str, float]:
+    """Cached-first Nifty close series covering the client's trading history. Only the
+    dates missing from the store's `benchmark_prices` cache are fetched from Yahoo."""
+    if not trades:
+        return {}
+    store = get_store()
+    cached = await store.get_benchmark_prices(BENCHMARK_SYMBOL)
+    first_trade_date = min(t["trade_date"] for t in trades)
+    today = date.today().strftime("%Y-%m-%d")
+
+    have_recent = cached and max(cached.keys()) >= (date.today() - timedelta(days=5)).strftime("%Y-%m-%d")
+    if cached and have_recent and min(cached.keys()) <= first_trade_date:
+        return cached
+
+    # Index tickers (^NSEI) don't take the NSE/.NS suffix rewrite that get_history applies
+    # to equities, so fetch the raw ticker directly.
+    fetched = _fetch_index_history(first_trade_date, today)
+    new_prices = {p["date"]: p["close"] for p in fetched}
+    if new_prices:
+        await store.save_benchmark_prices(BENCHMARK_SYMBOL, new_prices)
+    merged = {**cached, **new_prices}
+    return merged
+
+
+def _fetch_index_history(from_date: str, to_date: str) -> list[dict]:
+    """`^NSEI` needs the raw Yahoo ticker (no .NS/.BO suffix), so this bypasses
+    market_data.get_history's equity-ticker rewriting and hits the chart endpoint directly."""
+    import time as _time
+    from datetime import datetime, timezone
+
+    import httpx
+
+    from app.services.market_data import _CHART_HOSTS
+
+    try:
+        p1 = int(datetime.strptime(from_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+    except ValueError:
+        p1 = int(_time.time()) - 365 * 86400
+    p2 = int(_time.time())
+
+    for host in _CHART_HOSTS:
+        url = f"{host}/v8/finance/chart/{BENCHMARK_SYMBOL}?period1={p1}&period2={p2}&interval=1d"
+        try:
+            r = httpx.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12.0)
+            if r.status_code != 200:
+                continue
+            res = r.json()["chart"]["result"][0]
+            ts = res["timestamp"]
+            closes = res["indicators"]["quote"][0].get("close", [])
+            return [
+                {"date": datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d"), "close": round(float(c), 2)}
+                for t, c in zip(ts, closes) if c is not None
+            ]
+        except Exception:
+            continue
+    return []
 
 
 async def _trades_or_404(client_id: str) -> list[dict]:
@@ -50,7 +115,21 @@ async def concentration(client_id: str):
 @router.get("/{client_id}/performance")
 async def performance(client_id: str):
     trades = await _trades_or_404(client_id)
-    return {"data": analytics.performance_series(trades)}
+    series = analytics.performance_series(trades)
+    prices = await _benchmark_price_map(trades)
+    if prices:
+        bench = {row["date"]: row["benchmark_value"] for row in analytics.benchmark_series(trades, prices)}
+        for row in series:
+            row["benchmark_value"] = bench.get(row["date"])
+    return {"data": series}
+
+
+@router.get("/{client_id}/xirr")
+async def xirr(client_id: str):
+    store = get_store()
+    trades = await _trades_or_404(client_id)
+    dividends = await store.list_dividends(client_id)
+    return {"data": {"xirr": analytics.portfolio_xirr(trades, dividends), "cagr": analytics.cagr(trades)}}
 
 
 @router.get("/{client_id}/trades")
@@ -127,6 +206,143 @@ async def set_trade_note(client_id: str, fingerprint: str, body: TradeNoteUpdate
     if not await store.get_client(client_id):
         raise HTTPException(404, "client not found")
     return {"data": await store.set_trade_note(client_id, fingerprint, body.note)}
+
+
+@router.get("/{client_id}/playbook")
+async def playbook(
+    client_id: str,
+    symbol: str | None = None,
+    sort: str = Query(
+        "sell_date",
+        pattern="^(sell_date|buy_date|days|pnl|pnl_pct|symbol|quantity|buy_price|sell_price|reason)$",
+    ),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=200),
+):
+    store = get_store()
+    ts = await _trades_or_404(client_id)
+    journal = await store.get_trade_journal(client_id)
+    tags = await store.list_tags(client_id)
+    rows = analytics.playbook(ts, journal, tags)
+    if symbol:
+        rows = [r for r in rows if r["symbol"] == symbol.upper()]
+    rows.sort(key=lambda r: r[sort] if r[sort] is not None else 0, reverse=(order == "desc"))
+    rows.sort(key=lambda r: r[sort] is None)  # None always last, regardless of order (stable sort)
+    total = len(rows)
+    start = (page - 1) * page_size
+    page_rows = rows[start : start + page_size]
+    return {
+        "data": page_rows,
+        "meta": {"total": total, "page": page, "page_size": page_size, "pages": max(1, -(-total // page_size))},
+    }
+
+
+@router.get("/{client_id}/holding-summary")
+async def holding_summary(client_id: str):
+    """Per-stock 'held N days, made/lost X%' rows — fast, no LLM call. The narrative
+    is a separate endpoint (below) so the table renders immediately instead of
+    waiting 1-3s on Cloudflare; the frontend lazy-loads the narrative after."""
+    trades = await _trades_or_404(client_id)
+    rows = analytics.holding_summary(trades)
+    return {"data": {"rows": rows}}
+
+
+@router.get("/{client_id}/holding-summary/narrative")
+async def holding_summary_narrative(client_id: str):
+    """LLM-narrated paragraph over the same rows as /holding-summary (never a
+    source of numbers — narration only). Split out because it's the slow part
+    (a live Cloudflare Workers AI call); null if no token is configured or the
+    call fails, so the frontend just shows the table alone."""
+    trades = await _trades_or_404(client_id)
+    rows = analytics.holding_summary(trades)
+    narrative = narrate(rows) if rows else None
+    return {"data": {"narrative": narrative}}
+
+
+@router.get("/{client_id}/dividends")
+async def list_dividends(client_id: str):
+    store = get_store()
+    if not await store.get_client(client_id):
+        raise HTTPException(404, "client not found")
+    return {"data": await store.list_dividends(client_id)}
+
+
+@router.post("/{client_id}/dividends")
+async def create_dividend(client_id: str, body: DividendCreate):
+    store = get_store()
+    if not await store.get_client(client_id):
+        raise HTTPException(404, "client not found")
+    doc = {**body.model_dump(), "client_id": client_id, "symbol": body.symbol.upper()}
+    return {"data": await store.create_dividend(doc)}
+
+
+@router.patch("/{client_id}/dividends/{div_id}")
+async def update_dividend(client_id: str, div_id: str, body: DividendUpdate):
+    store = get_store()
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "symbol" in patch:
+        patch["symbol"] = patch["symbol"].upper()
+    updated = await store.update_dividend(client_id, div_id, patch)
+    if not updated:
+        raise HTTPException(404, "dividend not found")
+    return {"data": updated}
+
+
+@router.delete("/{client_id}/dividends/{div_id}")
+async def delete_dividend(client_id: str, div_id: str):
+    store = get_store()
+    ok = await store.delete_dividend(client_id, div_id)
+    if not ok:
+        raise HTTPException(404, "dividend not found")
+    return {"data": {"deleted": True}}
+
+
+@router.get("/{client_id}/dividends/suggestions")
+async def dividend_suggestions(client_id: str, symbol: str | None = None):
+    """Propose historical dividends from Yahoo for symbols the client has ever held,
+    with the estimated quantity held on each ex-date, for the user to review and accept.
+    Never auto-inserted — see store persistence note on the dividends collection."""
+    store = get_store()
+    trades = await _trades_or_404(client_id)
+    existing = await store.list_dividends(client_id)
+    already = {(d["symbol"], d["ex_date"]) for d in existing}
+
+    symbols = sorted({t["symbol"] for t in trades})
+    if symbol:
+        symbol = symbol.upper()
+        if symbol not in symbols:
+            raise HTTPException(404, "no trades for this symbol")
+        symbols = [symbol]
+
+    exchange_by_symbol = {t["symbol"]: t.get("exchange") or "NSE" for t in trades}
+    suggestions: list[dict] = []
+    for sym in symbols:
+        sym_trades = sorted([t for t in trades if t["symbol"] == sym], key=lambda t: t["trade_date"])
+        first_date = sym_trades[0]["trade_date"]
+        divs = get_dividend_history(sym, exchange_by_symbol.get(sym, "NSE"), from_date=first_date)
+        for d in divs:
+            if (sym, d["ex_date"]) in already:
+                continue
+            held_trades = [t for t in sym_trades if t["trade_date"] <= d["ex_date"]]
+            if not held_trades:
+                continue
+            positions, _ = compute_positions(held_trades)
+            pos = next((p for p in positions if p.symbol == sym), None)
+            qty = pos.quantity if pos else 0
+            if qty <= 0:
+                continue
+            suggestions.append(
+                {
+                    "symbol": sym,
+                    "ex_date": d["ex_date"],
+                    "amount_per_share": d["amount_per_share"],
+                    "estimated_quantity": qty,
+                    "estimated_total": round(d["amount_per_share"] * qty, 2),
+                }
+            )
+    suggestions.sort(key=lambda s: s["ex_date"], reverse=True)
+    return {"data": suggestions}
 
 
 @router.get("/{client_id}/stocks/{symbol}")

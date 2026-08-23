@@ -147,6 +147,53 @@ def get_history(symbol: str, from_date: str | None = None, interval: str = "1d",
     return {"symbol": symbol, "interval": interval, "from": from_date, "points": points, "stats": stats}
 
 
+def get_dividend_history(symbol: str, exchange: str = "NSE", from_date: str | None = None) -> list[dict]:
+    """Ex-date + per-share dividend amount from Yahoo's chart endpoint (`events=div`).
+    Used only to generate suggestions for the user to confirm — never written straight
+    into the dividends collection, since we don't know held quantity on the ex-date here.
+    """
+    from datetime import datetime, timezone
+
+    import httpx
+
+    try:
+        p1 = int(datetime.strptime(from_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()) if from_date else int(time.time()) - 5 * 365 * 86400
+    except ValueError:
+        p1 = int(time.time()) - 5 * 365 * 86400
+    p2 = int(time.time())
+
+    def fetch(ticker: str):
+        for host in _CHART_HOSTS:
+            url = (f"{host}/v8/finance/chart/{ticker}"
+                   f"?period1={p1}&period2={p2}&interval=1d&events=div")
+            try:
+                r = httpx.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12.0)
+                if r.status_code != 200:
+                    continue
+                return r.json()["chart"]["result"][0]
+            except Exception:
+                continue
+        return None
+
+    primary = _yf_ticker(symbol, exchange)
+    res = fetch(primary)
+    if not res or "events" not in res:
+        res = fetch(f"{symbol}.BO" if primary.endswith(".NS") else f"{symbol}.NS")
+    if not res or "events" not in res:
+        return []
+
+    divs = res.get("events", {}).get("dividends", {})
+    out = [
+        {
+            "ex_date": datetime.fromtimestamp(d["date"], tz=timezone.utc).strftime("%Y-%m-%d"),
+            "amount_per_share": round(float(d["amount"]), 4),
+        }
+        for d in divs.values()
+    ]
+    out.sort(key=lambda d: d["ex_date"])
+    return out
+
+
 class YFinanceProvider(MarketDataProvider):
     """Yahoo Finance quotes via the direct chart API (NSE `.NS`, BSE `.BO` fallback)."""
 
@@ -174,24 +221,42 @@ class YFinanceProvider(MarketDataProvider):
 
 
 class QuoteCache:
-    def __init__(self, provider: MarketDataProvider, ttl: int):
+    """Caches both hits and misses.
+
+    A symbol Yahoo can't resolve (delisted, a rights entitlement, an obscure
+    instrument with no real ticker) used to be dropped by the provider and
+    therefore never cached — every single request would retry the full
+    network round-trip for it, forever. That's a fixed multi-second tax on
+    every page load that includes such a symbol. Failed lookups are now
+    cached too, just with a shorter TTL, so they're retried occasionally
+    (in case the symbol becomes resolvable later) instead of on every request.
+    """
+
+    def __init__(self, provider: MarketDataProvider, ttl: int, negative_ttl: int | None = None):
         self.provider = provider
         self.ttl = ttl
-        self._cache: dict[str, tuple[float, float]] = {}  # sym -> (price, ts)
+        self.negative_ttl = negative_ttl if negative_ttl is not None else min(ttl, 300)
+        self._cache: dict[str, tuple[float | None, float]] = {}  # sym -> (price or None, ts)
+
+    def _ttl_for(self, price: float | None) -> int:
+        return self.ttl if price is not None else self.negative_ttl
 
     def get(self, symbols: list[str], exchanges: dict[str, str] | None = None) -> dict[str, dict]:
         now = time.time()
-        fresh = {s: v for s, (v, ts) in self._cache.items() if s in symbols and now - ts < self.ttl}
+        fresh = {
+            s: v for s, (v, ts) in self._cache.items()
+            if s in symbols and now - ts < self._ttl_for(v)
+        }
         need = [s for s in symbols if s not in fresh]
         if need:
             fetched = self.provider.get_quotes(need, exchanges)  # type: ignore[call-arg]
-            for s, v in fetched.items():
-                self._cache[s] = (v, now)
+            for s in need:
+                self._cache[s] = (fetched.get(s), now)
         result: dict[str, dict] = {}
         for s in symbols:
             if s in self._cache:
                 price, ts = self._cache[s]
-                result[s] = {"price": price, "as_of": ts, "stale": (now - ts) >= self.ttl}
+                result[s] = {"price": price, "as_of": ts, "stale": (now - ts) >= self._ttl_for(price)}
             else:
                 result[s] = {"price": None, "as_of": None, "stale": True}
         return result
