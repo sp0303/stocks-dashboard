@@ -190,8 +190,10 @@ function NarrativeLine({ text }) {
 // of everything else on the page since it's the one call that hits a live LLM.
 function AISummaryCard({ client, reload }) {
   const n = useAsync(() => api.holdingSummaryNarrative(client.id), [client.id, reload])
+  const [showThinking, setShowThinking] = useState(false)
   if (n.error) return null // quietly omit — the rest of the dashboard doesn't depend on this
   const lines = n.data?.narrative ? splitNarrative(n.data.narrative) : []
+  const thinking = n.data?.thinking
   if (!n.loading && !lines.length) return null
   return (
     <div className="ai-summary">
@@ -202,9 +204,19 @@ function AISummaryCard({ client, reload }) {
       {n.loading ? (
         <Loading what="summary" />
       ) : (
-        <ul>
-          {lines.map((line, i) => <NarrativeLine key={i} text={line} />)}
-        </ul>
+        <>
+          {thinking && (
+            <div className="ai-thinking">
+              <button type="button" className="ai-thinking-toggle" onClick={() => setShowThinking((v) => !v)}>
+                {showThinking ? '▾' : '▸'} Thinking
+              </button>
+              {showThinking && <div className="ai-thinking-body">{thinking}</div>}
+            </div>
+          )}
+          <ul>
+            {lines.map((line, i) => <NarrativeLine key={i} text={line} />)}
+          </ul>
+        </>
       )}
     </div>
   )
@@ -302,6 +314,12 @@ function Overview({ client, reload }) {
         <Stat label="Unrealized P&L" value={inr(d.unrealized_pnl)} tone={d.unrealized_pnl >= 0 ? 'up' : 'down'} />
         <Stat label="Open positions" value={d.open_positions} sub={`${d.total_trades} trades`} />
       </div>
+      {d.unpriced_symbols && d.unpriced_symbols.length > 0 && (
+        <div className="warn-banner">
+          No live price for {d.unpriced_symbols.join(', ')} ({inrFull(d.unpriced_invested)} invested) —
+          excluded from Market Value, Unrealized P&L, and the totals above.
+        </div>
+      )}
       {!c.loading && !c.error && c.data.largest_stock && (
         <>
           <h2>Concentration</h2>
@@ -479,7 +497,7 @@ function Holdings({ client, reload, onOpenStock }) {
         <tbody>
           {paged.map((r) => (
             <tr key={r.symbol} className="click" onClick={() => onOpenStock(r.symbol)}>
-              <td style={{ fontWeight: 600, color: 'var(--accent-ink)' }}>{r.symbol}{r.stale && <span className="stale">stale</span>}</td>
+              <td style={{ fontWeight: 600, color: 'var(--accent-ink)' }}>{r.symbol}{r.price_unavailable ? <span className="stale" title="No live price — excluded from totals">no price</span> : r.stale && <span className="stale">stale</span>}</td>
               <td className="r tnum">{r.quantity}</td>
               <td className="r tnum">{r.avg_cost}</td>
               <td className="r tnum">{r.ltp ?? '—'}</td>

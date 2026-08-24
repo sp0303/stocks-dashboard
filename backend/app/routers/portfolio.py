@@ -4,11 +4,12 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
+from starlette.concurrency import run_in_threadpool
 
 from app.models.schemas import DividendCreate, DividendUpdate, TagCreate, TagUpdate, TradeNoteUpdate, TradeTagsUpdate
 from app.services import analytics
 from app.services.engine import compute_positions
-from app.services.llm import narrate
+from app.services.llm import fallback_narrate, narrate
 from app.services.market_data import get_dividend_history
 from app.store import get_store
 
@@ -252,12 +253,19 @@ async def holding_summary(client_id: str):
 async def holding_summary_narrative(client_id: str):
     """LLM-narrated paragraph over the same rows as /holding-summary (never a
     source of numbers — narration only). Split out because it's the slow part
-    (a live Cloudflare Workers AI call); null if no token is configured or the
-    call fails, so the frontend just shows the table alone."""
+    (a live LLM call, up to a couple minutes on local Ollama); null if nothing
+    is configured or every provider fails, so the frontend just shows the table
+    alone. Run off the event loop via run_in_threadpool — narrate() does
+    blocking httpx calls, and awaiting it inline would freeze every other
+    request on this server for the entire call (single uvicorn worker)."""
     trades = await _trades_or_404(client_id)
     rows = analytics.holding_summary(trades)
-    narrative = narrate(rows) if rows else None
-    return {"data": {"narrative": narrative}}
+    narrative = thinking = None
+    if rows:
+        narrative, thinking = await run_in_threadpool(narrate, rows)
+        if not narrative:
+            narrative = fallback_narrate(rows)
+    return {"data": {"narrative": narrative, "thinking": thinking}}
 
 
 @router.get("/{client_id}/dividends")

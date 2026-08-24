@@ -32,6 +32,8 @@ def build_holdings(trades: list[dict], with_prices: bool = True) -> dict:
     today = date.today()
     holdings = []
     total_market = total_invested = total_unrealized = 0.0
+    unpriced_invested = 0.0
+    unpriced_symbols: list[str] = []
     for p in open_pos:
         meta = classify(p.symbol)
         q = quotes.get(p.symbol, {})
@@ -39,10 +41,16 @@ def build_holdings(trades: list[dict], with_prices: bool = True) -> dict:
         invested = p.invested_value
         market_value = (ltp * p.quantity) if ltp is not None else None
         unrealized = (market_value - invested) if market_value is not None else None
-        total_invested += invested
         if market_value is not None:
+            total_invested += invested
             total_market += market_value
             total_unrealized += unrealized
+        else:
+            # no resolvable price (e.g. delisted/renamed ticker) — keep this position's
+            # cost out of the headline totals so Invested/Market Value/Unrealized always
+            # describe the same subset of positions; surfaced separately instead.
+            unpriced_invested += invested
+            unpriced_symbols.append(p.symbol)
         # entry date = oldest buy lot still open (FIFO) — i.e. when this holding was first built
         entry_date = min((lot.trade_date for lot in p.open_lots), default=None)
         holding_days = None
@@ -67,6 +75,7 @@ def build_holdings(trades: list[dict], with_prices: bool = True) -> dict:
                 "asset_class": meta["asset_class"],
                 "cap": meta["cap"],
                 "stale": q.get("stale", True),
+                "price_unavailable": market_value is None,
                 "entry_date": entry_date,
                 "holding_days": holding_days,
             }
@@ -92,6 +101,8 @@ def build_holdings(trades: list[dict], with_prices: bool = True) -> dict:
             if total_invested
             else 0.0,
             "open_positions": len(holdings),
+            "unpriced_invested": round(unpriced_invested, 2),
+            "unpriced_symbols": unpriced_symbols,
         },
         "_positions": positions,
     }

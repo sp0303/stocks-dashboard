@@ -55,6 +55,11 @@ jobs:
             MONGODB_DB=recruitzaa
             QUOTE_CACHE_TTL_SECONDS=900
             CORS_ORIGINS=*
+            CF_ACCOUNT_ID=${{ secrets.CF_ACCOUNT_ID }}
+            CF_API_TOKEN=${{ secrets.CF_API_TOKEN }}
+            OLLAMA_ENABLED=true
+            OLLAMA_BASE_URL=http://127.0.0.1:11434
+            OLLAMA_MODEL=qwen3:8b
             EOF
 
             # Restart application

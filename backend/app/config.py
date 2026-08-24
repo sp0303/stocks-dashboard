@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # CORS — the React dev server / GitHub Pages origin
     cors_origins: str = "*"
 
+    # Ollama — local, free narration provider (tried before Cloudflare). Requires
+    # `ollama serve` running on the same host with the model already pulled.
+    ollama_enabled: bool = False
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen3:8b"
+
     # Cloudflare Workers AI — narration for the holding-summary insight card.
     # Leave cf_api_token empty to disable narration (structured metrics still work).
     cf_account_id: str = ""
