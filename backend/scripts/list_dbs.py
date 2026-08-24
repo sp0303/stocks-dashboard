@@ -1,6 +1,6 @@
 from pymongo import MongoClient
 
-source_uri = "mongodb+srv://mayalifeos4u_db_user:Sharat123@recruitzaa.c2p3q3c.mongodb.net/?appName=recruitzaa"
+source_uri = ""
 client = MongoClient(source_uri)
 
 print("Listing all databases in the source cluster:")
