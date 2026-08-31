@@ -61,3 +61,28 @@ def test_multiple_symbols_isolated():
     assert realized == 100.0
     b = next(p for p in positions if p.symbol == "B")
     assert b.quantity == 5
+
+
+def test_unmatched_sell_does_not_fabricate_profit():
+    # A sell with no buy leg (IPO allotment / tradebook gap) must NOT book its full
+    # proceeds as realized profit — its cost basis is unknown, so realized stays 0
+    # and the quantity/value is flagged as unmatched.
+    trades = [T("NSDL", "sell", 18, 1247.35, "2025-08-26")]
+    positions, realized = compute_positions(trades)
+    assert realized == 0.0
+    p = positions[0]
+    assert p.realized_pnl == 0.0
+    assert p.unmatched_sell_qty == 18
+    assert round(p.unmatched_sell_value, 2) == round(18 * 1247.35, 2)
+
+
+def test_partially_matched_sell_only_realizes_matched_portion():
+    # Hold 10, sell 18: 10 are matched (real P&L), 8 are unmatched (no fabricated gain).
+    trades = [T("Z", "buy", 10, 100, "2025-01-01"),
+              T("Z", "sell", 18, 150, "2025-02-01")]
+    positions, realized = compute_positions(trades)
+    assert realized == 10 * (150 - 100)  # only the 10 matched shares
+    p = positions[0]
+    assert p.quantity == 0
+    assert p.unmatched_sell_qty == 8
+    assert round(p.unmatched_sell_value, 2) == round(8 * 150, 2)

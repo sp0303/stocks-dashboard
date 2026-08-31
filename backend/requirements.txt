@@ -13,3 +13,9 @@ pytest-asyncio==0.25.2
 PyMuPDF==1.28.2
 pytesseract==0.3.13
 Pillow==12.3.0
+smartapi-python==1.5.5
+PyOTP==2.10.0
+# smartapi-python 1.5.5 has incomplete dependency metadata — pin its runtime deps
+# explicitly so they actually install (otherwise: ModuleNotFoundError at import).
+logzero==1.7.0
+websocket-client==1.9.2

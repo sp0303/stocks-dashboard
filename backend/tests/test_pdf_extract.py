@@ -34,6 +34,21 @@ from app.services.news.pdf_extract import _readability, extract_pdf, extract_pdf
 ET_PDF = "/home/sumanth/Downloads/ET.pdf"
 HAVE_ET_PDF = Path(ET_PDF).exists()
 
+
+def _have_tesseract() -> bool:
+    """OCR-dependent tests need the Tesseract binary on PATH — not just pytesseract.
+    Skip (don't fail) where it isn't installed, so the suite is green on dev boxes
+    without it while still exercising OCR on CI / the server."""
+    try:
+        import pytesseract
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:
+        return False
+
+
+HAVE_TESSERACT = _have_tesseract()
+
 _WORD = re.compile(r"[a-z0-9]+")
 
 
@@ -179,6 +194,7 @@ def test_readability_density_separates_english_from_garbled():
     assert _readability("x9 z2 qk vv") == 1.0  # too little text to judge -> no retry
 
 
+@pytest.mark.skipif(not HAVE_TESSERACT, reason="tesseract binary not installed")
 def test_upside_down_page_is_recovered_by_ocr():
     pdf = _make_rotated_image_pdf(_ROT_TEXT, angle=180)
     result = extract_pdf(pdf, ocr_fallback=True)

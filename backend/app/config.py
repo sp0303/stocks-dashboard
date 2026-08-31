@@ -24,6 +24,21 @@ class Settings(BaseSettings):
     quote_cache_ttl_seconds: int = 900  # 15 min
     yf_suffix_default: str = ".NS"       # NSE; BSE-only symbols fall back to .BO
 
+    # Angel One SmartAPI — preferred quote + historical source. Logs in programmatically
+    # via TOTP (no browser redirect), free, and includes historical candles. When all
+    # four are set, quotes/history come from Angel; otherwise the app falls back to Yahoo.
+    angel_api_key: str = ""
+    angel_client_id: str = ""
+    angel_pin: str = ""
+    angel_totp_secret: str = ""
+
+    @property
+    def angel_enabled(self) -> bool:
+        return bool(
+            self.angel_api_key.strip() and self.angel_client_id.strip()
+            and self.angel_pin.strip() and self.angel_totp_secret.strip()
+        )
+
     # CORS — the React dev server / GitHub Pages origin
     cors_origins: str = "*"
 
@@ -38,6 +53,22 @@ class Settings(BaseSettings):
     cf_account_id: str = ""
     cf_api_token: str = ""
     cf_model: str = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+
+    # Watchlist email alerts — fire when a target price is reached or an alert date
+    # arrives, emailed to the owning manager. Requires a Gmail App Password in
+    # alert_smtp_password (a normal account password will NOT work with Gmail SMTP);
+    # until that's set, alert checks run but send nothing.
+    alerts_enabled: bool = True
+    alert_email_from: str = "jacobinclu@gmail.com"
+    alert_smtp_host: str = "smtp.gmail.com"
+    alert_smtp_port: int = 587
+    alert_smtp_user: str = ""       # defaults to alert_email_from when empty
+    alert_smtp_password: str = ""   # Gmail App Password — REQUIRED to actually send
+    alert_check_interval_seconds: int = 900  # 15 min
+
+    @property
+    def alerts_ready(self) -> bool:
+        return self.alerts_enabled and bool(self.alert_smtp_password.strip())
 
     @property
     def use_mongo(self) -> bool:

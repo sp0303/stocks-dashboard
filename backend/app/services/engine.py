@@ -30,11 +30,16 @@ class Position:
     quantity: float = 0.0
     avg_cost: float = 0.0             # weighted avg cost of open lots
     invested_value: float = 0.0      # sum(open lot qty * unit_cost)
-    realized_pnl: float = 0.0        # cumulative realized for this symbol
+    realized_pnl: float = 0.0        # cumulative realized for this symbol (matched qty only)
     total_bought_qty: float = 0.0
     total_sold_qty: float = 0.0
     total_bought_value: float = 0.0  # cash out on buys (incl charges)
     total_sold_value: float = 0.0    # cash in on sells (net charges)
+    # Quantity sold with no matching buy lot (tradebook gap / IPO allotment / bonus
+    # / demat transfer-in). Its cost basis is unknown, so it is *excluded* from
+    # realized_pnl rather than booked as 100% profit; surfaced as a warning instead.
+    unmatched_sell_qty: float = 0.0
+    unmatched_sell_value: float = 0.0
     first_buy_date: str | None = None
     last_buy_date: str | None = None
     last_sell_date: str | None = None
@@ -110,12 +115,22 @@ def compute_positions(trades: Iterable[dict]) -> tuple[list[Position], float]:
                 remaining -= take
                 if lot.qty <= 1e-9:
                     dq.popleft()
-            # If selling more than held (short / data gap), match what we can.
-            p.realized_pnl += proceeds - matched_cost
-            total_realized += proceeds - matched_cost
+            # `remaining` is quantity sold beyond what we hold (short / tradebook gap).
+            # Realize P&L only on the matched quantity — booking the unmatched portion's
+            # proceeds against a zero cost basis would fabricate profit (e.g. an IPO
+            # allotment or bonus share whose buy leg isn't in the equity tradebook).
+            matched_qty = qty - remaining
+            charge_matched = charges * (matched_qty / qty) if qty else 0.0
+            matched_proceeds = price * matched_qty - charge_matched
+            realized = matched_proceeds - matched_cost
+            p.realized_pnl += realized
+            total_realized += realized
             p.total_sold_qty += qty
             p.total_sold_value += proceeds
             p.last_sell_date = date
+            if remaining > 1e-9:
+                p.unmatched_sell_qty += remaining
+                p.unmatched_sell_value += price * remaining - charges * (remaining / qty if qty else 0.0)
 
     # finalize open positions
     for symbol, p in pos.items():

@@ -3,4 +3,5 @@ __pycache__/
 *.pyc
 .env
 app/data/store.json
+app/data/angel_scrip_master.json
 uploads/

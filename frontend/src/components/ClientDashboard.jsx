@@ -14,6 +14,7 @@ const TABS = [
   { key: 'performance', icon: '📈', title: 'Performance' },
   { key: 'dividends', icon: '💰', title: 'Dividends' },
   { key: 'trades', icon: '⇅', title: 'Trades' },
+  { key: 'playbook', icon: '♟', title: 'Playbook' },
   { key: 'watchlist', icon: '★', title: 'Watchlist' },
 ]
 
@@ -29,19 +30,48 @@ function Section({ sectionKey, title, sectionRef, children }) {
   )
 }
 
+// Which side-panel sections a manager has chosen to hide, kept in localStorage.
+// A personal view preference (applies across every client this browser opens), so
+// no backend round-trip. Guarded so private mode / cleared storage just yields an
+// empty set instead of throwing.
+const HIDDEN_SECTIONS_KEY = 'dash-hidden-sections'
+function loadHiddenSections() {
+  try { return new Set(JSON.parse(localStorage.getItem(HIDDEN_SECTIONS_KEY) || '[]')) } catch { return new Set() }
+}
+function saveHiddenSections(set) {
+  try { localStorage.setItem(HIDDEN_SECTIONS_KEY, JSON.stringify([...set])) } catch { /* ignore */ }
+}
+
 export default function ClientDashboard({ client }) {
   const [tab, setTab] = useState('overview')
   const [reload, setReload] = useState(0)
   const [symbol, setSymbol] = useState(null) // drilled into a single stock
+  const [hiddenSections, setHiddenSections] = useState(loadHiddenSections)
   const sectionRefs = useRef({})
 
   if (symbol) {
     return <StockAnalysis client={client} symbol={symbol} onBack={() => setSymbol(null)} />
   }
 
+  const visibleTabs = TABS.filter((t) => !hiddenSections.has(t.key))
+  const hiddenTabs = TABS.filter((t) => hiddenSections.has(t.key))
+  const visible = (key) => !hiddenSections.has(key)
+
   function goToTab(key) {
     setTab(key)
     sectionRefs.current[key]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  function hideSection(key) {
+    if (visibleTabs.length <= 1) return // never hide the last remaining section
+    setHiddenSections((cur) => {
+      const next = new Set(cur); next.add(key); saveHiddenSections(next); return next
+    })
+    if (tab === key) setTab(visibleTabs.find((t) => t.key !== key)?.key || 'overview')
+  }
+  function showSection(key) {
+    setHiddenSections((cur) => {
+      const next = new Set(cur); next.delete(key); saveHiddenSections(next); return next
+    })
   }
 
   return (
@@ -55,35 +85,71 @@ export default function ClientDashboard({ client }) {
 
       <div className="dash-shell">
         <nav className="dash-nav">
-          {TABS.map((t) => (
-            <button key={t.key} className={tab === t.key ? 'on' : ''} onClick={() => goToTab(t.key)}>
-              <span className="navico">{t.icon}</span>{t.title}
-            </button>
+          {visibleTabs.map((t) => (
+            <div key={t.key} className={`dash-nav-item ${tab === t.key ? 'on' : ''}`}>
+              <button className={`dash-nav-link ${tab === t.key ? 'on' : ''}`} onClick={() => goToTab(t.key)}>
+                <span className="navico">{t.icon}</span>{t.title}
+              </button>
+              {visibleTabs.length > 1 && (
+                <button className="dash-nav-hide" title={`Hide ${t.title} from the sidebar`}
+                  onClick={() => hideSection(t.key)}>👁</button>
+              )}
+            </div>
           ))}
+          {hiddenTabs.length > 0 && (
+            <div className="dash-nav-hidden">
+              <div className="dash-nav-hidden-label">Hidden</div>
+              {hiddenTabs.map((t) => (
+                <button key={t.key} className="dash-nav-link dash-nav-restore" title={`Show ${t.title} again`}
+                  onClick={() => showSection(t.key)}>
+                  <span className="navico">🙈</span>{t.title}
+                </button>
+              ))}
+            </div>
+          )}
         </nav>
 
         <ScrollSpyMain sectionRefs={sectionRefs} setTab={setTab}>
-          <Section sectionKey="overview" title="Overview" sectionRef={(el) => (sectionRefs.current.overview = el)}>
-            <OverviewSection client={client} reload={reload} />
-          </Section>
-          <Section sectionKey="holdings" title="Holdings" sectionRef={(el) => (sectionRefs.current.holdings = el)}>
-            <HoldingsSection client={client} reload={reload} onOpenStock={setSymbol} />
-          </Section>
-          <Section sectionKey="allocation" title="Allocation" sectionRef={(el) => (sectionRefs.current.allocation = el)}>
-            <AllocationSection client={client} reload={reload} />
-          </Section>
-          <Section sectionKey="performance" title="Performance" sectionRef={(el) => (sectionRefs.current.performance = el)}>
-            <PerformanceSection client={client} reload={reload} />
-          </Section>
-          <Section sectionKey="dividends" title="Dividends" sectionRef={(el) => (sectionRefs.current.dividends = el)}>
-            <DividendsSection client={client} />
-          </Section>
-          <Section sectionKey="trades" title="Trades" sectionRef={(el) => (sectionRefs.current.trades = el)}>
-            <TradesSection client={client} reload={reload} onOpenStock={setSymbol} />
-          </Section>
-          <Section sectionKey="watchlist" sectionRef={(el) => (sectionRefs.current.watchlist = el)}>
-            <Watchlist scope="clients" id={client.id} title="Client watchlist" />
-          </Section>
+          {visible('overview') && (
+            <Section sectionKey="overview" title="Overview" sectionRef={(el) => (sectionRefs.current.overview = el)}>
+              <OverviewSection client={client} reload={reload} onChanged={() => setReload((n) => n + 1)} />
+            </Section>
+          )}
+          {visible('holdings') && (
+            <Section sectionKey="holdings" title="Holdings" sectionRef={(el) => (sectionRefs.current.holdings = el)}>
+              <HoldingsSection client={client} reload={reload} onOpenStock={setSymbol} />
+            </Section>
+          )}
+          {visible('allocation') && (
+            <Section sectionKey="allocation" title="Allocation" sectionRef={(el) => (sectionRefs.current.allocation = el)}>
+              <AllocationSection client={client} reload={reload} />
+            </Section>
+          )}
+          {visible('performance') && (
+            <Section sectionKey="performance" title="Performance" sectionRef={(el) => (sectionRefs.current.performance = el)}>
+              <PerformanceSection client={client} reload={reload} />
+            </Section>
+          )}
+          {visible('dividends') && (
+            <Section sectionKey="dividends" title="Dividends" sectionRef={(el) => (sectionRefs.current.dividends = el)}>
+              <DividendsSection client={client} />
+            </Section>
+          )}
+          {visible('trades') && (
+            <Section sectionKey="trades" title="Trades" sectionRef={(el) => (sectionRefs.current.trades = el)}>
+              <TradesSection client={client} reload={reload} onOpenStock={setSymbol} />
+            </Section>
+          )}
+          {visible('playbook') && (
+            <Section sectionKey="playbook" title="Playbook" sectionRef={(el) => (sectionRefs.current.playbook = el)}>
+              <PlaybookSection client={client} reload={reload} />
+            </Section>
+          )}
+          {visible('watchlist') && (
+            <Section sectionKey="watchlist" sectionRef={(el) => (sectionRefs.current.watchlist = el)}>
+              <Watchlist scope="clients" id={client.id} title="Client watchlist" />
+            </Section>
+          )}
         </ScrollSpyMain>
       </div>
     </div>
@@ -295,7 +361,88 @@ function AllocationChart({ data, height = 300, outerRadius = 110, innerRadius = 
   )
 }
 
-function Overview({ client, reload }) {
+// Inline fixer inside the unmatched-sell banner: add the acquisition cost (an
+// opening BUY) for an IPO/bonus/pre-window share so it stops being excluded.
+function OpeningTradeFixer({ client, symbols, onChanged }) {
+  const [sym, setSym] = useState(symbols[0] || '')
+  const [qty, setQty] = useState('')
+  const [price, setPrice] = useState('')
+  const [date, setDate] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+
+  async function add(e) {
+    e.preventDefault()
+    if (!sym || !qty || price === '') { setErr('Fill symbol, quantity and price'); return }
+    setBusy(true); setErr(null)
+    try {
+      await api.addManualTrade(client.id, {
+        symbol: sym, trade_type: 'buy', quantity: Number(qty), price: Number(price),
+        trade_date: date || new Date().toISOString().slice(0, 10), note: 'acquisition cost (opening buy)',
+      })
+      setQty(''); setPrice(''); setDate('')
+      onChanged?.()
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+
+  return (
+    <form className="row" onSubmit={add} style={{ gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+      <select value={sym} onChange={(e) => setSym(e.target.value)}>
+        {symbols.map((s) => <option key={s} value={s}>{s}</option>)}
+      </select>
+      <input type="number" step="any" min="0" placeholder="Qty" value={qty} style={{ width: 90 }}
+        onChange={(e) => setQty(e.target.value)} />
+      <input type="number" step="any" min="0" placeholder="Cost ₹/share" value={price} style={{ width: 120 }}
+        onChange={(e) => setPrice(e.target.value)} />
+      <input type="date" value={date} title="Acquisition date (optional)" onChange={(e) => setDate(e.target.value)} />
+      <button className="btn" disabled={busy}>Add cost</button>
+      {err && <span className="err" style={{ fontSize: 12 }}>⚠ {err}</span>}
+    </form>
+  )
+}
+
+// Lists opening/adjustment trades added by hand, with a remove control. Only renders
+// when there are any, so it stays out of the way for clean tradebooks.
+function ManualTradesPanel({ client, onChanged }) {
+  const [reload, setReload] = useState(0)
+  const m = useAsync(() => api.manualTrades(client.id), [client.id, reload])
+  const rows = m.data || []
+  if (m.loading || !rows.length) return null
+
+  async function remove(fp) {
+    await api.deleteManualTrade(client.id, fp)
+    setReload((n) => n + 1)
+    onChanged?.()
+  }
+
+  return (
+    <div className="panel" style={{ padding: 12, marginBottom: 12 }}>
+      <div className="sub" style={{ margin: '0 0 6px' }}>
+        Manual opening/adjustment trades (not from the tradebook — IPO/bonus/pre-window):
+      </div>
+      <table>
+        <thead><tr><th>Date</th><th>Symbol</th><th>Type</th><th className="r">Qty</th><th className="r">Price</th><th>Note</th><th></th></tr></thead>
+        <tbody>
+          {rows.map((t) => (
+            <tr key={t.fingerprint}>
+              <td className="sub">{t.trade_date}</td>
+              <td style={{ fontWeight: 600 }}>{t.symbol}</td>
+              <td>{t.trade_type}</td>
+              <td className="r tnum">{t.quantity}</td>
+              <td className="r tnum">{inrFull(t.price)}</td>
+              <td className="sub">{t.note}</td>
+              <td className="r">
+                <button className="btn ghost" style={{ padding: '3px 9px' }} onClick={() => remove(t.fingerprint)}>Remove</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function Overview({ client, reload, onChanged }) {
   const [basis, setBasis] = useState('current')
   const p = useAsync(() => api.portfolio(client.id), [client.id, reload])
   const c = useAsync(() => api.concentration(client.id), [client.id, reload])
@@ -320,6 +467,16 @@ function Overview({ client, reload }) {
           excluded from Market Value, Unrealized P&L, and the totals above.
         </div>
       )}
+      {d.unmatched_sell_symbols && d.unmatched_sell_symbols.length > 0 && (
+        <div className="warn-banner">
+          {d.unmatched_sell_symbols.join(', ')} {d.unmatched_sell_symbols.length > 1 ? 'were' : 'was'} sold with
+          no matching buy in the tradebook ({inrFull(d.unmatched_sell_value)} of proceeds) — likely an IPO
+          allotment, bonus, or a buy from before the tradebook window. Its cost basis is unknown, so this is
+          excluded from Realized P&amp;L rather than counted as pure profit. Add the acquisition cost below to include it.
+          <OpeningTradeFixer client={client} symbols={d.unmatched_sell_symbols} onChanged={onChanged} />
+        </div>
+      )}
+      <ManualTradesPanel client={client} onChanged={onChanged} />
       {!c.loading && !c.error && c.data.largest_stock && (
         <>
           <h2>Concentration</h2>
@@ -339,13 +496,85 @@ function Overview({ client, reload }) {
           <AllocationChart data={alloc.data} height={260} outerRadius={95} innerRadius={45} labelKey="Sector" />
         </>
       )}
-      <Playbook client={client} reload={reload} />
     </div>
   )
 }
 
-const PLAYBOOK_COLUMNS = [
+const PLAYBOOK_STOCK_COLUMNS = [
   { key: 'symbol', label: 'Stock' },
+  { key: 'trades_count', label: 'Trades', r: true },
+  { key: 'total_qty', label: 'Total Qty', r: true },
+  { key: 'avg_buy_price', label: 'Avg Buy', r: true },
+  { key: 'avg_sell_price', label: 'Avg Sell', r: true },
+  { key: 'avg_days', label: 'Avg Days', r: true },
+  { key: 'total_pnl', label: 'PNL', r: true },
+  { key: 'pnl_pct', label: 'PNL %', r: true },
+]
+
+// Round-trip (bought-then-sold) trade history, FIFO-matched on the backend,
+// collapsed one row per stock (weighted-avg buy/sell price, total P&L). Click a
+// stock to see its individual closed lots in a detail modal.
+function Playbook({ client, reload }) {
+  const [sort, setSort] = useState({ key: 'total_pnl', dir: 'desc' })
+  const [openSymbol, setOpenSymbol] = useState(null)
+  const pb = useAsync(() => api.playbookByStock(client.id), [client.id, reload])
+  const rows = pb.data || []
+
+  function toggleSort(key) {
+    setSort((cur) => (cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
+  }
+  const sorted = [...rows].sort((a, b) => {
+    const av = a[sort.key], bv = b[sort.key]
+    if (av == null && bv == null) return 0
+    if (av == null) return 1
+    if (bv == null) return -1
+    if (typeof av === 'string') return sort.dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
+    return sort.dir === 'asc' ? av - bv : bv - av
+  })
+
+  return (
+    <div>
+      <p className="sub">Closed round trips, merged stock-wise — weighted-average buy/sell price and total P&L. Click a stock for its individual lots. Click a column to sort.</p>
+      {pb.loading && <Loading what="playbook" />}
+      {pb.error && <ErrorBox error={pb.error} />}
+      {!pb.loading && !pb.error && !rows.length && (
+        <div className="empty">No closed trades yet.</div>
+      )}
+      {!pb.loading && !pb.error && rows.length > 0 && (
+        <div className="panel tbl-scroll">
+          <table>
+            <thead>
+              <tr>
+                {PLAYBOOK_STOCK_COLUMNS.map((c) => (
+                  <th key={c.key} className={c.r ? 'r click' : 'click'} onClick={() => toggleSort(c.key)}>
+                    {c.label}{sort.key === c.key ? (sort.dir === 'desc' ? ' ▾' : ' ▴') : ''}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r) => (
+                <tr key={r.symbol} className="click" onClick={() => setOpenSymbol(r.symbol)}>
+                  <td style={{ fontWeight: 600, color: 'var(--accent-ink)' }}>{r.symbol}</td>
+                  <td className="r tnum">{r.trades_count}</td>
+                  <td className="r tnum">{r.total_qty}</td>
+                  <td className="r tnum">{r.avg_buy_price}</td>
+                  <td className="r tnum">{r.avg_sell_price}</td>
+                  <td className="r tnum">{r.avg_days ?? '—'}</td>
+                  <td className="r tnum"><span className={r.total_pnl >= 0 ? 'up' : 'down'}>{inrFull(r.total_pnl)}</span></td>
+                  <td className="r tnum"><PnL value={r.pnl_pct} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {openSymbol && <PlaybookStockModal client={client} symbol={openSymbol} onClose={() => setOpenSymbol(null)} />}
+    </div>
+  )
+}
+
+const PLAYBOOK_DETAIL_COLUMNS = [
   { key: 'quantity', label: 'Qty', r: true },
   { key: 'buy_price', label: 'Buy Price', r: true },
   { key: 'buy_date', label: 'Buy Date' },
@@ -357,84 +586,51 @@ const PLAYBOOK_COLUMNS = [
   { key: 'reason', label: 'Reason for buying' },
 ]
 
-const PLAYBOOK_PAGE_SIZE = 10
-
-// Round-trip (bought-then-sold) trade history, FIFO-matched on the backend.
-// Plain 10-row pages with Prev/Next, same pattern as the Trades table below.
-function Playbook({ client, reload }) {
-  const [sort, setSort] = useState('sell_date')
-  const [order, setOrder] = useState('desc')
-  const [page, setPage] = useState(1)
-  const pb = useAsync(
-    () => api.playbook(client.id, { sort, order, page, pageSize: PLAYBOOK_PAGE_SIZE }),
-    [client.id, reload, sort, order, page]
+// Modal (reuses the drawer overlay pattern) showing every individual closed lot
+// for one stock — the rows the stock-wise table above collapsed into one line.
+function PlaybookStockModal({ client, symbol, onClose }) {
+  const d = useAsync(
+    () => api.playbook(client.id, { symbol, sort: 'sell_date', order: 'desc', pageSize: 200 }),
+    [client.id, symbol]
   )
-  const rows = pb.data?.data || []
-  const meta = pb.data?.meta || { total: 0, pages: 1 }
-
-  function toggleSort(key) {
-    if (sort === key) {
-      setOrder((o) => (o === 'desc' ? 'asc' : 'desc'))
-    } else {
-      setSort(key)
-      setOrder('desc')
-    }
-    setPage(1)
-  }
+  const rows = d.data?.data || []
 
   return (
-    <div style={{ marginTop: 24 }}>
-      <h2>Playbook</h2>
-      <p className="sub">Closed round trips — every buy matched FIFO against its sell. Click a column to sort.</p>
-      {pb.loading && <Loading what="playbook" />}
-      {pb.error && <ErrorBox error={pb.error} />}
-      {!pb.loading && !pb.error && !rows.length && (
-        <div className="empty">No closed trades yet.</div>
-      )}
-      {!pb.loading && !pb.error && rows.length > 0 && (
-        <>
-          <div className="panel tbl-scroll">
-            <table>
-              <thead>
-                <tr>
-                  {PLAYBOOK_COLUMNS.map((c) => (
-                    <th
-                      key={c.key}
-                      className={c.r ? 'r click' : 'click'}
-                      onClick={() => toggleSort(c.key)}
-                    >
-                      {c.label}{sort === c.key ? (order === 'desc' ? ' ▾' : ' ▴') : ''}
-                    </th>
+    <div className="drawer-overlay" onClick={onClose}>
+      <div className="drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="drawer-head">
+          <div style={{ fontWeight: 700, fontSize: 18 }}>{symbol}</div>
+          <button className="close" onClick={onClose} aria-label="Close">×</button>
+        </div>
+        <div className="drawer-body">
+          {d.loading && <Loading what="lots" />}
+          {d.error && <ErrorBox error={d.error} />}
+          {!d.loading && !d.error && (
+            <div className="panel tbl-scroll">
+              <table>
+                <thead>
+                  <tr>{PLAYBOOK_DETAIL_COLUMNS.map((c) => <th key={c.key} className={c.r ? 'r' : ''}>{c.label}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={i}>
+                      <td className="r tnum">{r.quantity}</td>
+                      <td className="r tnum">{r.buy_price}</td>
+                      <td>{r.buy_date}</td>
+                      <td className="r tnum">{r.sell_price}</td>
+                      <td>{r.sell_date}</td>
+                      <td className="r tnum">{r.days ?? '—'}</td>
+                      <td className="r tnum"><span className={r.pnl >= 0 ? 'up' : 'down'}>{inrFull(r.pnl)}</span></td>
+                      <td className="r tnum"><PnL value={r.pnl_pct} /></td>
+                      <td>{r.reason || '—'}</td>
+                    </tr>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r, i) => (
-                  <tr key={i}>
-                    <td style={{ fontWeight: 600, color: 'var(--accent-ink)' }}>{r.symbol}</td>
-                    <td className="r tnum">{r.quantity}</td>
-                    <td className="r tnum">{r.buy_price}</td>
-                    <td>{r.buy_date}</td>
-                    <td className="r tnum">{r.sell_price}</td>
-                    <td>{r.sell_date}</td>
-                    <td className="r tnum">{r.days ?? '—'}</td>
-                    <td className="r tnum"><span className={r.pnl >= 0 ? 'up' : 'down'}>{inrFull(r.pnl)}</span></td>
-                    <td className="r tnum"><PnL value={r.pnl_pct} /></td>
-                    <td>{r.reason || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {meta.pages > 1 && (
-            <div className="row" style={{ justifyContent: 'center', marginTop: 12, gap: 8 }}>
-              <button className="btn ghost" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>← Prev</button>
-              <span className="sub" style={{ margin: 0 }}>Page {page} of {meta.pages} · {meta.total} closed trades</span>
-              <button className="btn ghost" disabled={page >= meta.pages} onClick={() => setPage((p) => p + 1)}>Next →</button>
+                </tbody>
+              </table>
             </div>
           )}
-        </>
-      )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -599,7 +795,6 @@ const HOLDING_SUMMARY_COLUMNS = [
 ]
 
 function HoldingSummary({ client, reload }) {
-  const [page, setPage] = useState(0)
   const [sort, setSort] = useState({ key: 'return_pct', dir: 'desc' })
   const s = useAsync(() => api.holdingSummary(client.id), [client.id, reload])
   if (s.loading) return null
@@ -609,7 +804,6 @@ function HoldingSummary({ client, reload }) {
 
   const toggleSort = (key) => {
     setSort((cur) => (cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
-    setPage(0)
   }
   const sorted = [...rows].sort((a, b) => {
     const av = a[sort.key], bv = b[sort.key]
@@ -620,45 +814,35 @@ function HoldingSummary({ client, reload }) {
     return sort.dir === 'asc' ? av - bv : bv - av
   })
 
-  const pageSize = 10
-  const totalPages = Math.ceil(sorted.length / pageSize)
-  const paged = sorted.slice(page * pageSize, (page + 1) * pageSize)
   return (
-    <div className="panel tbl-scroll" style={{ padding: 16, marginTop: 16 }}>
+    <div className="panel" style={{ padding: 16, marginTop: 16 }}>
       <h2>Holding summary</h2>
-      <p className="sub">How long each position was (or is) held, and what it returned — open and closed positions, best return first. Click a column header to sort.</p>
-      <table>
-        <thead>
-          <tr>
-            {HOLDING_SUMMARY_COLUMNS.map((c) => (
-              <th key={c.key} className={c.r ? 'r' : ''} style={{ cursor: 'pointer', userSelect: 'none' }}
-                onClick={() => toggleSort(c.key)}>
-                {c.label}{sort.key === c.key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {paged.map((r, i) => (
-            <tr key={`${r.symbol}-${r.status}-${page * pageSize + i}`}>
-              <td className="mono">{r.symbol}</td>
-              <td className="sub">{r.status}</td>
-              <td className="tnum">{r.days_held ?? '—'}</td>
-              <td className="tnum">{pct(r.return_pct)}</td>
-              <td className="tnum"><span className={r.pnl >= 0 ? 'up' : 'down'}>{inrFull(r.pnl)}</span></td>
+      <p className="sub">How long each position was (or is) held, and what it returned — open and closed positions, best return first. Click a column header to sort. Scroll for more.</p>
+      <div className="hs-scroll">
+        <table>
+          <thead>
+            <tr>
+              {HOLDING_SUMMARY_COLUMNS.map((c) => (
+                <th key={c.key} className={c.r ? 'r' : ''} style={{ cursor: 'pointer', userSelect: 'none' }}
+                  onClick={() => toggleSort(c.key)}>
+                  {c.label}{sort.key === c.key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+                </th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-      {totalPages > 1 && (
-        <div className="row" style={{ justifyContent: 'center', marginTop: 12, gap: 8 }}>
-          <button className="btn ghost" disabled={page === 0}
-            onClick={() => setPage((p) => Math.max(0, p - 1))}>← Prev</button>
-          <span className="sub" style={{ margin: 0 }}>Page {page + 1} of {totalPages}</span>
-          <button className="btn ghost" disabled={page >= totalPages - 1}
-            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}>Next →</button>
-        </div>
-      )}
+          </thead>
+          <tbody>
+            {sorted.map((r, i) => (
+              <tr key={`${r.symbol}-${r.status}-${i}`}>
+                <td className="mono">{r.symbol}</td>
+                <td className="sub">{r.status}</td>
+                <td className="tnum">{r.days_held ?? '—'}</td>
+                <td className="tnum">{pct(r.return_pct)}</td>
+                <td className="tnum"><span className={r.pnl >= 0 ? 'up' : 'down'}>{inrFull(r.pnl)}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -1009,3 +1193,4 @@ const AllocationSection = React.memo(Allocation)
 const PerformanceSection = React.memo(Performance)
 const DividendsSection = React.memo(Dividends)
 const TradesSection = React.memo(Trades)
+const PlaybookSection = React.memo(Playbook)

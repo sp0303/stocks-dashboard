@@ -103,6 +103,12 @@ def build_holdings(trades: list[dict], with_prices: bool = True) -> dict:
             "open_positions": len(holdings),
             "unpriced_invested": round(unpriced_invested, 2),
             "unpriced_symbols": unpriced_symbols,
+            # sells with no matching buy in the tradebook — excluded from realized P&L
+            # (unknown cost basis) and flagged so the user can add the missing buy.
+            "unmatched_sell_symbols": [p.symbol for p in positions if p.unmatched_sell_qty > 1e-9],
+            "unmatched_sell_value": round(
+                sum(p.unmatched_sell_value for p in positions if p.unmatched_sell_qty > 1e-9), 2
+            ),
         },
         "_positions": positions,
     }
@@ -477,6 +483,45 @@ def playbook(
         r["reason"] = reason
     rows.sort(key=lambda r: (r["sell_date"], r["buy_date"]))
     return rows
+
+
+def playbook_by_stock(trades: list[dict]) -> list[dict]:
+    """Playbook rows collapsed to one row per stock — total qty, weighted-average
+    buy/sell price, aggregate P&L. Weighted (not simple) averages, since round-trip
+    lots vary in size and a simple average would misrepresent the actual entry/exit
+    cost. Detail rows for a given symbol are fetched separately (existing
+    GET /playbook?symbol=... already supports this) for the click-through modal."""
+    rows = compute_round_trips(trades)
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        groups[r["symbol"]].append(r)
+
+    out = []
+    for symbol, rs in groups.items():
+        total_qty = sum(r["quantity"] for r in rs)
+        total_buy_value = sum(r["buy_price"] * r["quantity"] for r in rs)
+        total_sell_value = sum(r["sell_price"] * r["quantity"] for r in rs)
+        total_pnl = sum(r["pnl"] for r in rs)
+        days_known = [r for r in rs if r["days"] is not None]
+        avg_days = (
+            sum(r["days"] * r["quantity"] for r in days_known) / sum(r["quantity"] for r in days_known)
+            if days_known
+            else None
+        )
+        out.append(
+            {
+                "symbol": symbol,
+                "trades_count": len(rs),
+                "total_qty": round(total_qty, 4),
+                "avg_buy_price": round(total_buy_value / total_qty, 2) if total_qty else 0,
+                "avg_sell_price": round(total_sell_value / total_qty, 2) if total_qty else 0,
+                "total_pnl": round(total_pnl, 2),
+                "pnl_pct": round(total_pnl / total_buy_value * 100, 2) if total_buy_value else 0,
+                "avg_days": round(avg_days, 1) if avg_days is not None else None,
+            }
+        )
+    out.sort(key=lambda r: r["total_pnl"], reverse=True)
+    return out
 
 
 def stock_analysis(trades: list[dict], symbol: str) -> dict | None:

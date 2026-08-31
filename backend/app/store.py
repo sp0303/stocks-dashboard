@@ -24,6 +24,80 @@ def _new_id() -> str:
     return uuid.uuid4().hex[:24]
 
 
+# Free-text / value fields on a watchlist entry that are editable after add time
+# via update_watchlist_entry. sector is a manual override of the classifier's guess
+# (None → fall back to the security master); alert_price is a target/trigger price.
+_EDITABLE_ENTRY_FIELDS = (
+    "why", "alert_date", "remarks", "risks", "added_date", "added_price", "sector", "alert_price",
+    # internal bookkeeping for the email-alert sender (not exposed on the API model):
+    # the target value / date already emailed about, so we notify each threshold once.
+    "alert_price_notified", "alert_date_notified",
+)
+
+
+def _normalize_watchlist_entries(doc: dict | None) -> list[dict]:
+    """A watchlist doc predates the entries schema (bare "symbols" list) or already
+    uses it. Either way, normalize to the full entry shape so callers never see the
+    difference. `checkpoint_date` was an earlier, never-populated stand-in for
+    `added_date` — folded in here so any of that data isn't silently dropped."""
+    if not doc:
+        return []
+    if "entries" in doc:
+        return [
+            {
+                "symbol": e["symbol"],
+                "added_date": e.get("added_date") or e.get("checkpoint_date"),
+                "added_price": e.get("added_price"),
+                "why": e.get("why") or "",
+                "alert_date": e.get("alert_date"),
+                "alert_price": e.get("alert_price"),
+                "alert_price_notified": e.get("alert_price_notified"),
+                "alert_date_notified": e.get("alert_date_notified"),
+                "sector": e.get("sector"),
+                "remarks": e.get("remarks") or "",
+                "risks": e.get("risks") or "",
+            }
+            for e in doc["entries"]
+            if isinstance(e, dict) and "symbol" in e
+        ]
+    if "symbols" in doc:
+        return [
+            {
+                "symbol": s, "added_date": None, "added_price": None, "why": "", "alert_date": None,
+                "alert_price": None, "alert_price_notified": None, "alert_date_notified": None,
+                "sector": None, "remarks": "", "risks": "",
+            }
+            for s in doc["symbols"]
+        ]
+    return []
+
+
+def _normalize_watchlist_lists(doc: dict | None) -> list[dict]:
+    """Normalize a watchlist doc to the multi-list shape: [{id, name, entries}].
+
+    Handles the historical shapes transparently:
+      * new    — doc["lists"] = [{id, name, entries:[...]}]
+      * legacy — doc["entries"] / doc["symbols"] (one unnamed list)
+    A migrated legacy list is surfaced with the stable id "default" so its identity is
+    consistent across reads even before it's rewritten in the new shape on the next edit."""
+    if not doc:
+        return []
+    if "lists" in doc:
+        out = []
+        for l in doc["lists"]:
+            if not isinstance(l, dict):
+                continue
+            out.append({
+                "id": l.get("id") or _new_id(),
+                "name": l.get("name") or "Watchlist",
+                "entries": _normalize_watchlist_entries({"entries": l.get("entries", [])}),
+            })
+        return out
+    if "entries" in doc or "symbols" in doc:
+        return [{"id": "default", "name": "Watchlist 1", "entries": _normalize_watchlist_entries(doc)}]
+    return []
+
+
 class BaseStore:
     async def init(self) -> None: ...
     async def close(self) -> None: ...
@@ -43,10 +117,32 @@ class BaseStore:
     async def update_client(self, cid: str, patch: dict) -> dict | None: ...
     async def delete_client(self, cid: str) -> bool: ...
 
-    # watchlists  (owner_type: "MANAGER" | "CLIENT")
-    async def get_watchlist(self, owner_type: str, owner_id: str) -> list[str]: ...
-    async def add_watchlist_symbol(self, owner_type: str, owner_id: str, symbol: str) -> list[str]: ...
-    async def remove_watchlist_symbol(self, owner_type: str, owner_id: str, symbol: str) -> list[str]: ...
+    # watchlists  (owner_type: "MANAGER" | "CLIENT"). Each entry is
+    # {symbol, added_date, added_price, why, alert_date, remarks, risks} —
+    # added_date/added_price are captured once at add time (added_price comes from
+    # the caller, since store.py does no network I/O); why/alert_date/remarks/risks
+    # are editable afterwards via update_watchlist_entry. why is a short one-liner
+    # shown inline in the table; remarks is a longer free-form note and risks a
+    # short risk callout, both surfaced as tabs in the stock detail drawer.
+    # A watchlist doc holds one *or more* named lists per owner:
+    #   {owner_type, owner_id, lists: [{id, name, entries:[...]}]}.
+    # get_watchlists returns the list metadata+entries; the entry ops take an optional
+    # watchlist_id (None → the owner's first/default list, so single-list callers such
+    # as clients and the alert sweep keep working unchanged).
+    async def get_watchlists(self, owner_type: str, owner_id: str) -> list[dict]: ...
+    async def list_watchlists(self, owner_type: str, owner_id: str) -> list[dict]: ...
+    async def create_watchlist(self, owner_type: str, owner_id: str, name: str) -> dict: ...
+    async def rename_watchlist(self, owner_type: str, owner_id: str, watchlist_id: str, name: str) -> dict | None: ...
+    async def delete_watchlist(self, owner_type: str, owner_id: str, watchlist_id: str) -> bool: ...
+    async def get_watchlist(self, owner_type: str, owner_id: str, watchlist_id: str | None = None) -> list[dict]: ...
+    async def add_watchlist_symbol(
+        self, owner_type: str, owner_id: str, symbol: str,
+        added_price: float | None = None, why: str | None = None, alert_date: str | None = None,
+        added_date: str | None = None, remarks: str | None = None, risks: str | None = None,
+        sector: str | None = None, alert_price: float | None = None, watchlist_id: str | None = None,
+    ) -> list[dict]: ...
+    async def update_watchlist_entry(self, owner_type: str, owner_id: str, symbol: str, patch: dict, watchlist_id: str | None = None) -> list[dict]: ...
+    async def remove_watchlist_symbol(self, owner_type: str, owner_id: str, symbol: str, watchlist_id: str | None = None) -> list[dict]: ...
 
     # uploads + trades
     async def create_upload(self, doc: dict) -> dict: ...
@@ -56,6 +152,7 @@ class BaseStore:
     async def insert_trades(self, trades: list[dict]) -> tuple[int, int]: ...
     async def list_trades(self, client_id: str) -> list[dict]: ...
     async def count_trades(self, client_id: str) -> int: ...
+    async def delete_trade(self, client_id: str, fingerprint: str) -> bool: ...
 
     # trade journal — Zerodha-Console-style tags: reusable, named, colored labels
     # defined once per client and applied to any number of trades. The rationale for
@@ -194,30 +291,132 @@ class JsonStore(BaseStore):
             None,
         )
 
-    async def get_watchlist(self, owner_type, owner_id):
-        w = self._wl(owner_type, owner_id)
-        return list(w["symbols"]) if w else []
+    def _wl_doc(self, owner_type, owner_id):
+        """Return the owner's watchlist doc in multi-list shape, migrating a legacy
+        single-list doc in place and creating an empty doc if none exists. Caller holds
+        the lock and flushes."""
+        doc = self._wl(owner_type, owner_id)
+        if not doc:
+            doc = {"owner_type": owner_type, "owner_id": owner_id, "lists": []}
+            self._db["watchlists"].append(doc)
+        if "lists" not in doc:
+            doc["lists"] = _normalize_watchlist_lists(doc)
+            doc.pop("entries", None)
+            doc.pop("symbols", None)
+        return doc
 
-    async def add_watchlist_symbol(self, owner_type, owner_id, symbol):
-        symbol = symbol.upper()
+    @staticmethod
+    def _pick_list(doc, watchlist_id, create_default=False):
+        lists = doc["lists"]
+        if watchlist_id:
+            return next((l for l in lists if l["id"] == watchlist_id), None)
+        if lists:
+            return lists[0]
+        if create_default:
+            l = {"id": "default", "name": "Watchlist 1", "entries": []}
+            lists.append(l)
+            return l
+        return None
+
+    async def get_watchlists(self, owner_type, owner_id):
+        return _normalize_watchlist_lists(self._wl(owner_type, owner_id))
+
+    async def list_watchlists(self, owner_type, owner_id):
         async with self._lock:
-            w = self._wl(owner_type, owner_id)
-            if not w:
-                w = {"owner_type": owner_type, "owner_id": owner_id, "symbols": []}
-                self._db["watchlists"].append(w)
-            if symbol not in w["symbols"]:
-                w["symbols"].append(symbol)
+            doc = self._wl_doc(owner_type, owner_id)
+            if not doc["lists"]:
+                doc["lists"].append({"id": "default", "name": "Watchlist 1", "entries": []})
             self._flush()
-            return list(w["symbols"])
+            return [{"id": l["id"], "name": l["name"], "count": len(l["entries"])} for l in doc["lists"]]
 
-    async def remove_watchlist_symbol(self, owner_type, owner_id, symbol):
+    async def create_watchlist(self, owner_type, owner_id, name):
+        async with self._lock:
+            doc = self._wl_doc(owner_type, owner_id)
+            l = {"id": _new_id(), "name": name, "entries": []}
+            doc["lists"].append(l)
+            self._flush()
+            return {"id": l["id"], "name": l["name"], "count": 0}
+
+    async def rename_watchlist(self, owner_type, owner_id, watchlist_id, name):
+        async with self._lock:
+            doc = self._wl_doc(owner_type, owner_id)
+            l = next((x for x in doc["lists"] if x["id"] == watchlist_id), None)
+            if not l:
+                return None
+            l["name"] = name
+            self._flush()
+            return {"id": l["id"], "name": l["name"], "count": len(l["entries"])}
+
+    async def delete_watchlist(self, owner_type, owner_id, watchlist_id):
+        async with self._lock:
+            doc = self._wl_doc(owner_type, owner_id)
+            before = len(doc["lists"])
+            doc["lists"] = [x for x in doc["lists"] if x["id"] != watchlist_id]
+            self._flush()
+            return len(doc["lists"]) < before
+
+    async def get_watchlist(self, owner_type, owner_id, watchlist_id=None):
+        lists = _normalize_watchlist_lists(self._wl(owner_type, owner_id))
+        if watchlist_id:
+            l = next((x for x in lists if x["id"] == watchlist_id), None)
+        else:
+            l = lists[0] if lists else None
+        return l["entries"] if l else []
+
+    async def add_watchlist_symbol(self, owner_type, owner_id, symbol, added_price=None, why=None, alert_date=None, added_date=None, remarks=None, risks=None, sector=None, alert_price=None, watchlist_id=None):
+        from datetime import date
+
         symbol = symbol.upper()
         async with self._lock:
-            w = self._wl(owner_type, owner_id)
-            if w and symbol in w["symbols"]:
-                w["symbols"].remove(symbol)
-                self._flush()
-            return list(w["symbols"]) if w else []
+            doc = self._wl_doc(owner_type, owner_id)
+            l = self._pick_list(doc, watchlist_id, create_default=True)
+            if l is None:
+                return []
+            entries = l["entries"]
+            if not any(e["symbol"] == symbol for e in entries):
+                entries.append({
+                    "symbol": symbol,
+                    "added_date": added_date or date.today().isoformat(),
+                    "added_price": added_price,
+                    "why": why or "",
+                    "alert_date": alert_date,
+                    "alert_price": alert_price,
+                    "sector": sector or None,
+                    "remarks": remarks or "",
+                    "risks": risks or "",
+                })
+            self._flush()
+            return entries
+
+    async def update_watchlist_entry(self, owner_type, owner_id, symbol, patch, watchlist_id=None):
+        symbol = symbol.upper()
+        async with self._lock:
+            if not self._wl(owner_type, owner_id):
+                return []
+            doc = self._wl_doc(owner_type, owner_id)
+            l = self._pick_list(doc, watchlist_id)
+            if l is None:
+                return []
+            for e in l["entries"]:
+                if e["symbol"] == symbol:
+                    for k in _EDITABLE_ENTRY_FIELDS:
+                        if k in patch:
+                            e[k] = patch[k]
+            self._flush()
+            return l["entries"]
+
+    async def remove_watchlist_symbol(self, owner_type, owner_id, symbol, watchlist_id=None):
+        symbol = symbol.upper()
+        async with self._lock:
+            if not self._wl(owner_type, owner_id):
+                return []
+            doc = self._wl_doc(owner_type, owner_id)
+            l = self._pick_list(doc, watchlist_id)
+            if l is None:
+                return []
+            l["entries"] = [e for e in l["entries"] if e["symbol"] != symbol]
+            self._flush()
+            return l["entries"]
 
     async def create_upload(self, doc):
         doc["id"] = doc.get("id") or _new_id()
@@ -267,6 +466,16 @@ class JsonStore(BaseStore):
 
     async def count_trades(self, client_id):
         return sum(1 for t in self._db["trades"] if t["client_id"] == client_id)
+
+    async def delete_trade(self, client_id, fingerprint):
+        async with self._lock:
+            before = len(self._db["trades"])
+            self._db["trades"] = [
+                t for t in self._db["trades"]
+                if not (t["client_id"] == client_id and t.get("fingerprint") == fingerprint)
+            ]
+            self._flush()
+            return len(self._db["trades"]) < before
 
     async def list_tags(self, client_id):
         return [t for t in self._db["tags"] if t["client_id"] == client_id]
@@ -464,48 +673,113 @@ class MongoStore(BaseStore):
         await self.db.dividends.delete_many({"client_id": cid})
         return res.deleted_count > 0
 
-    async def get_watchlist(self, owner_type, owner_id):
+    async def _find_lists(self, owner_type, owner_id):
         w = await self.db.watchlists.find_one({"owner_type": owner_type, "owner_id": owner_id})
-        if not w:
-            return []
-        if "symbols" in w:
-            return list(w["symbols"])
-        if "entries" in w:
-            return [e["symbol"] for e in w["entries"] if isinstance(e, dict) and "symbol" in e]
-        return []
+        return _normalize_watchlist_lists(w)
 
-    async def add_watchlist_symbol(self, owner_type, owner_id, symbol):
-        symbol = symbol.upper()
-        # Find if the watchlist exists and has 'entries'
-        w = await self.db.watchlists.find_one({"owner_type": owner_type, "owner_id": owner_id})
-        if w and "entries" in w:
-            # If it uses the 'entries' schema, add to entries
-            if not any(isinstance(e, dict) and e.get("symbol") == symbol for e in w["entries"]):
-                await self.db.watchlists.update_one(
-                    {"owner_type": owner_type, "owner_id": owner_id},
-                    {"$push": {"entries": {"symbol": symbol, "checkpoint_date": None}}}
-                )
-        else:
-            # Otherwise use the default 'symbols' schema
-            await self.db.watchlists.update_one(
-                {"owner_type": owner_type, "owner_id": owner_id},
-                {"$addToSet": {"symbols": symbol}},
-                upsert=True,
-            )
-        return await self.get_watchlist(owner_type, owner_id)
-
-    async def remove_watchlist_symbol(self, owner_type, owner_id, symbol):
-        symbol = symbol.upper()
+    async def _save_lists(self, owner_type, owner_id, lists):
         await self.db.watchlists.update_one(
             {"owner_type": owner_type, "owner_id": owner_id},
-            {
-                "$pull": {
-                    "symbols": symbol,
-                    "entries": {"symbol": symbol}
-                }
-            }
+            {"$set": {"owner_type": owner_type, "owner_id": owner_id, "lists": lists},
+             "$unset": {"entries": "", "symbols": ""}},
+            upsert=True,
         )
-        return await self.get_watchlist(owner_type, owner_id)
+
+    @staticmethod
+    def _pick_list(lists, watchlist_id, create_default=False):
+        if watchlist_id:
+            return next((l for l in lists if l["id"] == watchlist_id), None)
+        if lists:
+            return lists[0]
+        if create_default:
+            l = {"id": "default", "name": "Watchlist 1", "entries": []}
+            lists.append(l)
+            return l
+        return None
+
+    async def get_watchlists(self, owner_type, owner_id):
+        return await self._find_lists(owner_type, owner_id)
+
+    async def list_watchlists(self, owner_type, owner_id):
+        lists = await self._find_lists(owner_type, owner_id)
+        if not lists:
+            lists = [{"id": "default", "name": "Watchlist 1", "entries": []}]
+        await self._save_lists(owner_type, owner_id, lists)
+        return [{"id": l["id"], "name": l["name"], "count": len(l["entries"])} for l in lists]
+
+    async def create_watchlist(self, owner_type, owner_id, name):
+        lists = await self._find_lists(owner_type, owner_id)
+        l = {"id": _new_id(), "name": name, "entries": []}
+        lists.append(l)
+        await self._save_lists(owner_type, owner_id, lists)
+        return {"id": l["id"], "name": l["name"], "count": 0}
+
+    async def rename_watchlist(self, owner_type, owner_id, watchlist_id, name):
+        lists = await self._find_lists(owner_type, owner_id)
+        l = next((x for x in lists if x["id"] == watchlist_id), None)
+        if not l:
+            return None
+        l["name"] = name
+        await self._save_lists(owner_type, owner_id, lists)
+        return {"id": l["id"], "name": l["name"], "count": len(l["entries"])}
+
+    async def delete_watchlist(self, owner_type, owner_id, watchlist_id):
+        lists = await self._find_lists(owner_type, owner_id)
+        new = [x for x in lists if x["id"] != watchlist_id]
+        if len(new) == len(lists):
+            return False
+        await self._save_lists(owner_type, owner_id, new)
+        return True
+
+    async def get_watchlist(self, owner_type, owner_id, watchlist_id=None):
+        lists = await self._find_lists(owner_type, owner_id)
+        l = self._pick_list(lists, watchlist_id)
+        return l["entries"] if l else []
+
+    async def add_watchlist_symbol(self, owner_type, owner_id, symbol, added_price=None, why=None, alert_date=None, added_date=None, remarks=None, risks=None, sector=None, alert_price=None, watchlist_id=None):
+        from datetime import date
+
+        symbol = symbol.upper()
+        lists = await self._find_lists(owner_type, owner_id)
+        l = self._pick_list(lists, watchlist_id, create_default=True)
+        if not any(e["symbol"] == symbol for e in l["entries"]):
+            l["entries"].append({
+                "symbol": symbol,
+                "added_date": added_date or date.today().isoformat(),
+                "added_price": added_price,
+                "why": why or "",
+                "alert_date": alert_date,
+                "alert_price": alert_price,
+                "sector": sector or None,
+                "remarks": remarks or "",
+                "risks": risks or "",
+            })
+        await self._save_lists(owner_type, owner_id, lists)
+        return l["entries"]
+
+    async def update_watchlist_entry(self, owner_type, owner_id, symbol, patch, watchlist_id=None):
+        symbol = symbol.upper()
+        lists = await self._find_lists(owner_type, owner_id)
+        l = self._pick_list(lists, watchlist_id)
+        if l is None:
+            return []
+        for e in l["entries"]:
+            if e["symbol"] == symbol:
+                for k in _EDITABLE_ENTRY_FIELDS:
+                    if k in patch:
+                        e[k] = patch[k]
+        await self._save_lists(owner_type, owner_id, lists)
+        return l["entries"]
+
+    async def remove_watchlist_symbol(self, owner_type, owner_id, symbol, watchlist_id=None):
+        symbol = symbol.upper()
+        lists = await self._find_lists(owner_type, owner_id)
+        l = self._pick_list(lists, watchlist_id)
+        if l is None:
+            return []
+        l["entries"] = [e for e in l["entries"] if e["symbol"] != symbol]
+        await self._save_lists(owner_type, owner_id, lists)
+        return l["entries"]
 
     async def create_upload(self, doc):
         doc["id"] = doc.get("id") or _new_id()
@@ -549,6 +823,10 @@ class MongoStore(BaseStore):
 
     async def count_trades(self, client_id):
         return await self.db.trades.count_documents({"client_id": client_id})
+
+    async def delete_trade(self, client_id, fingerprint):
+        res = await self.db.trades.delete_one({"client_id": client_id, "fingerprint": fingerprint})
+        return res.deleted_count > 0
 
     async def list_tags(self, client_id):
         return [self._clean(d) async for d in self.db.tags.find({"client_id": client_id})]

@@ -1,7 +1,6 @@
 import React, { useState } from 'react'
 import { api } from '../api.js'
 import { Loading, ErrorBox, useAsync } from './common.jsx'
-import Watchlist from './Watchlist.jsx'
 import ManagerMetrics from './ManagerMetrics.jsx'
 
 export default function ManagerView({ managers, manager, setManager, onOpenClient }) {
@@ -107,8 +106,6 @@ export default function ManagerView({ managers, manager, setManager, onOpenClien
         <input placeholder="Zerodha code (optional)" value={form.client_code} onChange={(e) => setForm({ ...form, client_code: e.target.value })} />
         <button className="btn" disabled={busy || !form.name || !manager}>Add client</button>
       </form>
-
-      {manager && <div style={{ marginTop: 8 }}><Watchlist scope="managers" id={manager.id} title="Manager watchlist" /></div>}
     </div>
   )
 }

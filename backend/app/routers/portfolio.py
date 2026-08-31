@@ -6,7 +6,12 @@ from datetime import date, timedelta
 from fastapi import APIRouter, HTTPException, Query
 from starlette.concurrency import run_in_threadpool
 
-from app.models.schemas import DividendCreate, DividendUpdate, TagCreate, TagUpdate, TradeNoteUpdate, TradeTagsUpdate
+import hashlib
+import uuid
+
+from app.models.schemas import (
+    DividendCreate, DividendUpdate, ManualTradeCreate, TagCreate, TagUpdate, TradeNoteUpdate, TradeTagsUpdate,
+)
 from app.services import analytics
 from app.services.engine import compute_positions
 from app.services.llm import fallback_narrate, narrate
@@ -239,6 +244,15 @@ async def playbook(
     }
 
 
+@router.get("/{client_id}/playbook/by-stock")
+async def playbook_by_stock(client_id: str):
+    """Playbook collapsed one row per stock (weighted-avg buy/sell price, total P&L).
+    Detail lots for a symbol are fetched via GET /playbook?symbol=... for the
+    click-through modal, so this endpoint carries no pagination of its own."""
+    trades = await _trades_or_404(client_id)
+    return {"data": analytics.playbook_by_stock(trades)}
+
+
 @router.get("/{client_id}/holding-summary")
 async def holding_summary(client_id: str):
     """Per-stock 'held N days, made/lost X%' rows — fast, no LLM call. The narrative
@@ -351,6 +365,60 @@ async def dividend_suggestions(client_id: str, symbol: str | None = None):
             )
     suggestions.sort(key=lambda s: s["ex_date"], reverse=True)
     return {"data": suggestions}
+
+
+@router.get("/{client_id}/manual-trades")
+async def list_manual_trades(client_id: str):
+    """Opening/adjustment trades added by hand (source='manual') — for shares not in
+    the uploaded tradebook (IPO allotments, bonus/split, pre-window holdings)."""
+    trades = await _trades_or_404(client_id)
+    manual = [t for t in trades if t.get("source") == "manual"]
+    manual.sort(key=lambda t: (t["trade_date"], t.get("symbol", "")))
+    return {"data": manual}
+
+
+@router.post("/{client_id}/manual-trades")
+async def add_manual_trade(client_id: str, body: ManualTradeCreate):
+    store = get_store()
+    if not await store.get_client(client_id):
+        raise HTTPException(404, "client not found")
+    ttype = body.trade_type.lower()
+    if ttype not in ("buy", "sell"):
+        raise HTTPException(422, "trade_type must be 'buy' or 'sell'")
+    if body.quantity <= 0 or body.price < 0:
+        raise HTTPException(422, "quantity must be > 0 and price >= 0")
+    symbol = body.symbol.upper()
+    # Deterministic fingerprint so the same opening trade can't be double-added; the
+    # uuid keeps intentional duplicates (two real allotment lots) distinct.
+    raw = f"manual|{client_id}|{symbol}|{ttype}|{body.quantity}|{body.price}|{body.trade_date}|{uuid.uuid4().hex[:8]}"
+    trade = {
+        "client_id": client_id,
+        "symbol": symbol,
+        "trade_type": ttype,
+        "quantity": float(body.quantity),
+        "price": float(body.price),
+        "trade_date": body.trade_date,
+        "exchange": "NSE",
+        "segment": "", "series": "", "isin": "", "auction": False,
+        "charges": 0.0,
+        "order_execution_time": f"{body.trade_date}T00:00:00",
+        "trade_id": "", "order_id": "",
+        "trade_value": round(float(body.quantity) * float(body.price), 4),
+        "source": "manual",
+        "note": body.note or "",
+        "fingerprint": hashlib.sha1(raw.encode()).hexdigest(),
+    }
+    inserted, _ = await store.insert_trades([trade])
+    return {"data": {"inserted": inserted, "trade": trade}}
+
+
+@router.delete("/{client_id}/manual-trades/{fingerprint}")
+async def delete_manual_trade(client_id: str, fingerprint: str):
+    store = get_store()
+    ok = await store.delete_trade(client_id, fingerprint)
+    if not ok:
+        raise HTTPException(404, "manual trade not found")
+    return {"data": {"deleted": True}}
 
 
 @router.get("/{client_id}/stocks/{symbol}")

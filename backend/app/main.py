@@ -4,14 +4,16 @@ No authentication in Phase 1 (by request). Store backend auto-selects Mongo vs J
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import admin, clients, market, portfolio, watchlists
+from app.routers import admin, broker, clients, market, portfolio, sectors, watchlists
 from app.seed import seed_if_empty
+from app.services.alerts import run_alert_loop
 from app.store import init_store
 
 
@@ -20,7 +22,9 @@ async def lifespan(app: FastAPI):
     store = await init_store()
     await seed_if_empty(store)
     app.state.store_backend = "mongo" if settings.use_mongo else "json-file"
+    alert_task = asyncio.create_task(run_alert_loop(store))
     yield
+    alert_task.cancel()
     await store.close()
 
 
@@ -39,6 +43,8 @@ app.include_router(clients.router)
 app.include_router(portfolio.router)
 app.include_router(watchlists.router)
 app.include_router(market.router)
+app.include_router(sectors.router)
+app.include_router(broker.router)
 
 
 @app.get("/api/health")

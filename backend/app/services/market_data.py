@@ -1,8 +1,9 @@
 """Market data behind a provider interface.
 
-Only the backend talks to yfinance. Quotes are cached in-process with a TTL so dashboard
-reads don't hammer Yahoo and a brief outage degrades to a stale price, never to "no data".
-Swap YFinanceProvider for a KiteProvider later without touching callers.
+Quotes are cached in-process with a TTL so dashboard reads don't hammer the provider and
+a brief outage degrades to a stale price, never to "no data". Angel One is the primary
+provider (see AngelProvider / services.angel); Yahoo is the fallback. Providers sit behind
+MarketDataProvider so adding/swapping one never touches callers.
 """
 from __future__ import annotations
 
@@ -52,8 +53,50 @@ def _fetch_one(ticker: str) -> float | None:
     return round(float(px), 2) if px else None
 
 
+_details_cache: dict[str, tuple[dict, float]] = {}  # symbol -> (details, ts)
+
+
 def get_quote_details(symbols: list[str], exchanges: dict[str, str] | None = None) -> dict[str, dict]:
-    """For the watchlist: price + previous close + day change %."""
+    """Price + previous close + day change %, per symbol — per-symbol TTL cached (same
+    window as get_quotes). This is what the watchlist and alert sweep call, so caching
+    here is what keeps repeated watchlist loads during market hours from re-hitting the
+    provider on every request. Only successful lookups are cached."""
+    now = time.time()
+    ttl = settings.quote_cache_ttl_seconds
+    out: dict[str, dict] = {}
+    need: list[str] = []
+    for s in symbols:
+        hit = _details_cache.get(s)
+        if hit and now - hit[1] < ttl:
+            out[s] = hit[0]
+        else:
+            need.append(s)
+    if need:
+        fetched = _fetch_quote_details(need, exchanges)
+        for s in need:
+            if s in fetched:
+                _details_cache[s] = (fetched[s], now)
+                out[s] = fetched[s]
+    return out
+
+
+def _fetch_quote_details(symbols: list[str], exchanges: dict[str, str] | None = None) -> dict[str, dict]:
+    """Angel One (exact NSE/BSE prices) first when configured; any symbol Angel can't
+    price falls back to Yahoo, so the watchlist/detail views degrade rather than blank."""
+    from app.services import angel
+
+    exchanges = exchanges or {}
+    out: dict[str, dict] = {}
+    if angel.is_enabled():
+        out.update(angel.quote_details(symbols, exchanges))
+    missing = [s for s in symbols if s not in out]
+    if missing:
+        out.update(_yf_quote_details(missing, exchanges))
+    return out
+
+
+def _yf_quote_details(symbols: list[str], exchanges: dict[str, str] | None = None) -> dict[str, dict]:
+    """Yahoo-Finance fallback for get_quote_details."""
     from concurrent.futures import ThreadPoolExecutor
 
     exchanges = exchanges or {}
@@ -68,6 +111,9 @@ def get_quote_details(symbols: list[str], exchanges: dict[str, str] | None = Non
             return sym, {"price": None, "prev_close": None, "change": None, "change_pct": None}
         price = meta.get("regularMarketPrice")
         prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+        volume = meta.get("regularMarketVolume")
+        day_high = meta.get("regularMarketDayHigh")
+        day_low = meta.get("regularMarketDayLow")
         change = round(price - prev, 2) if (price is not None and prev is not None) else None
         change_pct = round(change / prev * 100, 2) if (change is not None and prev) else None
         return sym, {
@@ -75,6 +121,9 @@ def get_quote_details(symbols: list[str], exchanges: dict[str, str] | None = Non
             "prev_close": round(prev, 2) if prev is not None else None,
             "change": change,
             "change_pct": change_pct,
+            "volume": volume,
+            "day_high": round(day_high, 2) if day_high is not None else None,
+            "day_low": round(day_low, 2) if day_low is not None else None,
         }
 
     out: dict[str, dict] = {}
@@ -86,10 +135,44 @@ def get_quote_details(symbols: list[str], exchanges: dict[str, str] | None = Non
     return out
 
 
+def _history_stats(points: list[dict]) -> dict:
+    if not points:
+        return {}
+    closes = [p["close"] for p in points]
+    return {
+        "period_high": max(closes),
+        "period_low": min(closes),
+        "start_close": points[0]["close"],
+        "end_close": points[-1]["close"],
+        "change_pct": round((points[-1]["close"] - points[0]["close"]) / points[0]["close"] * 100, 2)
+        if points[0]["close"] else None,
+    }
+
+
+_history_cache: dict[tuple, tuple[dict, float]] = {}  # (sym,from,interval,exch) -> (result, ts)
+_HISTORY_TTL = max(settings.quote_cache_ttl_seconds, 1800)  # ≥30 min
+
+
 def get_history(symbol: str, from_date: str | None = None, interval: str = "1d",
                 exchange: str = "NSE") -> dict:
+    """Cached wrapper — daily candles change at most once/day, so a 30-min TTL keeps
+    repeated chart views and back-date lookups from re-hitting the provider (protects
+    Angel's per-minute/hour quota). Only non-empty results are cached."""
+    key = (symbol.upper(), from_date, interval, exchange)
+    hit = _history_cache.get(key)
+    if hit and time.time() - hit[1] < _HISTORY_TTL:
+        return hit[0]
+    result = _get_history(symbol, from_date, interval, exchange)
+    if result.get("points"):
+        _history_cache[key] = (result, time.time())
+    return result
+
+
+def _get_history(symbol: str, from_date: str | None = None, interval: str = "1d",
+                 exchange: str = "NSE") -> dict:
     """Daily (or 1wk/1mo) OHLC-close history from `from_date` to now.
 
+    Angel One (free candles) is tried first when configured; Yahoo is the fallback.
     Yahoo caps intraday intervals (1m=7d, 5m/15m=60d, 1h=730d) but daily/weekly/monthly
     reach back years, so `1d` is safe for any from-date. Returns {points:[{date,close}], ...}.
     """
@@ -100,6 +183,14 @@ def get_history(symbol: str, from_date: str | None = None, interval: str = "1d",
 
     if interval not in ("1d", "1wk", "1mo"):
         interval = "1d"
+
+    from app.services import angel
+    if angel.is_enabled():
+        pts = angel.get_history(symbol, from_date, interval, exchange)
+        if pts:
+            return {"symbol": symbol, "interval": interval, "from": from_date,
+                    "points": pts, "stats": _history_stats(pts)}
+
     try:
         p1 = int(datetime.strptime(from_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()) if from_date else int(time.time()) - 365 * 86400
     except ValueError:
@@ -133,18 +224,8 @@ def get_history(symbol: str, from_date: str | None = None, interval: str = "1d",
          "close": round(float(c), 2)}
         for t, c in zip(ts, closes) if c is not None
     ]
-    highs = [p["close"] for p in points]
-    stats = {}
-    if points:
-        stats = {
-            "period_high": max(highs),
-            "period_low": min(highs),
-            "start_close": points[0]["close"],
-            "end_close": points[-1]["close"],
-            "change_pct": round((points[-1]["close"] - points[0]["close"]) / points[0]["close"] * 100, 2)
-            if points[0]["close"] else None,
-        }
-    return {"symbol": symbol, "interval": interval, "from": from_date, "points": points, "stats": stats}
+    return {"symbol": symbol, "interval": interval, "from": from_date,
+            "points": points, "stats": _history_stats(points)}
 
 
 def get_dividend_history(symbol: str, exchange: str = "NSE", from_date: str | None = None) -> list[dict]:
@@ -220,6 +301,37 @@ class YFinanceProvider(MarketDataProvider):
         return out
 
 
+class AngelProvider(MarketDataProvider):
+    """Angel One SmartAPI quotes — free, programmatic login, exact NSE/BSE prices."""
+
+    def get_quotes(self, symbols: list[str], exchanges: dict[str, str] | None = None) -> dict[str, float]:
+        from app.services import angel
+
+        if not symbols or not angel.is_enabled():
+            return {}
+        return angel.get_quotes(symbols, exchanges or {})
+
+
+class CompositeProvider(MarketDataProvider):
+    """Try each provider in priority order (Angel, then Yahoo), asking each only for the
+    symbols the previous ones couldn't price. Switching brokers never loses coverage for
+    an odd symbol — Yahoo remains the last-resort backstop."""
+
+    def __init__(self, *providers: MarketDataProvider):
+        self.providers = providers
+
+    def get_quotes(self, symbols: list[str], exchanges: dict[str, str] | None = None) -> dict[str, float]:
+        out: dict[str, float] = {}
+        remaining = list(symbols)
+        for p in self.providers:
+            if not remaining:
+                break
+            got = p.get_quotes(remaining, exchanges)  # type: ignore[call-arg]
+            out.update(got)
+            remaining = [s for s in remaining if s not in out]
+        return out
+
+
 class QuoteCache:
     """Caches both hits and misses.
 
@@ -262,8 +374,97 @@ class QuoteCache:
         return result
 
 
-_cache = QuoteCache(YFinanceProvider(), settings.quote_cache_ttl_seconds)
+# Angel One first (free, exact NSE/BSE), Yahoo as the final backstop.
+_cache = QuoteCache(
+    CompositeProvider(AngelProvider(), YFinanceProvider()),
+    settings.quote_cache_ttl_seconds,
+)
 
 
 def get_quotes(symbols: list[str], exchanges: dict[str, str] | None = None) -> dict[str, dict]:
     return _cache.get(symbols, exchanges)
+
+
+def _pct(a: float | None, b: float | None) -> float | None:
+    """% change from a to b."""
+    if a is None or b is None or a == 0:
+        return None
+    return round((b - a) / a * 100, 2)
+
+
+def _closest_on_or_before(points: list[dict], target_date: str) -> dict | None:
+    """Last point with date <= target_date (exchanges are closed on weekends/holidays,
+    so 'N days ago' rarely lands on a trading day exactly)."""
+    candidates = [p for p in points if p["date"] <= target_date]
+    return candidates[-1] if candidates else None
+
+
+def _price_matrix_one(symbol: str, exchange: str) -> dict:
+    """1D/1W/1M/1Y % change + % off the 52-week high, all derived from the same
+    daily-close history used for the watchlist/stock-detail charts — no separate feed."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    hist = get_history(symbol, from_date=(now - timedelta(days=380)).strftime("%Y-%m-%d"),
+                        interval="1d", exchange=exchange)
+    points = hist.get("points", [])
+    if not points:
+        return {"price": None, "d1": None, "w1": None, "m1": None, "y1": None, "from_52w_high": None}
+
+    latest = points[-1]
+    prev = points[-2] if len(points) > 1 else None
+    w1_ref = _closest_on_or_before(points[:-1], (now - timedelta(days=7)).strftime("%Y-%m-%d"))
+    m1_ref = _closest_on_or_before(points[:-1], (now - timedelta(days=30)).strftime("%Y-%m-%d"))
+    y1_ref = _closest_on_or_before(points[:-1], (now - timedelta(days=365)).strftime("%Y-%m-%d"))
+
+    window_52w = [p["close"] for p in points if p["date"] >= (now - timedelta(days=365)).strftime("%Y-%m-%d")]
+    high_52w = max(window_52w) if window_52w else None
+
+    return {
+        "price": latest["close"],
+        "d1": _pct(prev["close"], latest["close"]) if prev else None,
+        "w1": _pct(w1_ref["close"], latest["close"]) if w1_ref else None,
+        "m1": _pct(m1_ref["close"], latest["close"]) if m1_ref else None,
+        # a name listed < 1 year ago has no real 1Y reference — leave it null rather
+        # than compare against its IPO-week price and imply a misleading return
+        "y1": _pct(y1_ref["close"], latest["close"]) if (y1_ref and y1_ref["date"] <= (now - timedelta(days=300)).strftime("%Y-%m-%d")) else None,
+        "from_52w_high": _pct(high_52w, latest["close"]) if high_52w else None,
+    }
+
+
+class _TTLCache:
+    def __init__(self, ttl: int):
+        self.ttl = ttl
+        self._cache: dict[str, tuple[dict, float]] = {}
+
+    def get_many(self, keys: list[str], compute: dict[str, "callable"]) -> dict[str, dict]:
+        now = time.time()
+        out: dict[str, dict] = {}
+        need: list[str] = []
+        for k in keys:
+            hit = self._cache.get(k)
+            if hit and now - hit[1] < self.ttl:
+                out[k] = hit[0]
+            else:
+                need.append(k)
+        if need:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=12) as ex:
+                results = list(ex.map(lambda k: (k, compute[k]()), need))
+            for k, v in results:
+                self._cache[k] = (v, now)
+                out[k] = v
+        return out
+
+
+_price_matrix_cache = _TTLCache(ttl=max(settings.quote_cache_ttl_seconds, 1800))
+
+
+def get_price_matrix(symbols: list[str], exchanges: dict[str, str] | None = None) -> dict[str, dict]:
+    """1D/1W/1M/1Y momentum + distance from 52-week high, per symbol. Cached longer than
+    live quotes since it's a heavier computation (a full year of daily candles per symbol)
+    and doesn't need to be second-fresh."""
+    exchanges = exchanges or {}
+    compute = {s: (lambda sym=s: _price_matrix_one(sym, exchanges.get(sym, "NSE"))) for s in symbols}
+    return _price_matrix_cache.get_many(symbols, compute)

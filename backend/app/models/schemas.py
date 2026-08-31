@@ -58,6 +58,19 @@ class TradeNoteUpdate(BaseModel):
     note: str
 
 
+class ManualTradeCreate(BaseModel):
+    """An opening/adjustment trade for shares not in the uploaded tradebook — IPO
+    allotments, bonus/split shares, or holdings bought before the tradebook window.
+    Same shape as a parsed trade so the FIFO engine consumes it identically; flagged
+    source='manual' so it's listable/removable separately from imported rows."""
+    symbol: str
+    trade_type: str          # 'buy' | 'sell'
+    quantity: float
+    price: float
+    trade_date: str          # YYYY-MM-DD
+    note: str | None = None
+
+
 class DividendCreate(BaseModel):
     symbol: str
     ex_date: str

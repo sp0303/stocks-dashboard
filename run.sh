@@ -7,10 +7,11 @@ echo "▶ Backend  : http://127.0.0.1:8010  (docs at /docs)"
 echo "▶ Frontend : http://127.0.0.1:5180"
 echo
 
-# Backend (stocks venv)
+# Backend (stocks venv — Scripts on Windows, bin elsewhere)
 (
   cd "$ROOT/backend"
-  ./stocks/bin/uvicorn app.main:app --host 127.0.0.1 --port 8010 --reload
+  if [ -x "./stocks/Scripts/uvicorn.exe" ]; then UV="./stocks/Scripts/uvicorn.exe"; else UV="./stocks/bin/uvicorn"; fi
+  "$UV" app.main:app --host 127.0.0.1 --port 8010 --reload
 ) &
 BACK=$!
 
