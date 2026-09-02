@@ -80,6 +80,24 @@ def _rate_limited(msg: str) -> bool:
     return "access rate" in m or "too many" in m or "ab1004" in m
 
 
+def _is_auth_error(resp) -> bool:
+    """AG8001/AG8002 'Invalid Token' — the session's auth token was rejected: it
+    expired, or (commonly) the same Angel login was used by another process, which
+    invalidates this one's token. Signals that we should re-authenticate."""
+    if not isinstance(resp, dict):
+        return False
+    code = str(resp.get("errorCode") or "").upper()
+    msg = str(resp.get("message") or "").lower()
+    return code in ("AG8001", "AG8002", "AG8003") or "invalid token" in msg or "invalid session" in msg
+
+
+def _invalidate_session() -> None:
+    """Drop the cached session so the next _ensure_session() logs in fresh."""
+    global _smart, _session_ts
+    with _lock:
+        _smart, _session_ts = None, 0.0
+
+
 def _call(fn, params, limiter: _RateLimiter, what: str, retries: int = 3):
     """Invoke an Angel API method through the rate-limit gate. Returns None when the
     minute/hour budget is exhausted (caller falls back to Yahoo) or all retries fail;
@@ -227,6 +245,14 @@ def _market_data(mode: str, symbols: list[str], exchanges: dict[str, str]) -> di
         by_exchange[ex].append(tok)
         tok_to_sym[(ex, tok)] = s
 
+    def _fetch(batch, ex):
+        try:
+            return _call(lambda p: smart.getMarketData(p[0], p[1]), (mode, {ex: batch}),
+                         _quote_limiter, "getMarketData")
+        except Exception as exc:
+            log.warning("angel getMarketData error: %s", exc)
+            return None
+
     out: dict[str, dict] = {}
     # batch across a flat list but keep exchange grouping per request
     for ex, toks in by_exchange.items():
@@ -234,12 +260,18 @@ def _market_data(mode: str, symbols: list[str], exchanges: dict[str, str]) -> di
             batch = toks[i : i + 50]
             if not batch:
                 continue
-            try:
-                resp = _call(lambda p: smart.getMarketData(p[0], p[1]), (mode, {ex: batch}),
-                             _quote_limiter, "getMarketData")
-            except Exception as exc:
-                log.warning("angel getMarketData error: %s", exc)
-                continue
+            resp = _fetch(batch, ex)
+            # self-heal once: an expired/invalidated token re-authenticates and retries.
+            # Covers the daily token reset and a token invalidated by a login elsewhere.
+            if _is_auth_error(resp):
+                log.warning("angel getMarketData: %s — re-authenticating and retrying", resp.get("message"))
+                _invalidate_session()
+                try:
+                    smart = _ensure_session()
+                except Exception as exc:
+                    log.warning("angel re-auth failed: %s", exc)
+                    continue
+                resp = _fetch(batch, ex)
             if not resp:  # over budget or failed — leave these for the fallback
                 continue
             if not resp.get("status"):
@@ -321,6 +353,11 @@ def get_history(symbol: str, from_date: str | None = None, interval: str = "1d",
     try:
         smart = _ensure_session()
         resp = _call(smart.getCandleData, params, _candle_limiter, "getCandleData")
+        # self-heal once on an expired/invalidated token (see _market_data)
+        if _is_auth_error(resp):
+            log.warning("angel getCandleData: %s — re-authenticating and retrying", resp.get("message"))
+            _invalidate_session()
+            resp = _call(_ensure_session().getCandleData, params, _candle_limiter, "getCandleData")
     except Exception as exc:
         log.warning("angel getCandleData error for %s: %s", symbol, exc)
         return None
