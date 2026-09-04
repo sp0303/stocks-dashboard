@@ -203,7 +203,7 @@ class JsonStore(BaseStore):
         self._db = {
             "managers": [], "clients": [], "uploads": [], "trades": [], "watchlists": [],
             "tags": [], "trade_tags": [], "dividends": [], "benchmark_prices": {},
-            "corporate_actions": [],
+            "corporate_actions": [], "classifications": {},
         }
 
     async def init(self) -> None:
@@ -214,6 +214,11 @@ class JsonStore(BaseStore):
                       "trade_tags", "dividends", "corporate_actions"):
                 self._db.setdefault(k, [])
             self._db.setdefault("benchmark_prices", {})
+            self._db.setdefault("classifications", {})
+
+        # Initialize classification cache with persisted data
+        from app.services import securities
+        securities.init_cache(self._db.get("classifications", {}))
 
     def _flush(self) -> None:
         tmp = self.path.with_suffix(".tmp")
@@ -470,8 +475,15 @@ class JsonStore(BaseStore):
                 self._db["trades"].append(t)
                 existing.add(key)
                 inserted += 1
+            # Persist any new classifications from auto-lookup
+            self._persist_classifications()
             self._flush()
         return inserted, dupes
+
+    def _persist_classifications(self):
+        """Persist the in-memory classification cache back to store."""
+        from app.services import securities
+        self._db["classifications"] = securities.get_cache()
 
     async def list_trades(self, client_id):
         return [t for t in self._db["trades"] if t["client_id"] == client_id]
