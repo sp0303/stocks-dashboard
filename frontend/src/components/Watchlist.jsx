@@ -243,7 +243,7 @@ function WatchlistTabs({ lists, activeId, onSelect, onCreate, onRename, onDelete
                     onClick={(e) => { e.stopPropagation(); startRename(l) }}>✎</span>
                   {lists.length > 1 && (
                     <span className="wl-tab-act" title="Delete this watchlist"
-                      onClick={(e) => { e.stopPropagation(); if (confirm(`Delete watchlist “${l.name}”? Its symbols will be removed.`)) onDelete(l.id) }}>🗑</span>
+                      onClick={(e) => { e.stopPropagation(); if (confirm(`Delete watchlist "${l.name}"? Its symbols will be removed.`)) onDelete(l.id) }}>🗑</span>
                   )}
                 </>
               )}
@@ -328,32 +328,32 @@ function WatchlistRow({ row: r, onOpen, onRemove, onUpdate }) {
   const extraSector = sectorValue && !SECTORS.includes(sectorValue) ? sectorValue : null
 
   return (
-    <tr className=”click” onClick={onOpen} style={isUnclassified ? { backgroundColor: 'var(--bg-elevated)' } : {}}>
+    <tr className="click" onClick={onOpen} style={isUnclassified ? { backgroundColor: 'var(--bg-elevated)' } : {}}>
       <td style={{ fontWeight: 600, color: 'var(--accent-ink)' }}>
         {r.symbol}
-        {r.alert_hit && <span className=”up” style={{ marginLeft: 6 }} title=”Price reached target”>●</span>}
+        {r.alert_hit && <span className="up" style={{ marginLeft: 6 }} title="Price reached target">●</span>}
         {isUnclassified && <span style={{ marginLeft: 6, color: 'var(--down)', fontSize: 12 }}>⚠</span>}
       </td>
-      <td className=”r tnum”>{r.price ?? '—'}</td>
-      <td className=”r tnum”>
+      <td className="r tnum">{r.price ?? '—'}</td>
+      <td className="r tnum">
         {r.change_pct === null || r.change_pct === undefined ? '—' : (
           <span className={r.change_pct >= 0 ? 'up' : 'down'}>
             {r.change_pct >= 0 ? '+' : ''}{r.change_pct}% ({r.change >= 0 ? '+' : ''}{r.change})
           </span>
         )}
       </td>
-      <td className=”r tnum” title={r.added_price != null ? `Added @ ${inrFull(r.added_price)} on ${r.added_date || '—'}` : ''}>
+      <td className="r tnum" title={r.added_price != null ? `Added @ ${inrFull(r.added_price)} on ${r.added_date || '—'}` : ''}>
         {r.diff === null || r.diff === undefined ? '—' : (
           <span className={r.diff >= 0 ? 'up' : 'down'}>{pct(r.diff_pct)}</span>
         )}
       </td>
       <td onClick={(e) => e.stopPropagation()}>
-        <textarea className=”journal-cell journal-cell-multiline” placeholder=”Why watching…” value={why} rows={2}
+        <textarea className="journal-cell journal-cell-multiline" placeholder="Why watching…" value={why} rows={2}
           onChange={(e) => setWhy(e.target.value)}
           onBlur={() => { if (why !== (r.why || '')) onUpdate({ why }) }} />
       </td>
       <td onClick={(e) => e.stopPropagation()}>
-        <select className=”journal-cell”
+        <select className="journal-cell"
           style={{
             minWidth: 150,
             borderColor: isUnclassified ? '#ff9800' : undefined,
@@ -363,16 +363,16 @@ function WatchlistRow({ row: r, onOpen, onRemove, onUpdate }) {
           title={isUnclassified ? 'This stock needs classification — pick a sector' : 'Override sector'}
           onChange={(e) => changeSector(e.target.value)}>
           {isUnclassified ? (
-            <option value=”” style={{ color: '#ff9800' }}>⚠ Pick a sector</option>
+            <option value="" style={{ color: '#ff9800' }}>⚠ Pick a sector</option>
           ) : (
-            <option value=””>{`Auto · ${r.auto_sector}`}</option>
+            <option value="">{`Auto · ${r.auto_sector}`}</option>
           )}
           {SECTORS.map((s) => <option key={s} value={s}>{s}</option>)}
           {extraSector && <option value={extraSector}>{extraSector}</option>}
         </select>
       </td>
-      <td className=”r”>
-        <button className=”btn ghost” style={{ padding: '4px 10px' }}
+      <td className="r">
+        <button className="btn ghost" style={{ padding: '4px 10px' }}
           onClick={(e) => { e.stopPropagation(); onRemove() }}>Remove</button>
       </td>
     </tr>
