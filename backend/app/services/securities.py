@@ -72,6 +72,7 @@ _LARGE_MID = {
     "JSL": ("Metals & Mining", "Mid Cap"),
     "PAYTM": ("Financial Services", "Mid Cap"),
     "JAYNECOIND": ("Metals & Mining", "Small Cap"),
+    "CSBBANK": ("Financial Services", "Mid Cap"),
 }
 
 # Non-equity asset classes
