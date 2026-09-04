@@ -123,11 +123,21 @@ def portfolio_summary(trades: list[dict], actions: list[dict] | None = None) -> 
     t = data["totals"]
     buys = sum(1 for x in trades if x["trade_type"] == "buy")
     sells = len(trades) - buys
+
+    # Calculate dates and initial capital
+    first_date = min((t["trade_date"] for t in trades), default=None) if trades else None
+    last_date = max((t["trade_date"] for t in trades), default=None) if trades else None
+    buy_trades = [t for t in trades if t["trade_type"] == "buy"]
+    initial_capital = sum(t["trade_value"] for t in buy_trades) if buy_trades else 0
+
     return {
         **t,
         "total_trades": len(trades),
         "buy_trades": buys,
         "sell_trades": sells,
+        "first_trade_date": first_date,
+        "last_trade_date": last_date,
+        "initial_capital": round(initial_capital, 2),
     }
 
 

@@ -485,12 +485,42 @@ function Overview({ client, reload, onChanged }) {
   if (p.error) return <ErrorBox error={p.error} />
   const d = p.data
   if (!d.total_trades) return <div className="empty">No trades yet. Upload a tradebook above to see the portfolio.</div>
+
+  // Calculate holding period
+  const getHoldingPeriod = () => {
+    if (!d.first_trade_date || !d.last_trade_date) return ''
+    const start = new Date(d.first_trade_date)
+    const end = new Date(d.last_trade_date)
+    let years = 0, months = 0, days = 0
+
+    days = end.getDate() - start.getDate()
+    if (days < 0) {
+      months--
+      const prevMonth = new Date(end.getFullYear(), end.getMonth(), 0)
+      days += prevMonth.getDate()
+    }
+
+    months += end.getMonth() - start.getMonth()
+    if (months < 0) {
+      years--
+      months += 12
+    }
+
+    years += end.getFullYear() - start.getFullYear()
+
+    const parts = []
+    if (years > 0) parts.push(`${years}y`)
+    if (months > 0) parts.push(`${months}m`)
+    if (days > 0) parts.push(`${days}d`)
+    return parts.join(' ') || '0d'
+  }
+
   return (
     <div>
       <div className="cards">
         <Stat label="Market Value" value={inr(d.market_value)} sub={inrFull(d.market_value)} />
-        <Stat label="Invested" value={inr(d.invested_value)} sub={inrFull(d.invested_value)} />
-        <Stat label="Total P&L" value={inr(d.total_pnl)} tone={d.total_pnl >= 0 ? 'up' : 'down'} sub={pct(d.return_pct) + ' return'} />
+        <Stat label="Deployed Capital" value={inr(d.initial_capital)} sub={inrFull(d.initial_capital)} />
+        <Stat label="Total P&L" value={inr(d.total_pnl)} tone={d.total_pnl >= 0 ? 'up' : 'down'} sub={`${pct(d.return_pct)} over ${getHoldingPeriod()}`} />
         <Stat label="Realized P&L" value={inr(d.realized_pnl)} tone={d.realized_pnl >= 0 ? 'up' : 'down'} />
         <Stat label="Unrealized P&L" value={inr(d.unrealized_pnl)} tone={d.unrealized_pnl >= 0 ? 'up' : 'down'} />
         <Stat label="Open positions" value={d.open_positions} sub={`${d.total_trades} trades`} />
@@ -527,7 +557,12 @@ function Overview({ client, reload, onChanged }) {
             <h2 style={{ margin: 0 }}>Sector allocation</h2>
             <BasisToggle basis={basis} setBasis={setBasis} />
           </div>
-          <AllocationChart data={alloc.data} height={260} outerRadius={95} innerRadius={45} labelKey="Sector" />
+          <AllocationChart data={alloc.data.filter(a => a.key !== 'Unclassified')} height={260} outerRadius={95} innerRadius={45} labelKey="Sector" />
+          {alloc.data.some(a => a.key === 'Unclassified') && (
+            <div className="warn-banner" style={{ marginTop: 12 }}>
+              ⚠ {inrFull(alloc.data.find(a => a.key === 'Unclassified')?.value)} in unclassified sectors — update your watchlist sector assignments
+            </div>
+          )}
         </>
       )}
     </div>
