@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date
+from enum import Enum
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -22,6 +23,28 @@ from app.store import get_store
 router = APIRouter(prefix="/api", tags=["watchlists"])
 
 
+class SectorEnum(str, Enum):
+    """Standard sectors for watchlist classification."""
+    FINANCIAL_SERVICES = "Financial Services"
+    INFORMATION_TECHNOLOGY = "Information Technology"
+    HEALTHCARE_PHARMA = "Healthcare / Pharma"
+    FMCG = "FMCG"
+    AUTOMOBILE = "Automobile"
+    CAPITAL_GOODS = "Capital Goods"
+    METALS_MINING = "Metals & Mining"
+    ENERGY_OIL_GAS = "Energy / Oil & Gas"
+    CONSUMER_DURABLES = "Consumer Durables"
+    CONSUMER_SERVICES = "Consumer Services"
+    CHEMICALS = "Chemicals"
+    CEMENT_BUILDING_MATERIALS = "Cement & Building Materials"
+    POWER_UTILITIES = "Power / Utilities"
+    REALTY = "Realty"
+    INFRASTRUCTURE = "Infrastructure"
+    TELECOMMUNICATION = "Telecommunication"
+    MEDIA = "Media"
+    INDEX_ETF = "Index / ETF"
+
+
 class WatchlistAdd(BaseModel):
     symbol: str
     why: str | None = None
@@ -30,7 +53,7 @@ class WatchlistAdd(BaseModel):
     added_date: str | None = None  # defaults to today if omitted
     remarks: str | None = None
     risks: str | None = None
-    sector: str | None = None  # manual override of the classifier's guess
+    sector: SectorEnum | None = None  # manual override of the classifier's guess
 
 
 class WatchlistEntryUpdate(BaseModel):
@@ -41,7 +64,7 @@ class WatchlistEntryUpdate(BaseModel):
     added_price: float | None = None
     remarks: str | None = None
     risks: str | None = None
-    sector: str | None = None
+    sector: SectorEnum | None = None
 
 
 class WatchlistMeta(BaseModel):

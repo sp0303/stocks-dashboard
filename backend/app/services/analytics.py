@@ -70,7 +70,7 @@ def build_holdings(trades: list[dict], with_prices: bool = True,
                 "market_value": round(market_value, 2) if market_value is not None else None,
                 "unrealized_pnl": round(unrealized, 2) if unrealized is not None else None,
                 "unrealized_pct": round(unrealized / invested * 100, 2)
-                if unrealized is not None and invested
+                if unrealized is not None and invested != 0
                 else None,
                 "sector": meta["sector"],
                 "asset_class": meta["asset_class"],
@@ -88,7 +88,7 @@ def build_holdings(trades: list[dict], with_prices: bool = True,
     for h in holdings:
         h["portfolio_pct"] = (
             round(h["market_value"] / total_market * 100, 2)
-            if h["market_value"] and total_market
+            if total_market and h["market_value"]
             else None
         )
     holdings.sort(key=lambda h: h["market_value"] or 0, reverse=True)
@@ -292,7 +292,7 @@ def cagr(trades: list[dict]) -> float | None:
     data = build_holdings(trades)
     invested = data["totals"]["invested_value"]
     mv = data["totals"]["market_value"]
-    if not invested or not mv:
+    if invested is None or mv is None or invested <= 0:
         return None
     first_date = datetime.strptime(min(t["trade_date"] for t in trades), "%Y-%m-%d").date()
     days = (date.today() - first_date).days

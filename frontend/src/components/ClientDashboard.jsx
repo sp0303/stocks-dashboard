@@ -576,7 +576,7 @@ function Playbook({ client, reload }) {
                   <td className="r tnum">{r.avg_buy_price}</td>
                   <td className="r tnum">{r.avg_sell_price}</td>
                   <td className="r tnum">{r.avg_days ?? '—'}</td>
-                  <td className="r tnum"><span className={r.total_pnl >= 0 ? 'up' : 'down'}>{inrFull(r.total_pnl)}</span></td>
+                  <td className="r tnum">{r.total_pnl != null ? <span className={r.total_pnl >= 0 ? 'up' : 'down'}>{inrFull(r.total_pnl)}</span> : '—'}</td>
                   <td className="r tnum"><PnL value={r.pnl_pct} /></td>
                 </tr>
               ))}
@@ -642,7 +642,7 @@ function PlaybookStockModal({ client, symbol, onClose }) {
                       <td className="r tnum">{r.sell_price}</td>
                       <td>{r.sell_date}</td>
                       <td className="r tnum">{r.days ?? '—'}</td>
-                      <td className="r tnum"><span className={r.pnl >= 0 ? 'up' : 'down'}>{inrFull(r.pnl)}</span></td>
+                      <td className="r tnum">{r.pnl != null ? <span className={r.pnl >= 0 ? 'up' : 'down'}>{inrFull(r.pnl)}</span> : '—'}</td>
                       <td className="r tnum"><PnL value={r.pnl_pct} /></td>
                       <td>{r.reason || '—'}</td>
                     </tr>
@@ -723,7 +723,7 @@ function Holdings({ client, reload, onOpenStock }) {
               <td className="r tnum">{r.ltp ?? '—'}</td>
               <td className="r tnum">{inrFull(r.invested_value)}</td>
               <td className="r tnum">{inrFull(r.market_value)}</td>
-              <td className="r tnum"><span className={r.unrealized_pnl >= 0 ? 'up' : 'down'}>{inrFull(r.unrealized_pnl)}</span></td>
+              <td className="r tnum">{r.unrealized_pnl != null ? <span className={r.unrealized_pnl >= 0 ? 'up' : 'down'}>{inrFull(r.unrealized_pnl)}</span> : '—'}</td>
               <td className="r tnum"><PnL value={r.unrealized_pct} /></td>
               <td className="r tnum">{r.portfolio_pct ? r.portfolio_pct + '%' : '—'}</td>
               <td>{r.sector}</td>

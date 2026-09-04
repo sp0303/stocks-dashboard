@@ -153,12 +153,32 @@ def parse_tradebook(source, client_id_hint: str | None = None) -> ParsedTradeboo
             continue
         try:
             trade_date = _norm(rec.get("trade_date"))[:10]
+            # Validate trade_date format
+            from datetime import datetime as dt
+            try:
+                dt.strptime(trade_date, "%Y-%m-%d")
+            except ValueError:
+                errors.append(f"row {r_i}: invalid date format '{trade_date}', expected YYYY-MM-DD")
+                continue
+
             order_execution_time = _norm(rec.get("order_execution_time"))
             if not order_execution_time and rec.get("trade_time"):
                 order_execution_time = f"{trade_date} {_norm(rec.get('trade_time'))}"
             symbol = _norm(rec.get("symbol")).upper()
             if is_upstox:
                 symbol = company_lookup.resolve_symbol(symbol)
+
+            quantity = float(rec.get("quantity") or 0)
+            price = float(rec.get("price") or 0)
+
+            # Validate quantity and price
+            if quantity <= 0:
+                errors.append(f"row {r_i}: quantity must be positive, got {quantity}")
+                continue
+            if price <= 0:
+                errors.append(f"row {r_i}: price must be positive, got {price}")
+                continue
+
             trade = {
                 "symbol": symbol,
                 "isin": _norm(rec.get("isin")),
@@ -168,8 +188,8 @@ def parse_tradebook(source, client_id_hint: str | None = None) -> ParsedTradeboo
                 "series": _norm(rec.get("series")),
                 "trade_type": _norm(rec.get("trade_type")).lower(),
                 "auction": _norm(rec.get("auction")) not in ("", "0", "false", "False"),
-                "quantity": float(rec.get("quantity") or 0),
-                "price": float(rec.get("price") or 0),
+                "quantity": quantity,
+                "price": price,
                 "trade_id": _norm(rec.get("trade_id")),
                 "order_id": _norm(rec.get("order_id")),
                 "order_execution_time": order_execution_time,
