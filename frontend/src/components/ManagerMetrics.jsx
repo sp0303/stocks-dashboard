@@ -2,7 +2,7 @@ import React from 'react'
 import { api, inr, inrFull, pct } from '../api.js'
 import { Stat, Loading, ErrorBox, useAsync } from './common.jsx'
 
-export default function ManagerMetrics({ managerId, reload }) {
+export default function ManagerMetrics({ managerId, reload, onOpenClient, onEditClient, onToggleStatus, onDeleteClient }) {
   const m = useAsync(() => api.managerMetrics(managerId), [managerId, reload])
   if (m.loading) return <Loading what="book metrics" />
   if (m.error) return <ErrorBox error={m.error} />
@@ -31,14 +31,34 @@ export default function ManagerMetrics({ managerId, reload }) {
       {d.by_client?.length > 0 && (
         <div className="panel tbl-scroll" style={{ marginTop: 4 }}>
           <table>
-            <thead><tr><th>Client</th><th className="r">Invested</th><th className="r">Market value</th><th className="r">Unrealized P&L</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Client</th>
+                <th className="mono" style={{ fontSize: 11 }}>Code</th>
+                <th className="r">Trades</th>
+                <th className="r">Invested</th>
+                <th className="r">Market Value</th>
+                <th>Status</th>
+                <th className="r">Unrealized P&L</th>
+                <th style={{ textAlign: 'center' }}>Actions</th>
+              </tr>
+            </thead>
             <tbody>
               {d.by_client.map((c) => (
                 <tr key={c.client_id}>
-                  <td style={{ fontWeight: 600 }}>{c.name}</td>
+                  <td style={{ fontWeight: 600, cursor: 'pointer', color: 'var(--accent-ink)' }} data-client-id={c.client_id}>{c.name}</td>
+                  <td className="mono">{c.client_code || '—'}</td>
+                  <td className="r tnum">{c.trade_count || 0}</td>
                   <td className="r tnum">{inrFull(c.invested)}</td>
                   <td className="r tnum">{inrFull(c.market_value)}</td>
+                  <td><span className="badge" style={c.status !== 'ACTIVE' ? { background: 'var(--surface-2)', color: 'var(--muted)' } : {}}>{c.status}</span></td>
                   <td className="r tnum"><span className={c.unrealized_pnl >= 0 ? 'up' : 'down'}>{inrFull(c.unrealized_pnl)}</span></td>
+                  <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                    {onOpenClient && <button title="Open" onClick={() => onOpenClient(c)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 16, padding: '2px 6px' }}>📂</button>}
+                    {onEditClient && <button title="Edit" onClick={() => onEditClient(c)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16, padding: '2px 6px' }}>✏️</button>}
+                    {onToggleStatus && <button title={c.status === 'ACTIVE' ? 'Deactivate' : 'Activate'} onClick={() => onToggleStatus(c)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16, padding: '2px 6px' }}>{c.status === 'ACTIVE' ? '⊗' : '✓'}</button>}
+                    {onDeleteClient && <button title="Delete" onClick={() => onDeleteClient(c)} style={{ background: 'none', border: 'none', color: 'var(--down)', cursor: 'pointer', fontSize: 16, padding: '2px 6px' }}>🗑️</button>}
+                  </td>
                 </tr>
               ))}
             </tbody>

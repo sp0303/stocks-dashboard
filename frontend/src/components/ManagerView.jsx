@@ -51,54 +51,21 @@ export default function ManagerView({ managers, manager, setManager, onOpenClien
       {manager && (
         <>
           <h2>Book metrics — all clients</h2>
-          <ManagerMetrics managerId={manager.id} reload={reload} />
+          <ManagerMetrics
+            managerId={manager.id}
+            reload={reload}
+            onOpenClient={onOpenClient}
+            onEditClient={startEdit}
+            onToggleStatus={toggleStatus}
+            onDeleteClient={del}
+          />
         </>
       )}
 
-      <h2>Clients</h2>
       {err && <div className="err" style={{ marginBottom: 10 }}>⚠ {err}</div>}
       {cs.loading ? <Loading what="clients" /> : cs.error ? <ErrorBox error={cs.error} /> : cs.data.length === 0 ? (
         <div className="empty">No clients yet. Add one below, then upload their tradebook.</div>
-      ) : (
-        <div className="panel tbl-scroll">
-          <table>
-            <thead><tr><th>Client</th><th>Zerodha code</th><th className="r">Trades</th><th>Status</th><th>Actions</th></tr></thead>
-            <tbody>
-              {cs.data.map((c) => (
-                editing === c.id ? (
-                  <tr key={c.id}>
-                    <td><input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></td>
-                    <td><input value={editForm.client_code} onChange={(e) => setEditForm({ ...editForm, client_code: e.target.value })} /></td>
-                    <td className="r tnum">{c.trade_count}</td>
-                    <td><span className="badge">{c.status}</span></td>
-                    <td>
-                      <div className="row">
-                        <button className="btn" style={{ padding: '5px 12px' }} onClick={() => saveEdit(c.id)}>Save</button>
-                        <button className="btn ghost" style={{ padding: '5px 12px' }} onClick={() => setEditing(null)}>Cancel</button>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  <tr key={c.id}>
-                    <td style={{ fontWeight: 600, cursor: 'pointer', color: 'var(--accent-ink)' }} onClick={() => onOpenClient(c)}>{c.name}</td>
-                    <td className="mono">{c.client_code || '—'}</td>
-                    <td className="r tnum">{c.trade_count}</td>
-                    <td><span className="badge" style={c.status !== 'ACTIVE' ? { background: 'var(--surface-2)', color: 'var(--muted)' } : {}}>{c.status}</span></td>
-                    <td>
-                      <div className="row">
-                        <button className="btn" style={{ padding: '5px 10px' }} onClick={() => onOpenClient(c)}>Open</button>
-                        <button className="btn ghost" style={{ padding: '5px 10px' }} onClick={() => startEdit(c)}>Edit</button>
-                        <button className="btn ghost" style={{ padding: '5px 10px' }} onClick={() => toggleStatus(c)}>{c.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}</button>
-                        <button className="btn ghost" style={{ padding: '5px 10px', color: 'var(--down)' }} onClick={() => del(c)}>Delete</button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      ) : null}
 
       <h2>Add a client</h2>
       <form className="row" onSubmit={addClient}>
