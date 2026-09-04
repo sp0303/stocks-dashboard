@@ -44,7 +44,7 @@ button{font-family:inherit}
 .up{color:var(--up)} .down{color:var(--down)}
 
 /* top bar */
-.topbar{display:flex;align-items:center;gap:20px;padding:14px 16px;background:var(--surface);
+.topbar{display:flex;align-items:center;gap:20px;padding:14px 48px;background:var(--surface);
   border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
 .brand{font-weight:700;font-size:17px;letter-spacing:-.01em}
 .brand span{color:var(--accent-ink)}
@@ -55,7 +55,7 @@ button{font-family:inherit}
 .store-pill{font-family:var(--mono);font-size:11px;color:var(--faint);border:1px solid var(--line);
   padding:3px 8px;border-radius:999px}
 
-.wrap{max-width:100%;margin:0;padding:24px 16px 80px}
+.wrap{max-width:100%;margin:0;padding:24px 48px 80px}
 .wrap-wide{max-width:none;padding-left:0;padding-right:0}
 .wrap-wide .crumbs{padding-left:14px}
 .crumbs{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:13px;margin-bottom:16px;flex-wrap:wrap}
