@@ -339,8 +339,8 @@ function renderActiveSlice(props) {
 function BasisToggle({ basis, setBasis }) {
   return (
     <div className="tabs" style={{ borderBottom: 'none', margin: '8px 0' }}>
-      {[['current', 'Current'], ['invested', 'Invested']].map(([k, label]) => (
-        <button key={k} className={basis === k ? 'on' : ''} onClick={() => setBasis(k)}>{label}</button>
+      {[['current', 'Current holdings'], ['invested', 'All ever invested']].map(([k, label]) => (
+        <button key={k} className={basis === k ? 'on' : ''} onClick={() => setBasis(k)} title={k === 'current' ? 'What you own now' : 'All stocks ever traded (open + closed)'}>{label}</button>
       ))}
     </div>
   )

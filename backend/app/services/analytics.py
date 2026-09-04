@@ -142,21 +142,50 @@ def portfolio_summary(trades: list[dict], actions: list[dict] | None = None) -> 
 
 
 def allocation(trades: list[dict], by: str = "sector", basis: str = "current") -> list[dict]:
-    """Weight buckets by live market value ("current" — today's mark-to-market split)
-    or by original invested/cost value ("invested" — how capital was actually deployed,
-    unaffected by subsequent price moves). Same buckets, different weighting basis."""
+    """Weight buckets by live market value ("current" — today's holdings)
+    or by all capital ever deployed ("invested" — all stocks ever traded, open+closed)."""
     data = build_holdings(trades)
-    value_field = "market_value" if basis == "current" else "invested_value"
-    total = data["totals"][value_field] or 0
     buckets: dict[str, float] = defaultdict(float)
-    for h in data["holdings"]:
-        v = h[value_field]
-        if v is None:
-            continue
-        key = {
-            "sector": h["sector"], "asset": h["asset_class"], "stock": h["symbol"], "cap": h["cap"],
-        }.get(by, h["sector"])
-        buckets[key] += v
+    meta = classify  # for sector/cap classification
+
+    if basis == "current":
+        # Current holdings only
+        total = data["totals"]["market_value"] or 0
+        for h in data["holdings"]:
+            v = h["market_value"]
+            if v is None:
+                continue
+            key = {
+                "sector": h["sector"], "asset": h["asset_class"], "stock": h["symbol"], "cap": h["cap"],
+            }.get(by, h["sector"])
+            buckets[key] += v
+    else:
+        # All stocks ever invested in (open + closed positions)
+        total = 0
+
+        # Add open positions (by cost basis)
+        for h in data["holdings"]:
+            v = h["invested_value"]
+            if v is None:
+                continue
+            key = {
+                "sector": h["sector"], "asset": h["asset_class"], "stock": h["symbol"], "cap": h["cap"],
+            }.get(by, h["sector"])
+            buckets[key] += v
+            total += v
+
+        # Add closed positions (by buy price)
+        round_trips = compute_round_trips(trades)
+        for r in round_trips:
+            sym = r["symbol"]
+            m = classify(sym)
+            buy_value = r["buy_price"] * r["quantity"]
+            key = {
+                "sector": m["sector"], "asset": m["asset_class"], "stock": sym, "cap": m["cap"],
+            }.get(by, m["sector"])
+            buckets[key] += buy_value
+            total += buy_value
+
     out = [
         {"key": k, "value": round(v, 2), "pct": round(v / total * 100, 2) if total else 0.0}
         for k, v in buckets.items()
