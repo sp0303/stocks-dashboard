@@ -46,8 +46,8 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
             </thead>
             <tbody>
               {d.by_client.map((c) => (
-                <tr key={c.client_id}>
-                  <td style={{ fontWeight: 600, cursor: 'pointer', color: 'var(--accent-ink)' }} data-client-id={c.client_id}>{c.name}</td>
+                <tr key={c.id}>
+                  <td style={{ fontWeight: 600, cursor: 'pointer', color: 'var(--accent-ink)' }} data-client-id={c.id}>{c.name}</td>
                   <td className="mono">{c.client_code || '—'}</td>
                   <td className="r tnum">{c.trade_count || 0}</td>
                   <td className="r tnum">{inrFull(c.invested)}</td>
@@ -56,13 +56,13 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
                   <td className="r tnum"><span className={c.unrealized_pnl >= 0 ? 'up' : 'down'}>{inrFull(c.unrealized_pnl)}</span></td>
                   <td style={{ textAlign: 'center', position: 'relative' }}>
                     <button
-                      onClick={() => setOpenMenu(openMenu === c.client_id ? null : c.client_id)}
+                      onClick={() => setOpenMenu(openMenu === c.id ? null : c.id)}
                       style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18, padding: '4px 8px' }}
                       title="Actions"
                     >
                       ⋮
                     </button>
-                    {openMenu === c.client_id && (
+                    {openMenu === c.id && (
                       <div style={{
                         position: 'absolute', top: '100%', right: 0, marginTop: 4, background: 'var(--surface)', border: '1px solid var(--line)',
                         borderRadius: 6, minWidth: 140, zIndex: 100, boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
