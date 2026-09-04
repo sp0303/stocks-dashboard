@@ -133,6 +133,15 @@ def portfolio_summary(trades: list[dict], actions: list[dict] | None = None) -> 
     sell_total = sum(t["trade_value"] for t in trades if t["trade_type"] == "sell")
     initial_capital = buy_total - sell_total
 
+    # Current invested = cost basis of currently held positions
+    current_invested = t["invested_value"]
+
+    # Total invested = cost basis of all positions ever held (open + closed)
+    total_invested = current_invested
+    round_trips = compute_round_trips(trades)
+    for r in round_trips:
+        total_invested += r["buy_price"] * r["quantity"]
+
     return {
         **t,
         "total_trades": len(trades),
@@ -141,6 +150,8 @@ def portfolio_summary(trades: list[dict], actions: list[dict] | None = None) -> 
         "first_trade_date": first_date,
         "last_trade_date": last_date,
         "initial_capital": round(initial_capital, 2),
+        "current_invested": round(current_invested, 2),
+        "total_invested": round(total_invested, 2),
     }
 
 

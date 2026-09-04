@@ -519,7 +519,9 @@ function Overview({ client, reload, onChanged }) {
     <div>
       <div className="cards">
         <Stat label="Market Value" value={inr(d.market_value)} sub={inrFull(d.market_value)} />
-        <Stat label="Deployed Capital" value={inr(d.initial_capital)} sub={inrFull(d.initial_capital)} />
+        <Stat label="Deployed Capital" value={inr(d.initial_capital)} sub={inrFull(d.initial_capital)} title="External capital deployed (buys - sells)" />
+        <Stat label="Current Invested" value={inr(d.current_invested)} sub={inrFull(d.current_invested)} title="Cost basis of current holdings" />
+        <Stat label="Total Invested" value={inr(d.total_invested)} sub={inrFull(d.total_invested)} title="Cost basis of all stocks ever held" />
         <Stat label="Total P&L" value={inr(d.total_pnl)} tone={d.total_pnl >= 0 ? 'up' : 'down'} sub={`${pct(d.return_pct)} over ${getHoldingPeriod()}`} />
         <Stat label="Realized P&L" value={inr(d.realized_pnl)} tone={d.realized_pnl >= 0 ? 'up' : 'down'} />
         <Stat label="Unrealized P&L" value={inr(d.unrealized_pnl)} tone={d.unrealized_pnl >= 0 ? 'up' : 'down'} />
