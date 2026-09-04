@@ -192,6 +192,10 @@ class BaseStore:
     ) -> list[dict]: ...
     async def corporate_actions_coverage(self) -> dict: ...
 
+    # stock thesis — investment rationale, catalysts, risks, etc.
+    async def get_stock_thesis(self, client_id: str, symbol: str) -> dict | None: ...
+    async def save_stock_thesis(self, client_id: str, symbol: str, thesis: dict) -> dict: ...
+
 
 # --------------------------------------------------------------------------- #
 # JSON fallback
@@ -203,7 +207,7 @@ class JsonStore(BaseStore):
         self._db = {
             "managers": [], "clients": [], "uploads": [], "trades": [], "watchlists": [],
             "tags": [], "trade_tags": [], "dividends": [], "benchmark_prices": {},
-            "corporate_actions": [], "classifications": {},
+            "corporate_actions": [], "classifications": {}, "thesis": {},
         }
 
     async def init(self) -> None:
@@ -215,6 +219,7 @@ class JsonStore(BaseStore):
                 self._db.setdefault(k, [])
             self._db.setdefault("benchmark_prices", {})
             self._db.setdefault("classifications", {})
+            self._db.setdefault("thesis", {})
 
         # Initialize classification cache with persisted data
         from app.services import securities
@@ -638,6 +643,19 @@ class JsonStore(BaseStore):
         syms = {r.get("symbol") for r in rows if r.get("symbol")}
         return {"total": len(rows), "symbols": len(syms)}
 
+    async def get_stock_thesis(self, client_id: str, symbol: str):
+        thesis_key = f"{client_id}:{symbol}"
+        return self._db.get("thesis", {}).get(thesis_key)
+
+    async def save_stock_thesis(self, client_id: str, symbol: str, thesis: dict):
+        thesis_key = f"{client_id}:{symbol}"
+        async with self._lock:
+            if "thesis" not in self._db:
+                self._db["thesis"] = {}
+            self._db["thesis"][thesis_key] = thesis
+            self._flush()
+        return thesis
+
 
 # --------------------------------------------------------------------------- #
 # Mongo backend
@@ -999,6 +1017,19 @@ class MongoStore(BaseStore):
         total = await self.db.corporate_actions.count_documents({})
         syms = await self.db.corporate_actions.distinct("symbol")
         return {"total": total, "symbols": len([s for s in syms if s])}
+
+    async def get_stock_thesis(self, client_id: str, symbol: str):
+        result = await self.db.thesis.find_one({"client_id": client_id, "symbol": symbol})
+        return self._clean(result) if result else None
+
+    async def save_stock_thesis(self, client_id: str, symbol: str, thesis: dict):
+        doc = {"client_id": client_id, "symbol": symbol, **thesis}
+        result = await self.db.thesis.update_one(
+            {"client_id": client_id, "symbol": symbol},
+            {"$set": doc},
+            upsert=True
+        )
+        return doc
 
 
 # --------------------------------------------------------------------------- #

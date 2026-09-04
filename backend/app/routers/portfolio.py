@@ -463,3 +463,15 @@ async def stock(client_id: str, symbol: str):
     if result is None:
         raise HTTPException(404, "no trades for this symbol")
     return {"data": result}
+
+@router.get("/{client_id}/stocks/{symbol}/thesis")
+async def get_stock_thesis(client_id: str, symbol: str):
+    await _client_or_404(client_id)
+    thesis = await store.get_stock_thesis(client_id, symbol)
+    return {"data": thesis or {}}
+
+@router.post("/{client_id}/stocks/{symbol}/thesis")
+async def save_stock_thesis(client_id: str, symbol: str, body: dict):
+    await _client_or_404(client_id)
+    result = await store.save_stock_thesis(client_id, symbol, body)
+    return {"data": result}

@@ -145,6 +145,11 @@ export const api = {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note }),
     }).then((r) => r.data),
   stock: (clientId, symbol) => req(`/api/clients/${clientId}/stocks/${symbol}`).then((r) => r.data),
+  stockThesis: (clientId, symbol) => req(`/api/clients/${clientId}/stocks/${symbol}/thesis`).then((r) => r.data).catch(() => ({})),
+  saveStockThesis: (clientId, symbol, thesis) =>
+    req(`/api/clients/${clientId}/stocks/${symbol}/thesis`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(thesis),
+    }).then((r) => r.data),
   // opening/adjustment trades for shares not in the tradebook (IPO/bonus/pre-window)
   manualTrades: (clientId) => req(`/api/clients/${clientId}/manual-trades`).then((r) => r.data),
   addManualTrade: (clientId, body) =>

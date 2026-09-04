@@ -1,22 +1,38 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { api, inr, inrFull, pct } from '../api.js'
 import { Stat, Loading, ErrorBox, useAsync } from './common.jsx'
 
 export default function StockAnalysis({ client, symbol, onBack }) {
   const s = useAsync(() => api.stock(client.id, symbol), [client.id, symbol])
+  const thesis = useAsync(() => api.stockThesis(client.id, symbol), [client.id, symbol])
 
   return (
     <div>
       <button className="btn ghost" onClick={onBack} style={{ marginBottom: 14 }}>← Back to {client.name}</button>
       {s.loading ? <Loading what={`${symbol} analysis`} /> : s.error ? <ErrorBox error={s.error} /> : (
-        <Body d={s.data} />
+        <Body d={s.data} clientId={client.id} symbol={symbol} thesisData={thesis.data} onThesisUpdate={() => thesis.refetch?.()} />
       )}
     </div>
   )
 }
 
-function Body({ d }) {
+function Body({ d, clientId, symbol, thesisData, onThesisUpdate }) {
   const held = d.current_quantity > 0
+  const [thesis, setThesis] = useState(thesisData || {})
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const handleThesisSave = async () => {
+    setSaving(true)
+    try {
+      await api.saveStockThesis(clientId, symbol, thesis)
+      setEditing(false)
+      onThesisUpdate?.()
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div>
       <div className="row" style={{ gap: 12, alignItems: 'baseline' }}>
@@ -75,6 +91,108 @@ function Body({ d }) {
           </div>
         ))}
       </div>
+
+      {/* Investment Thesis */}
+      <h2 style={{ marginTop: 28, display: 'flex', gap: 12, alignItems: 'center' }}>
+        Investment Thesis
+        {!editing && <button className="btn sm" onClick={() => setEditing(true)}>✎ Edit</button>}
+      </h2>
+      <div className="panel" style={{ padding: 16 }}>
+        {editing ? (
+          <ThesisForm thesis={thesis} setThesis={setThesis} onSave={handleThesisSave} onCancel={() => setEditing(false)} saving={saving} />
+        ) : (
+          <ThesisView thesis={thesis} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ThesisForm({ thesis, setThesis, onSave, onCancel, saving }) {
+  const fields = [
+    { key: 'thesis', label: 'Thesis: Why do I believe this company will create value?', type: 'textarea' },
+    { key: 'variant_view', label: 'Variant View: What do I believe that the market is missing?', type: 'textarea' },
+    { key: 'catalysts', label: 'Catalysts: What could cause the market to recognise this?', type: 'textarea' },
+    { key: 'time_horizon', label: 'Time Horizon', type: 'select', options: ['', '1 year', '3 years', '5 years'] },
+    { key: 'key_assumptions', label: 'Key Assumptions: Revenue growth, margins, ROCE, market share, etc.', type: 'textarea' },
+    { key: 'valuation', label: 'Valuation: What am I paying?', type: 'textarea' },
+    { key: 'expected_return', label: 'Expected Return: What could the stock reasonably be worth?', type: 'textarea' },
+    { key: 'risks', label: 'Risks: What could permanently impair the thesis?', type: 'textarea' },
+    { key: 'risk_reward_ratio', label: 'Risk Reward Ratio & Portfolio Allocation %', type: 'textarea' },
+  ]
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {fields.map(f => (
+        <div key={f.key}>
+          <label style={{ display: 'block', marginBottom: 6, fontWeight: 500, fontSize: 13 }}>{f.label}</label>
+          {f.type === 'textarea' ? (
+            <textarea
+              value={thesis[f.key] || ''}
+              onChange={(e) => setThesis({ ...thesis, [f.key]: e.target.value })}
+              style={{
+                width: '100%', minHeight: 100, padding: 10, border: '1px solid var(--line)',
+                borderRadius: 6, fontSize: 13, fontFamily: 'system-ui, -apple-system, sans-serif'
+              }}
+              placeholder={`Enter ${f.label.toLowerCase()}`}
+            />
+          ) : f.type === 'select' ? (
+            <select
+              value={thesis[f.key] || ''}
+              onChange={(e) => setThesis({ ...thesis, [f.key]: e.target.value })}
+              style={{
+                width: '100%', padding: 10, border: '1px solid var(--line)',
+                borderRadius: 6, fontSize: 13
+              }}
+            >
+              {f.options.map(opt => <option key={opt} value={opt}>{opt || 'Select...'}</option>)}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={thesis[f.key] || ''}
+              onChange={(e) => setThesis({ ...thesis, [f.key]: e.target.value })}
+              style={{
+                width: '100%', padding: 10, border: '1px solid var(--line)',
+                borderRadius: 6, fontSize: 13
+              }}
+            />
+          )}
+        </div>
+      ))}
+      <div className="row" style={{ gap: 8, marginTop: 8 }}>
+        <button className="btn" onClick={onSave} disabled={saving}>{saving ? 'Saving...' : 'Save Thesis'}</button>
+        <button className="btn ghost" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
+function ThesisView({ thesis }) {
+  if (!thesis || Object.keys(thesis).length === 0) {
+    return <div style={{ color: 'var(--muted)', fontStyle: 'italic' }}>No thesis recorded yet. Click "Edit" to add one.</div>
+  }
+
+  const fields = [
+    { key: 'thesis', label: 'Thesis' },
+    { key: 'variant_view', label: 'Variant View' },
+    { key: 'catalysts', label: 'Catalysts' },
+    { key: 'time_horizon', label: 'Time Horizon' },
+    { key: 'key_assumptions', label: 'Key Assumptions' },
+    { key: 'valuation', label: 'Valuation' },
+    { key: 'expected_return', label: 'Expected Return' },
+    { key: 'risks', label: 'Risks' },
+    { key: 'risk_reward_ratio', label: 'Risk Reward Ratio' },
+  ]
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {fields.map(f => thesis[f.key] && (
+        <div key={f.key}>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, color: 'var(--accent)' }}>{f.label}</div>
+          <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{thesis[f.key]}</div>
+        </div>
+      ))}
     </div>
   )
 }
