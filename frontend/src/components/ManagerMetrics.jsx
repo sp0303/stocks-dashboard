@@ -47,7 +47,7 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
             <tbody>
               {d.by_client.map((c) => (
                 <tr key={c.id}>
-                  <td style={{ fontWeight: 600, cursor: 'pointer', color: 'var(--accent-ink)' }} data-client-id={c.id}>{c.name}</td>
+                  <td style={{ fontWeight: 600, cursor: 'pointer', color: 'var(--accent-ink)' }} data-client-id={c.id} onClick={() => onOpenClient && onOpenClient(c)}>{c.name}</td>
                   <td className="mono">{c.client_code || '—'}</td>
                   <td className="r tnum">{c.trade_count || 0}</td>
                   <td className="r tnum">{inrFull(c.invested)}</td>
@@ -72,7 +72,7 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
                             display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', border: 'none',
                             background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--accent)', borderBottom: '1px solid var(--line)'
                           }}>
-                            📂 Open
+                            ↗ Open
                           </button>
                         )}
                         {onEditClient && (
@@ -80,7 +80,7 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
                             display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', border: 'none',
                             background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--ink)', borderBottom: '1px solid var(--line)'
                           }}>
-                            ✏️ Edit
+                            ✎ Edit
                           </button>
                         )}
                         {onToggleStatus && (
@@ -88,7 +88,7 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
                             display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', border: 'none',
                             background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--ink)', borderBottom: '1px solid var(--line)'
                           }}>
-                            {c.status === 'ACTIVE' ? '⊗ Deactivate' : '✓ Activate'}
+                            {c.status === 'ACTIVE' ? '◐ Deactivate' : '◑ Activate'}
                           </button>
                         )}
                         {onDeleteClient && (
@@ -96,7 +96,7 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
                             display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', border: 'none',
                             background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--down)'
                           }}>
-                            🗑️ Delete
+                            ✕ Delete
                           </button>
                         )}
                       </div>
