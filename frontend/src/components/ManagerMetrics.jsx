@@ -53,34 +53,21 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
                   <td className="r tnum">{inrFull(c.market_value)}</td>
                   <td><span className="badge" style={c.status !== 'ACTIVE' ? { background: 'var(--surface-2)', color: 'var(--muted)' } : {}}>{c.status}</span></td>
                   <td className="r tnum"><span className={c.unrealized_pnl >= 0 ? 'up' : 'down'}>{inrFull(c.unrealized_pnl)}</span></td>
-                  <td style={{ textAlign: 'center', display: 'flex', gap: 8, justifyContent: 'center', alignItems: 'center' }}>
-                    {onOpenClient && (
-                      <button onClick={() => onOpenClient(c)} style={{
-                        background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 16, padding: '4px',
-                        title: 'Open'
-                      }} title="Open">
-                        ↗
-                      </button>
-                    )}
+                  <td style={{ textAlign: 'center', display: 'flex', gap: 12, justifyContent: 'center', alignItems: 'center' }}>
                     {onEditClient && (
                       <button onClick={() => onEditClient(c)} style={{
-                        background: 'none', border: 'none', color: 'var(--ink)', cursor: 'pointer', fontSize: 16, padding: '4px'
+                        background: 'none', border: 'none', color: 'var(--ink)', cursor: 'pointer', fontSize: 18, padding: '4px',
+                        lineHeight: 1
                       }} title="Edit">
                         ✎
                       </button>
                     )}
-                    {onToggleStatus && (
-                      <button onClick={() => onToggleStatus(c)} style={{
-                        background: 'none', border: 'none', color: 'var(--ink)', cursor: 'pointer', fontSize: 16, padding: '4px'
-                      }} title={c.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}>
-                        {c.status === 'ACTIVE' ? '◐' : '◑'}
-                      </button>
-                    )}
                     {onDeleteClient && (
                       <button onClick={() => onDeleteClient(c)} style={{
-                        background: 'none', border: 'none', color: 'var(--down)', cursor: 'pointer', fontSize: 16, padding: '4px'
+                        background: 'none', border: 'none', color: 'var(--down)', cursor: 'pointer', fontSize: 18, padding: '4px',
+                        lineHeight: 1
                       }} title="Delete">
-                        ✕
+                        🗑
                       </button>
                     )}
                   </td>
