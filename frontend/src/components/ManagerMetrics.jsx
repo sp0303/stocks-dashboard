@@ -1,8 +1,9 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { api, inr, inrFull, pct } from '../api.js'
 import { Stat, Loading, ErrorBox, useAsync } from './common.jsx'
 
 export default function ManagerMetrics({ managerId, reload, onOpenClient, onEditClient, onToggleStatus, onDeleteClient }) {
+  const [openMenu, setOpenMenu] = useState(null)
   const m = useAsync(() => api.managerMetrics(managerId), [managerId, reload])
   if (m.loading) return <Loading what="book metrics" />
   if (m.error) return <ErrorBox error={m.error} />
@@ -53,11 +54,53 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
                   <td className="r tnum">{inrFull(c.market_value)}</td>
                   <td><span className="badge" style={c.status !== 'ACTIVE' ? { background: 'var(--surface-2)', color: 'var(--muted)' } : {}}>{c.status}</span></td>
                   <td className="r tnum"><span className={c.unrealized_pnl >= 0 ? 'up' : 'down'}>{inrFull(c.unrealized_pnl)}</span></td>
-                  <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                    {onOpenClient && <button title="Open" onClick={() => onOpenClient(c)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 16, padding: '2px 6px' }}>📂</button>}
-                    {onEditClient && <button title="Edit" onClick={() => onEditClient(c)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16, padding: '2px 6px' }}>✏️</button>}
-                    {onToggleStatus && <button title={c.status === 'ACTIVE' ? 'Deactivate' : 'Activate'} onClick={() => onToggleStatus(c)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 16, padding: '2px 6px' }}>{c.status === 'ACTIVE' ? '⊗' : '✓'}</button>}
-                    {onDeleteClient && <button title="Delete" onClick={() => onDeleteClient(c)} style={{ background: 'none', border: 'none', color: 'var(--down)', cursor: 'pointer', fontSize: 16, padding: '2px 6px' }}>🗑️</button>}
+                  <td style={{ textAlign: 'center', position: 'relative' }}>
+                    <button
+                      onClick={() => setOpenMenu(openMenu === c.client_id ? null : c.client_id)}
+                      style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 18, padding: '4px 8px' }}
+                      title="Actions"
+                    >
+                      ⋮
+                    </button>
+                    {openMenu === c.client_id && (
+                      <div style={{
+                        position: 'absolute', top: '100%', right: 0, marginTop: 4, background: 'var(--surface)', border: '1px solid var(--line)',
+                        borderRadius: 6, minWidth: 140, zIndex: 100, boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                      }}>
+                        {onOpenClient && (
+                          <button onClick={() => { onOpenClient(c); setOpenMenu(null); }} style={{
+                            display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', border: 'none',
+                            background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--accent)', borderBottom: '1px solid var(--line)'
+                          }}>
+                            📂 Open
+                          </button>
+                        )}
+                        {onEditClient && (
+                          <button onClick={() => { onEditClient(c); setOpenMenu(null); }} style={{
+                            display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', border: 'none',
+                            background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--ink)', borderBottom: '1px solid var(--line)'
+                          }}>
+                            ✏️ Edit
+                          </button>
+                        )}
+                        {onToggleStatus && (
+                          <button onClick={() => { onToggleStatus(c); setOpenMenu(null); }} style={{
+                            display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', border: 'none',
+                            background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--ink)', borderBottom: '1px solid var(--line)'
+                          }}>
+                            {c.status === 'ACTIVE' ? '⊗ Deactivate' : '✓ Activate'}
+                          </button>
+                        )}
+                        {onDeleteClient && (
+                          <button onClick={() => { onDeleteClient(c); setOpenMenu(null); }} style={{
+                            display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', border: 'none',
+                            background: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--down)'
+                          }}>
+                            🗑️ Delete
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

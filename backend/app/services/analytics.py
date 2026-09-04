@@ -473,8 +473,16 @@ def manager_metrics(clients: list[dict]) -> dict:
         cinv = sum(p.invested_value for p in opens)
         cmv = sum((quotes.get(p.symbol, {}).get("price") or 0) * p.quantity for p in opens)
         crealized = sum(p.realized_pnl for p in opens)  # realized on still-open symbols only
+
+        # Find the client object to get client_code, status, trade_count
+        client_obj = next((c for c in clients if c.get("id") == cid), {})
+        client_code = client_obj.get("client_code", "")
+        status = client_obj.get("status", "ACTIVE")
+        trade_count = len(client_obj.get("trades", []))
+
         by_client.append({
-            "client_id": cid, "name": name,
+            "client_id": cid, "name": name, "client_code": client_code,
+            "status": status, "trade_count": trade_count,
             "invested": round(cinv, 2), "market_value": round(cmv, 2),
             "unrealized_pnl": round(cmv - cinv, 2) if cmv else 0.0,
         })
