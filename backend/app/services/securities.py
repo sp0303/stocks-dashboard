@@ -1,10 +1,13 @@
 """Security master — symbol -> sector / market-cap / asset class.
 
-A curated fallback map (SEBI-style sectors), the same approach as the reference project.
-Yahoo's free tier doesn't reliably expose sector, so we classify locally and default
-unknown symbols to "Unclassified" rather than failing. Extend freely.
+Uses a curated map (SEBI-style sectors) as primary source. For stocks not in the maps,
+attempts to fetch classification from yfinance, caching results to avoid repeated API hits.
+Falls back to "Unclassified" only if external lookup fails.
 """
 from __future__ import annotations
+
+import time
+from app.config import settings
 
 # sector, cap
 _LARGE_MID = {
@@ -72,7 +75,6 @@ _LARGE_MID = {
     "JSL": ("Metals & Mining", "Mid Cap"),
     "PAYTM": ("Financial Services", "Mid Cap"),
     "JAYNECOIND": ("Metals & Mining", "Small Cap"),
-    "CSBBANK": ("Financial Services", "Mid Cap"),
 }
 
 # Non-equity asset classes
@@ -81,6 +83,11 @@ _ASSET_CLASS_OVERRIDE = {
     "NDTV-RE": "OTHER",   # rights entitlement
 }
 _ETF_SECTOR = {"NIFTYBEES": ("Index / ETF", "ETF")}
+
+# Dynamic classification cache: symbol -> (sector, cap, timestamp)
+# Stores results from external lookups so we don't hit the API repeatedly.
+_classification_cache: dict[str, tuple[str, str, float]] = {}
+_CACHE_TTL = 86400  # 24 hours
 
 
 # Broader NIFTY-100 / common large-&-mid-cap reference map (SEBI-style sectors).
@@ -163,13 +170,58 @@ _REFERENCE = {
 }
 
 
+def _fetch_classification_from_yfinance(symbol: str) -> tuple[str, str] | None:
+    """Try to fetch sector + market cap from yfinance for NSE-listed stocks.
+
+    Returns (sector, cap) or None if lookup fails. Caches result for 24h.
+    """
+    try:
+        import yfinance as yf
+
+        # Try NSE first, fallback to symbol as-is
+        ticker = yf.Ticker(f"{symbol}.NS")
+        info = ticker.info or {}
+
+        # yfinance provides 'sector' and sometimes 'marketCap'
+        sector = info.get("sector")
+        if not sector:
+            return None
+
+        # Try to infer market cap from price (rough estimate)
+        market_cap = info.get("marketCap") or 0
+        cap = "Large Cap" if market_cap > 100_000_000_000 else "Mid Cap" if market_cap > 5_000_000_000 else "Small Cap"
+
+        return (sector, cap)
+    except Exception:
+        return None
+
+
 def classify(symbol: str) -> dict:
     symbol = symbol.upper()
     asset_class = _ASSET_CLASS_OVERRIDE.get(symbol, "EQUITY")
+
+    # Try curated maps first
     if symbol in _ETF_SECTOR:
         sector, cap = _ETF_SECTOR[symbol]
     elif symbol in _LARGE_MID:
         sector, cap = _LARGE_MID[symbol]
+    elif symbol in _REFERENCE:
+        sector, cap = _REFERENCE[symbol]
     else:
-        sector, cap = _REFERENCE.get(symbol, ("Unclassified", "—"))
+        # Try cache, then external lookup
+        now = time.time()
+        cached = _classification_cache.get(symbol)
+
+        if cached and now - cached[2] < _CACHE_TTL:
+            # Valid cache hit
+            sector, cap = cached[0], cached[1]
+        else:
+            # Cache miss or expired; try external lookup
+            result = _fetch_classification_from_yfinance(symbol)
+            if result:
+                sector, cap = result
+                _classification_cache[symbol] = (sector, cap, now)
+            else:
+                sector, cap = "Unclassified", "—"
+
     return {"symbol": symbol, "sector": sector, "cap": cap, "asset_class": asset_class}
