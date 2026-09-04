@@ -182,6 +182,16 @@ class BaseStore:
     async def get_benchmark_prices(self, symbol: str) -> dict[str, float]: ...
     async def save_benchmark_prices(self, symbol: str, prices: dict[str, float]) -> None: ...
 
+    # corporate actions — GLOBAL (not per-client), keyed by ISIN/symbol. Splits/bonuses/
+    # demergers/buybacks fetched from NSE (see services/corporate_actions.py) and deduped
+    # on a stable `key`. The FIFO engine consumes split/bonus rows to keep held quantities
+    # correct across a corporate action that isn't a trade.
+    async def save_corporate_actions(self, records: list[dict]) -> int: ...
+    async def list_corporate_actions(
+        self, isins: list[str] | None = None, symbols: list[str] | None = None
+    ) -> list[dict]: ...
+    async def corporate_actions_coverage(self) -> dict: ...
+
 
 # --------------------------------------------------------------------------- #
 # JSON fallback
@@ -193,13 +203,15 @@ class JsonStore(BaseStore):
         self._db = {
             "managers": [], "clients": [], "uploads": [], "trades": [], "watchlists": [],
             "tags": [], "trade_tags": [], "dividends": [], "benchmark_prices": {},
+            "corporate_actions": [],
         }
 
     async def init(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             self._db = json.loads(self.path.read_text() or "{}")
-            for k in ("managers", "clients", "uploads", "trades", "watchlists", "tags", "trade_tags", "dividends"):
+            for k in ("managers", "clients", "uploads", "trades", "watchlists", "tags",
+                      "trade_tags", "dividends", "corporate_actions"):
                 self._db.setdefault(k, [])
             self._db.setdefault("benchmark_prices", {})
 
@@ -583,6 +595,37 @@ class JsonStore(BaseStore):
             existing.update(prices)
             self._flush()
 
+    async def save_corporate_actions(self, records):
+        if not records:
+            return 0
+        async with self._lock:
+            existing = {r.get("key"): r for r in self._db["corporate_actions"]}
+            added = 0
+            for r in records:
+                k = r.get("key")
+                if not k:
+                    continue
+                if k not in existing:
+                    added += 1
+                existing[k] = r  # upsert: refresh in place, keep newest fetch
+            self._db["corporate_actions"] = list(existing.values())
+            self._flush()
+            return added
+
+    async def list_corporate_actions(self, isins=None, symbols=None):
+        rows = self._db["corporate_actions"]
+        if isins is None and symbols is None:
+            return list(rows)
+        iset = {i for i in (isins or []) if i}
+        sset = {s.upper() for s in (symbols or []) if s}
+        return [r for r in rows
+                if (r.get("isin") in iset) or ((r.get("symbol") or "").upper() in sset)]
+
+    async def corporate_actions_coverage(self):
+        rows = self._db["corporate_actions"]
+        syms = {r.get("symbol") for r in rows if r.get("symbol")}
+        return {"total": len(rows), "symbols": len(syms)}
+
 
 # --------------------------------------------------------------------------- #
 # Mongo backend
@@ -613,6 +656,9 @@ class MongoStore(BaseStore):
         await self.db.tags.create_index([("client_id", 1)])
         await self.db.dividends.create_index([("client_id", 1), ("symbol", 1)])
         await self.db.benchmark_prices.create_index([("symbol", 1), ("date", 1)], unique=True)
+        await self.db.corporate_actions.create_index("key", unique=True)
+        await self.db.corporate_actions.create_index([("isin", 1)])
+        await self.db.corporate_actions.create_index([("symbol", 1)])
 
     async def close(self):
         if self.client:
@@ -912,6 +958,35 @@ class MongoStore(BaseStore):
             for d, c in prices.items()
         ]
         await self.db.benchmark_prices.bulk_write(ops, ordered=False)
+
+    async def save_corporate_actions(self, records):
+        from pymongo import UpdateOne
+
+        records = [r for r in records if r.get("key")]
+        if not records:
+            return 0
+        ops = [UpdateOne({"key": r["key"]}, {"$set": dict(r)}, upsert=True) for r in records]
+        res = await self.db.corporate_actions.bulk_write(ops, ordered=False)
+        return res.upserted_count
+
+    async def list_corporate_actions(self, isins=None, symbols=None):
+        if isins is None and symbols is None:
+            return [self._clean(d) async for d in self.db.corporate_actions.find()]
+        ors = []
+        iset = [i for i in (isins or []) if i]
+        sset = [s.upper() for s in (symbols or []) if s]
+        if iset:
+            ors.append({"isin": {"$in": iset}})
+        if sset:
+            ors.append({"symbol": {"$in": sset}})
+        if not ors:
+            return []
+        return [self._clean(d) async for d in self.db.corporate_actions.find({"$or": ors})]
+
+    async def corporate_actions_coverage(self):
+        total = await self.db.corporate_actions.count_documents({})
+        syms = await self.db.corporate_actions.distinct("symbol")
+        return {"total": total, "symbols": len([s for s in syms if s])}
 
 
 # --------------------------------------------------------------------------- #

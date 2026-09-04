@@ -397,3 +397,33 @@ input[type="file"]{max-width:100%}
   .rnd-sector{white-space:nowrap;width:auto}
   .rnd-main{padding-right:0}
 }
+
+/* ── Corporate actions ─────────────────────────────────────────────── */
+.ca-tag{display:inline-block;font-family:var(--mono);font-size:10.5px;font-weight:700;
+  padding:2px 8px;border-radius:999px;letter-spacing:.02em;white-space:nowrap;
+  background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
+.ca-tag.ca-split{background:#e4f1eb;color:#0a5f47}
+.ca-tag.ca-bonus{background:#eae2f6;color:#6b3fa0}
+.ca-tag.ca-demerger{background:#fdeede;color:#9a5a12}
+.ca-tag.ca-buyback{background:#f6e4e1;color:#b23b32}
+.ca-tag.ca-rights{background:#e2eef6;color:#2a6aa0}
+.ca-tag.ca-dividend{background:var(--surface-2);color:var(--muted)}
+@media (prefers-color-scheme:dark){
+  .ca-tag.ca-split{background:#13251d;color:#5fd0a6}
+  .ca-tag.ca-bonus{background:#1e1630;color:#b79ae0}
+  .ca-tag.ca-demerger{background:#2a1c0c;color:#e0a35f}
+  .ca-tag.ca-buyback{background:#26120f;color:#e0705f}
+  .ca-tag.ca-rights{background:#0f1e2a;color:#6fb0e0}
+}
+/* the "adj" flag on a holding whose quantity was scaled by a split/bonus */
+.ca-badge{font-family:var(--mono);font-size:9.5px;font-weight:700;margin-left:6px;
+  padding:1px 5px;border-radius:4px;background:var(--accent-wash);color:var(--accent-ink);
+  border:1px solid var(--line);cursor:help;vertical-align:middle}
+.ca-table-wrap{overflow-x:auto}
+.ca-table{width:100%;border-collapse:collapse;font-size:13px}
+.ca-table th{text-align:left;font-weight:600;color:var(--muted);font-size:11px;
+  text-transform:uppercase;letter-spacing:.04em;padding:6px 10px;border-bottom:1px solid var(--line)}
+.ca-table td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.ca-table th.r,.ca-table td.r{text-align:right}
+.ca-progress{height:7px;border-radius:999px;background:var(--surface-2);overflow:hidden;border:1px solid var(--line)}
+.ca-progress-bar{height:100%;background:var(--accent);transition:width .4s ease}

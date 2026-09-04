@@ -27,6 +27,7 @@ class Lot:
 @dataclass
 class Position:
     symbol: str
+    isin: str | None = None          # reconciliation key when known (nets renames/demergers)
     quantity: float = 0.0
     avg_cost: float = 0.0             # weighted avg cost of open lots
     invested_value: float = 0.0      # sum(open lot qty * unit_cost)
@@ -43,6 +44,9 @@ class Position:
     first_buy_date: str | None = None
     last_buy_date: str | None = None
     last_sell_date: str | None = None
+    # split/bonus events applied to this position's open lots, for display/audit:
+    # [{ex_date, type, multiplier}]
+    applied_actions: list[dict] = field(default_factory=list)
     open_lots: list[Lot] = field(default_factory=list)
 
     def as_dict(self) -> dict:
@@ -66,25 +70,124 @@ def _days_between(start: str, end: str) -> int | None:
         return None
 
 
-def compute_positions(trades: Iterable[dict]) -> tuple[list[Position], float]:
+def _rkey_of(t: dict, sym_isin: dict[str, str]) -> str:
+    """Reconciliation key: the security's ISIN when known, else its raw symbol.
+
+    Grouping by ISIN nets a *rename* (HBLPOWER→HBLENGINE, same ISIN) and the parent
+    leg of a *demerger* that keeps the parent ISIN (TATAMOTORS+TMPV) into one position,
+    instead of leaving an orphaned open lot under the old ticker.
+    """
+    return sym_isin.get(t.get("symbol")) or str(t.get("symbol"))
+
+
+def _prep(trades: Iterable[dict]) -> tuple[list[dict], dict[str, str], dict[str, str]]:
+    """Shared pre-pass for both FIFO passes. Returns (sorted_trades, sym_isin, display).
+
+    Two corrections happen here, before any lot matching:
+
+    1. Same-day netting — trades are ordered by (date, BUY-before-SELL, time) rather than
+       strict execution time. On a day with a morning sell and an afternoon buy of the
+       same scrip (intraday square-off / sell-and-rebuy), processing the buy first lets
+       the sell consume it, so the pair nets out instead of stranding a phantom open lot
+       plus an equal "unmatched sell".
+    2. ISIN reconciliation — a symbol is grouped under its ISIN (first non-empty seen), so
+       renames/demergers that share an ISIN collapse into one position. The display symbol
+       for the group is the most recently traded ticker (so pricing uses the live name).
+    """
+    trades = list(trades)
+    sym_isin: dict[str, str] = {}
+    for t in trades:
+        s = t.get("symbol")
+        i = (t.get("isin") or "").strip()
+        if s and i and s not in sym_isin:
+            sym_isin[s] = i
+
+    display: dict[str, str] = {}
+    latest: dict[str, tuple[str, str]] = {}
+    for t in trades:
+        k = _rkey_of(t, sym_isin)
+        stamp = (str(t.get("trade_date", "")), str(t.get("order_execution_time", "")))
+        if k not in latest or stamp >= latest[k]:
+            latest[k] = stamp
+            display[k] = str(t.get("symbol"))
+
+    trades.sort(
+        key=lambda t: (
+            str(t.get("trade_date", "")),
+            0 if str(t.get("trade_type", "")).lower() == "buy" else 1,
+            str(t.get("order_execution_time", "")),
+        )
+    )
+    return trades, sym_isin, display
+
+
+def _adjustment_events(actions: Iterable[dict] | None) -> list[tuple[str, str, float, str]]:
+    """Build (ex_date, key, multiplier, type) events from split/bonus corporate actions.
+
+    Only SPLIT and BONUS change share count, so only those become events. Each event is
+    registered under BOTH the security's ISIN and its symbol, so it matches a position
+    however the engine keyed it (ISIN when the tradebook carried one, else symbol).
+    """
+    events: list[tuple[str, str, float, str]] = []
+    for a in actions or []:
+        if a.get("type") not in ("SPLIT", "BONUS"):
+            continue
+        mult = float(a.get("qty_multiplier") or 1.0)
+        ex = a.get("ex_date")
+        if not ex or mult == 1.0:
+            continue
+        for key in {(a.get("isin") or "").strip(), (a.get("symbol") or "").strip()}:
+            if key:
+                events.append((ex, key, mult, a["type"]))
+    return events
+
+
+def compute_positions(trades: Iterable[dict],
+                      actions: Iterable[dict] | None = None) -> tuple[list[Position], float]:
     """Run FIFO matching over chronologically-ordered trades.
 
     Returns (positions_with_open_qty_or_history, total_realized_pnl).
-    A position is returned for every symbol ever traded (so realized-only symbols
-    still show their realized P&L); quantity may be 0.
+    A position is returned for every security ever traded (keyed by ISIN when known, so
+    renames/demergers net rather than double-count); quantity may be 0.
+
+    ``actions`` (optional) are corporate actions from corporate_actions.py. Split/bonus
+    events are applied to open lots on their ex-date — scaling quantity up and per-share
+    cost down — so held quantities track the broker's after a split/bonus, without a trade.
     """
-    trades = sorted(
-        trades,
-        key=lambda t: (str(t.get("trade_date", "")), str(t.get("order_execution_time", ""))),
-    )
+    trades, sym_isin, display = _prep(trades)
+
+    # Merge trades and split/bonus events into one date-ordered stream. An adjustment sorts
+    # BEFORE same-day trades (priority -1), so it scales the pre-ex-date holding while a
+    # buy/sell executed on the ex-date itself is already in post-event terms and untouched.
+    stream: list[tuple] = []
+    for t in trades:
+        prio = 0 if str(t.get("trade_type", "")).lower() == "buy" else 1
+        stream.append((str(t.get("trade_date", "")), prio, str(t.get("order_execution_time", "")), "T", t))
+    for ex, key, mult, atype in _adjustment_events(actions):
+        stream.append((ex, -1, "", "A", (key, mult, atype)))
+    stream.sort(key=lambda x: (x[0], x[1], x[2]))
 
     lots: dict[str, deque[Lot]] = defaultdict(deque)
     pos: dict[str, Position] = {}
     total_realized = 0.0
 
-    for t in trades:
-        symbol = t["symbol"]
-        p = pos.setdefault(symbol, Position(symbol=symbol))
+    for _d, _p, _tm, kind, payload in stream:
+        if kind == "A":
+            key, mult, atype = payload
+            dq = lots.get(key)
+            if dq:  # only a currently-held position is affected
+                for lot in dq:
+                    lot.qty *= mult
+                    lot.unit_cost /= mult
+                p = pos.get(key)
+                if p:
+                    p.applied_actions.append({"ex_date": _d, "type": atype, "multiplier": mult})
+            continue
+
+        t = payload
+        key = _rkey_of(t, sym_isin)
+        p = pos.setdefault(key, Position(symbol=display.get(key, str(t.get("symbol"))),
+                                         isin=sym_isin.get(t.get("symbol"))))
         qty = _num(t.get("quantity"))
         price = _num(t.get("price"))
         charges = _num(t.get("charges"))
@@ -95,7 +198,7 @@ def compute_positions(trades: Iterable[dict]) -> tuple[list[Position], float]:
 
         if ttype == "buy":
             unit_cost = (price * qty + charges) / qty
-            lots[symbol].append(Lot(qty=qty, unit_cost=unit_cost, trade_date=date, fingerprint=t.get("fingerprint")))
+            lots[key].append(Lot(qty=qty, unit_cost=unit_cost, trade_date=date, fingerprint=t.get("fingerprint")))
             p.total_bought_qty += qty
             p.total_bought_value += price * qty + charges
             if p.first_buy_date is None:
@@ -106,7 +209,7 @@ def compute_positions(trades: Iterable[dict]) -> tuple[list[Position], float]:
             proceeds = price * qty - charges
             remaining = qty
             matched_cost = 0.0
-            dq = lots[symbol]
+            dq = lots[key]
             while remaining > 1e-9 and dq:
                 lot = dq[0]
                 take = min(remaining, lot.qty)
@@ -133,8 +236,8 @@ def compute_positions(trades: Iterable[dict]) -> tuple[list[Position], float]:
                 p.unmatched_sell_value += price * remaining - charges * (remaining / qty if qty else 0.0)
 
     # finalize open positions
-    for symbol, p in pos.items():
-        open_lots = [lot for lot in lots[symbol] if lot.qty > 1e-9]
+    for key, p in pos.items():
+        open_lots = [lot for lot in lots[key] if lot.qty > 1e-9]
         p.open_lots = open_lots
         p.quantity = round(sum(lot.qty for lot in open_lots), 6)
         p.invested_value = sum(lot.qty * lot.unit_cost for lot in open_lots)
@@ -149,16 +252,14 @@ def compute_round_trips(trades: Iterable[dict]) -> list[dict]:
     per lot consumed; a buy sold off in pieces produces one row per piece sold.
     Only closed (bought-and-sold) quantity is returned — open positions have no row.
     """
-    trades = sorted(
-        trades,
-        key=lambda t: (str(t.get("trade_date", "")), str(t.get("order_execution_time", ""))),
-    )
+    trades, sym_isin, display = _prep(trades)
 
     lots: dict[str, deque[Lot]] = defaultdict(deque)
     round_trips: list[dict] = []
 
     for t in trades:
-        symbol = t["symbol"]
+        key = _rkey_of(t, sym_isin)
+        symbol = display.get(key, str(t.get("symbol")))
         qty = _num(t.get("quantity"))
         price = _num(t.get("price"))
         charges = _num(t.get("charges"))
@@ -169,12 +270,12 @@ def compute_round_trips(trades: Iterable[dict]) -> list[dict]:
 
         if ttype == "buy":
             unit_cost = (price * qty + charges) / qty
-            lots[symbol].append(Lot(qty=qty, unit_cost=unit_cost, trade_date=date, fingerprint=t.get("fingerprint")))
+            lots[key].append(Lot(qty=qty, unit_cost=unit_cost, trade_date=date, fingerprint=t.get("fingerprint")))
 
         elif ttype == "sell":
             remaining = qty
             sell_charge_per_unit = charges / qty
-            dq = lots[symbol]
+            dq = lots[key]
             while remaining > 1e-9 and dq:
                 lot = dq[0]
                 take = min(remaining, lot.qty)

@@ -158,6 +158,26 @@ export const api = {
       `/api/clients/${clientId}/playbook?sort=${sort}&order=${order}&page=${page}&page_size=${pageSize}${symbol ? `&symbol=${symbol}` : ''}`
     ).then((r) => r),
   playbookByStock: (clientId) => req(`/api/clients/${clientId}/playbook/by-stock`).then((r) => r.data),
+  // corporate actions — splits/bonus/demerger/buyback/dividends from NSE
+  corpActions: (symbol) => req(`/api/corporate-actions?symbol=${symbol}`).then((r) => r.data),
+  clientCorpActions: (clientId) => req(`/api/clients/${clientId}/corporate-actions`).then((r) => r.data),
+  clientCorpActionsRefresh: (clientId) =>
+    req(`/api/clients/${clientId}/corporate-actions/refresh`, { method: 'POST' }).then((r) => r.data),
+  corpActionsCoverage: () => req('/api/corporate-actions/coverage').then((r) => r.data),
+  corpActionsRefresh: () => req('/api/corporate-actions/refresh', { method: 'POST' }).then((r) => r.data),
+  corpActionsRefreshAll: () => req('/api/corporate-actions/refresh-all', { method: 'POST' }).then((r) => r.data),
+}
+
+// Human label + tone for a corporate-action type (shared by drawer/feed/badges).
+export const CA_TYPES = {
+  SPLIT: { label: 'Split', tone: 'ca-split' },
+  BONUS: { label: 'Bonus', tone: 'ca-bonus' },
+  DEMERGER: { label: 'Demerger', tone: 'ca-demerger' },
+  MERGER: { label: 'Merger', tone: 'ca-demerger' },
+  BUYBACK: { label: 'Buyback', tone: 'ca-buyback' },
+  DELISTING: { label: 'Delisting', tone: 'ca-buyback' },
+  RIGHTS: { label: 'Rights', tone: 'ca-rights' },
+  DIVIDEND: { label: 'Dividend', tone: 'ca-dividend' },
 }
 
 // ── formatting helpers ──────────────────────────────────────────────

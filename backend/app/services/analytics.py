@@ -23,8 +23,9 @@ def _exchange_map(trades: list[dict]) -> dict[str, str]:
     return ex
 
 
-def build_holdings(trades: list[dict], with_prices: bool = True) -> dict:
-    positions, total_realized = compute_positions(trades)
+def build_holdings(trades: list[dict], with_prices: bool = True,
+                   actions: list[dict] | None = None) -> dict:
+    positions, total_realized = compute_positions(trades, actions)
     open_pos = [p for p in positions if p.quantity > 0]
     symbols = [p.symbol for p in open_pos]
     quotes = get_quotes(symbols, _exchange_map(trades)) if (with_prices and symbols) else {}
@@ -78,6 +79,9 @@ def build_holdings(trades: list[dict], with_prices: bool = True) -> dict:
                 "price_unavailable": market_value is None,
                 "entry_date": entry_date,
                 "holding_days": holding_days,
+                # split/bonus events applied to this holding's lots (empty for most) —
+                # lets the UI badge a row whose quantity differs from the raw tradebook.
+                "applied_actions": p.applied_actions,
             }
         )
     # portfolio weight
@@ -114,8 +118,8 @@ def build_holdings(trades: list[dict], with_prices: bool = True) -> dict:
     }
 
 
-def portfolio_summary(trades: list[dict]) -> dict:
-    data = build_holdings(trades)
+def portfolio_summary(trades: list[dict], actions: list[dict] | None = None) -> dict:
+    data = build_holdings(trades, actions=actions)
     t = data["totals"]
     buys = sum(1 for x in trades if x["trade_type"] == "buy")
     sells = len(trades) - buys
@@ -524,12 +528,12 @@ def playbook_by_stock(trades: list[dict]) -> list[dict]:
     return out
 
 
-def stock_analysis(trades: list[dict], symbol: str) -> dict | None:
+def stock_analysis(trades: list[dict], symbol: str, actions: list[dict] | None = None) -> dict | None:
     symbol = symbol.upper()
     sym_trades = [t for t in trades if t["symbol"] == symbol]
     if not sym_trades:
         return None
-    positions, _ = compute_positions(trades)
+    positions, _ = compute_positions(trades, actions)
     pos = next((p for p in positions if p.symbol == symbol), None)
     meta = classify(symbol)
     quotes = get_quotes([symbol], _exchange_map(trades))

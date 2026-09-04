@@ -26,3 +26,8 @@ yarn-error.log*
 # Graphify (knowledge-graph tool: pip install graphifyy && graphify install)
 .graphify-venv/
 graphify-out/
+
+# Runtime logs & local artifacts (added 2026-09-04)
+*.log
+logs/
+push.zip

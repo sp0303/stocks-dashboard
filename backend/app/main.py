@@ -11,7 +11,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import admin, broker, clients, market, portfolio, sectors, watchlists
+from app.routers import (
+    admin, broker, clients, corporate_actions, market, portfolio, sectors, watchlists,
+)
 from app.seed import seed_if_empty
 from app.services.alerts import run_alert_loop
 from app.store import init_store
@@ -45,6 +47,7 @@ app.include_router(watchlists.router)
 app.include_router(market.router)
 app.include_router(sectors.router)
 app.include_router(broker.router)
+app.include_router(corporate_actions.router)
 
 
 @app.get("/api/health")

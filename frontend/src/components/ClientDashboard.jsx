@@ -6,6 +6,7 @@ import { api, inr, inrFull, pct, pctPlain } from '../api.js'
 import { Stat, PnL, Loading, ErrorBox, useAsync, PALETTE } from './common.jsx'
 import StockAnalysis from './StockAnalysis.jsx'
 import Watchlist from './Watchlist.jsx'
+import { CorporateActionsFeed } from './CorporateActions.jsx'
 
 const TABS = [
   { key: 'overview', icon: '▤', title: 'Overview' },
@@ -15,6 +16,7 @@ const TABS = [
   { key: 'dividends', icon: '💰', title: 'Dividends' },
   { key: 'trades', icon: '⇅', title: 'Trades' },
   { key: 'playbook', icon: '♟', title: 'Playbook' },
+  { key: 'corp-actions', icon: '🏢', title: 'Corp Actions' },
   { key: 'watchlist', icon: '★', title: 'Watchlist' },
 ]
 
@@ -143,6 +145,11 @@ export default function ClientDashboard({ client }) {
           {visible('playbook') && (
             <Section sectionKey="playbook" title="Playbook" sectionRef={(el) => (sectionRefs.current.playbook = el)}>
               <PlaybookSection client={client} reload={reload} />
+            </Section>
+          )}
+          {visible('corp-actions') && (
+            <Section sectionKey="corp-actions" title="Corporate Actions" sectionRef={(el) => (sectionRefs.current['corp-actions'] = el)}>
+              <CorporateActionsFeed client={client} />
             </Section>
           )}
           {visible('watchlist') && (
@@ -514,11 +521,17 @@ const PLAYBOOK_STOCK_COLUMNS = [
 // Round-trip (bought-then-sold) trade history, FIFO-matched on the backend,
 // collapsed one row per stock (weighted-avg buy/sell price, total P&L). Click a
 // stock to see its individual closed lots in a detail modal.
+const PLAYBOOK_PAGE_SIZE = 10
+
 function Playbook({ client, reload }) {
   const [sort, setSort] = useState({ key: 'total_pnl', dir: 'desc' })
+  const [page, setPage] = useState(0)
   const [openSymbol, setOpenSymbol] = useState(null)
   const pb = useAsync(() => api.playbookByStock(client.id), [client.id, reload])
   const rows = pb.data || []
+
+  // back to the first page whenever the sort or the underlying data changes
+  useEffect(() => { setPage(0) }, [sort, rows])
 
   function toggleSort(key) {
     setSort((cur) => (cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
@@ -531,6 +544,8 @@ function Playbook({ client, reload }) {
     if (typeof av === 'string') return sort.dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
     return sort.dir === 'asc' ? av - bv : bv - av
   })
+  const totalPages = Math.ceil(sorted.length / PLAYBOOK_PAGE_SIZE)
+  const paged = sorted.slice(page * PLAYBOOK_PAGE_SIZE, page * PLAYBOOK_PAGE_SIZE + PLAYBOOK_PAGE_SIZE)
 
   return (
     <div>
@@ -553,7 +568,7 @@ function Playbook({ client, reload }) {
               </tr>
             </thead>
             <tbody>
-              {sorted.map((r) => (
+              {paged.map((r) => (
                 <tr key={r.symbol} className="click" onClick={() => setOpenSymbol(r.symbol)}>
                   <td style={{ fontWeight: 600, color: 'var(--accent-ink)' }}>{r.symbol}</td>
                   <td className="r tnum">{r.trades_count}</td>
@@ -567,6 +582,13 @@ function Playbook({ client, reload }) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      {totalPages > 1 && (
+        <div className="row" style={{ justifyContent: 'center', marginTop: 12, gap: 8 }}>
+          <button className="btn ghost" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>← Prev</button>
+          <span className="sub" style={{ margin: 0 }}>Page {page + 1} of {totalPages}</span>
+          <button className="btn ghost" disabled={page >= totalPages - 1} onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}>Next →</button>
         </div>
       )}
       {openSymbol && <PlaybookStockModal client={client} symbol={openSymbol} onClose={() => setOpenSymbol(null)} />}
@@ -694,7 +716,9 @@ function Holdings({ client, reload, onOpenStock }) {
           {paged.map((r) => (
             <tr key={r.symbol} className="click" onClick={() => onOpenStock(r.symbol)}>
               <td style={{ fontWeight: 600, color: 'var(--accent-ink)' }}>{r.symbol}{r.price_unavailable ? <span className="stale" title="No live price — excluded from totals">no price</span> : r.stale && <span className="stale">stale</span>}</td>
-              <td className="r tnum">{r.quantity}</td>
+              <td className="r tnum">{r.quantity}{r.applied_actions && r.applied_actions.length > 0 && (
+                <span className="ca-badge" title={`Quantity adjusted for: ${r.applied_actions.map((a) => `${a.type} ×${a.multiplier} on ${a.ex_date}`).join('; ')}`}>adj</span>
+              )}</td>
               <td className="r tnum">{r.avg_cost}</td>
               <td className="r tnum">{r.ltp ?? '—'}</td>
               <td className="r tnum">{inrFull(r.invested_value)}</td>

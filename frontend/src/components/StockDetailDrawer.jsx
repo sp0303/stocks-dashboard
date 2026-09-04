@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { api, inrFull, pct } from '../api.js'
 import { Stat, Loading, ErrorBox, useAsync } from './common.jsx'
+import { CorporateActionsTab } from './CorporateActions.jsx'
 
 // ISO date `n` months ago
 function monthsAgo(n) {
@@ -19,6 +20,7 @@ const PRESETS = [
 
 const TABS = [
   { key: 'history', label: 'History' },
+  { key: 'actions', label: 'Corporate Actions' },
   { key: 'remarks', label: 'Remarks' },
   { key: 'risks', label: 'Risks' },
 ]
@@ -61,6 +63,7 @@ export default function StockDetailDrawer({ symbol, row, onClose, onUpdate }) {
           </div>
 
           {tab === 'history' && <HistoryTab symbol={symbol} />}
+          {tab === 'actions' && <CorporateActionsTab symbol={symbol} />}
           {tab === 'remarks' && (
             <NoteTab
               label="Remarks"

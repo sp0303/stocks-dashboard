@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { api } from '../api.js'
 import { Stat, Loading, ErrorBox, useAsync } from './common.jsx'
+import { CorporateActionsAdmin } from './CorporateActions.jsx'
 
 export default function SuperAdmin({ onOpenManager }) {
   const [reload, setReload] = useState(0)
@@ -51,6 +52,9 @@ export default function SuperAdmin({ onOpenManager }) {
           <Stat label="Trades stored" value={ov.data.total_trades.toLocaleString('en-IN')} />
         </div>
       )}
+
+      <h2>Corporate actions data</h2>
+      <CorporateActionsAdmin />
 
       <h2>Portfolio Managers</h2>
       {err && <div className="err" style={{ marginBottom: 10 }}>⚠ {err}</div>}

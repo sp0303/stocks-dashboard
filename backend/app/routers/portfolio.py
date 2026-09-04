@@ -88,18 +88,53 @@ async def _trades_or_404(client_id: str) -> list[dict]:
     return await store.list_trades(client_id)
 
 
+async def _actions_for(trades: list[dict]) -> list[dict]:
+    """Corporate actions (splits/bonuses) relevant to these trades, so the FIFO engine can
+    keep held quantities correct across a split/bonus. Empty until a CA refresh is run."""
+    if not trades:
+        return []
+    isins = {t.get("isin") for t in trades if t.get("isin")}
+    symbols = {t.get("symbol") for t in trades if t.get("symbol")}
+    return await get_store().list_corporate_actions(list(isins), list(symbols))
+
+
 @router.get("/{client_id}/portfolio")
 async def portfolio(client_id: str):
     trades = await _trades_or_404(client_id)
-    return {"data": analytics.portfolio_summary(trades)}
+    return {"data": analytics.portfolio_summary(trades, await _actions_for(trades))}
 
 
 @router.get("/{client_id}/holdings")
 async def holdings(client_id: str):
     trades = await _trades_or_404(client_id)
-    data = analytics.build_holdings(trades)
+    data = analytics.build_holdings(trades, actions=await _actions_for(trades))
     data.pop("_positions", None)
     return {"data": data}
+
+
+@router.get("/{client_id}/corporate-actions")
+async def client_corporate_actions(client_id: str):
+    """Corporate actions (split/bonus/demerger/buyback/dividend) for every security this
+    client has traded — the portfolio-level CA feed. Newest first."""
+    trades = await _trades_or_404(client_id)
+    actions = await _actions_for(trades)
+    actions.sort(key=lambda a: (a.get("ex_date") or ""), reverse=True)
+    return {"data": actions}
+
+
+@router.post("/{client_id}/corporate-actions/refresh")
+async def client_corporate_actions_refresh(client_id: str):
+    """Fetch corporate actions from NSE for just this client's held symbols and persist."""
+    from fastapi.concurrency import run_in_threadpool
+    from app.services import corporate_actions as ca
+
+    trades = await _trades_or_404(client_id)
+    symbols = sorted({t["symbol"].upper() for t in trades if t.get("symbol")})
+    if not symbols:
+        return {"data": {"symbols": 0, "fetched": 0, "saved": 0}}
+    records = await run_in_threadpool(ca.fetch_for_symbols, symbols, "01-01-2020")
+    saved = await get_store().save_corporate_actions(records)
+    return {"data": {"symbols": len(symbols), "fetched": len(records), "saved": saved}}
 
 
 @router.get("/{client_id}/allocation")
@@ -424,7 +459,7 @@ async def delete_manual_trade(client_id: str, fingerprint: str):
 @router.get("/{client_id}/stocks/{symbol}")
 async def stock(client_id: str, symbol: str):
     trades = await _trades_or_404(client_id)
-    result = analytics.stock_analysis(trades, symbol)
+    result = analytics.stock_analysis(trades, symbol, await _actions_for(trades))
     if result is None:
         raise HTTPException(404, "no trades for this symbol")
     return {"data": result}
