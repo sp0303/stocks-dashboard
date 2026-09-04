@@ -124,11 +124,14 @@ def portfolio_summary(trades: list[dict], actions: list[dict] | None = None) -> 
     buys = sum(1 for x in trades if x["trade_type"] == "buy")
     sells = len(trades) - buys
 
-    # Calculate dates and initial capital
+    # Calculate dates and deployed capital
+    # Deployed capital = net cash flow (sum of buys - sum of sells)
+    # This is the actual external capital deployed, excluding reinvested sale proceeds
     first_date = min((t["trade_date"] for t in trades), default=None) if trades else None
     last_date = max((t["trade_date"] for t in trades), default=None) if trades else None
-    buy_trades = [t for t in trades if t["trade_type"] == "buy"]
-    initial_capital = sum(t["trade_value"] for t in buy_trades) if buy_trades else 0
+    buy_total = sum(t["trade_value"] for t in trades if t["trade_type"] == "buy")
+    sell_total = sum(t["trade_value"] for t in trades if t["trade_type"] == "sell")
+    initial_capital = buy_total - sell_total
 
     return {
         **t,
