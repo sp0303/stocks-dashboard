@@ -207,6 +207,7 @@ function UploadBar({ client, onDone }) {
   const inputRef = useRef()
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState(false)
+  const u = useAsync(() => api.uploads(client.id), [client.id, onDone])
 
   async function upload(file) {
     if (!file) return
@@ -224,12 +225,21 @@ function UploadBar({ client, onDone }) {
     }
   }
 
+  const lastUpload = u.data?.[0]
+  const lastUpdatedDate = lastUpload?.uploaded_at ? new Date(lastUpload.uploaded_at).toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' }) : null
+  const lastUpdatedTime = lastUpload?.uploaded_at ? new Date(lastUpload.uploaded_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : null
+
   return (
     <div className="panel" style={{ padding: 14, marginTop: 8 }}>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
           <strong>Upload tradebook</strong>
           <div className="sub" style={{ margin: 0 }}>Zerodha equity export (.xlsx). Re-uploads dedupe automatically.</div>
+          {lastUpdatedDate && (
+            <div className="sub" style={{ margin: '8px 0 0 0', fontSize: 12, color: 'var(--muted)' }}>
+              Last updated: <strong>{lastUpdatedDate}</strong> at {lastUpdatedTime}
+            </div>
+          )}
         </div>
         <div className="row upload-file-row">
           <input ref={inputRef} type="file" accept=".xlsx,.xls" onChange={(e) => upload(e.target.files[0])} disabled={busy} />
@@ -237,6 +247,24 @@ function UploadBar({ client, onDone }) {
       </div>
       {busy && <div className="loading" style={{ padding: '8px 0 0' }}>Parsing & pricing…</div>}
       {msg && <div style={{ marginTop: 10 }} className={msg.ok ? '' : 'err'}>{msg.ok ? '✓ ' : ''}{msg.text}</div>}
+
+      {u.data && u.data.length > 0 && (
+        <div style={{ marginTop: 16, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+          <div className="sub" style={{ marginBottom: 10, fontSize: 12 }}>Upload history ({u.data.length})</div>
+          <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {u.data.slice(0, 5).map((up, i) => {
+              const date = new Date(up.uploaded_at).toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' })
+              const time = new Date(up.uploaded_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+              return (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: 6, borderBottom: i < Math.min(4, u.data.length - 1) ? '1px solid var(--bg-elevated)' : 'none' }}>
+                  <span style={{ color: 'var(--muted)' }}>{date} <strong>{time}</strong></span>
+                  <span style={{ color: 'var(--muted)', fontSize: 11 }}>v{up.version} • {up.imported} trades</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
