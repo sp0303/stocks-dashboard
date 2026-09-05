@@ -88,6 +88,14 @@ async def _trades_or_404(client_id: str) -> list[dict]:
     return await store.list_trades(client_id)
 
 
+async def _client_or_404(client_id: str) -> dict:
+    store = get_store()
+    client = await store.get_client(client_id)
+    if not client:
+        raise HTTPException(404, "client not found")
+    return client
+
+
 async def _actions_for(trades: list[dict]) -> list[dict]:
     """Corporate actions (splits/bonuses) relevant to these trades, so the FIFO engine can
     keep held quantities correct across a split/bonus. Empty until a CA refresh is run."""
