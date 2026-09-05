@@ -129,12 +129,14 @@ function ThesisForm({ thesis, setThesis, onSave, onCancel, saving }) {
     { key: 'thesis', label: 'Thesis: Why do I believe this company will create value?', type: 'textarea' },
     { key: 'variant_view', label: 'Variant View: What do I believe that the market is missing?', type: 'textarea' },
     { key: 'catalysts', label: 'Catalysts: What could cause the market to recognise this?', type: 'textarea' },
-    { key: 'time_horizon', label: 'Time Horizon', type: 'select', options: ['', '1 year', '3 years', '5 years'] },
+    { key: 'time_horizon', label: 'Time Horizon (select preset or custom date)', type: 'time-horizon' },
     { key: 'key_assumptions', label: 'Key Assumptions: Revenue growth, margins, ROCE, market share, etc.', type: 'textarea' },
     { key: 'valuation', label: 'Valuation: What am I paying?', type: 'textarea' },
     { key: 'expected_return', label: 'Expected Return: What could the stock reasonably be worth?', type: 'textarea' },
     { key: 'risks', label: 'Risks: What could permanently impair the thesis?', type: 'textarea' },
     { key: 'risk_reward_ratio', label: 'Risk Reward Ratio & Portfolio Allocation %', type: 'textarea' },
+    { key: 'target_type', label: 'Target Alert (Optional)', type: 'select', options: ['', 'Price Target (₹)', 'Return Target (%)'] },
+    { key: 'target_value', label: 'Target Value', type: 'text' },
   ]
 
   return (
@@ -152,6 +154,31 @@ function ThesisForm({ thesis, setThesis, onSave, onCancel, saving }) {
               }}
               placeholder={`Enter ${f.label.toLowerCase()}`}
             />
+          ) : f.type === 'time-horizon' ? (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {['1 year', '3 years', '5 years'].map(preset => (
+                <button
+                  key={preset}
+                  onClick={() => setThesis({ ...thesis, time_horizon: preset, custom_date: '' })}
+                  style={{
+                    padding: '8px 12px', border: thesis.time_horizon === preset ? '2px solid var(--accent)' : '1px solid var(--line)',
+                    background: thesis.time_horizon === preset ? 'var(--surface-2)' : 'transparent',
+                    borderRadius: 6, fontSize: 13, cursor: 'pointer', color: 'var(--ink)'
+                  }}
+                >
+                  {preset}
+                </button>
+              ))}
+              <input
+                type="date"
+                value={thesis.custom_date || ''}
+                onChange={(e) => setThesis({ ...thesis, custom_date: e.target.value, time_horizon: 'custom' })}
+                style={{
+                  padding: 10, border: '1px solid var(--line)',
+                  borderRadius: 6, fontSize: 13
+                }}
+              />
+            </div>
           ) : f.type === 'select' ? (
             <select
               value={thesis[f.key] || ''}
@@ -172,6 +199,7 @@ function ThesisForm({ thesis, setThesis, onSave, onCancel, saving }) {
                 width: '100%', padding: 10, border: '1px solid var(--line)',
                 borderRadius: 6, fontSize: 13
               }}
+              placeholder={f.key === 'target_value' ? 'Enter target price or return %' : ''}
             />
           )}
         </div>
