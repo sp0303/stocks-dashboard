@@ -98,6 +98,22 @@ function Body({ d, clientId, symbol, thesisData, onThesisUpdate }) {
         {!editing && <button className="btn sm" onClick={() => setEditing(true)}>✎ Edit</button>}
       </h2>
       <div className="panel" style={{ padding: 16 }}>
+        {/* Past Orders Context */}
+        {d.timeline && d.timeline.length > 0 && (
+          <div style={{ marginBottom: 20, paddingBottom: 20, borderBottom: '1px solid var(--line)' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--accent)' }}>Past Orders & Context</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 13 }}>
+              {d.timeline.map((t, i) => (
+                <div key={i} style={{ padding: 10, background: 'var(--surface-2)', borderRadius: 4 }}>
+                  <div style={{ fontWeight: 600 }}>{t.type.toUpperCase()} • {t.date}</div>
+                  <div style={{ color: 'var(--muted)', fontSize: 12, marginTop: 4 }}>
+                    {t.quantity} @ {t.price} = {t.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {editing ? (
           <ThesisForm thesis={thesis} setThesis={setThesis} onSave={handleThesisSave} onCancel={() => setEditing(false)} saving={saving} />
         ) : (
