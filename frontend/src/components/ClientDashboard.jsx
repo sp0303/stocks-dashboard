@@ -888,6 +888,13 @@ function Performance({ client, reload }) {
         }
       })
 
+  // Calculate portfolio value at start and end for absolute numbers
+  const firstData = transformedData[0]
+  const lastData = transformedData[transformedData.length - 1]
+  const startValue = (firstData?.invested_value || 0) + (firstData?.realized_pnl || 0)
+  const endValue = (lastData?.invested_value || 0) + (lastData?.realized_pnl || 0)
+  const absoluteGain = endValue - startValue
+
   return (
     <div>
       <p className="sub">Compare your portfolio returns (indexed) against major benchmarks. All returns indexed to 100 at start.</p>
@@ -899,6 +906,7 @@ function Performance({ client, reload }) {
             sub={x.data?.xirr != null ? 'money-weighted, incl. dividends' : 'not computable — very short, high-return round trips push the required rate off the chart'}
           />
           <Stat label="CAGR" value={pct(x.data?.cagr != null ? x.data.cagr * 100 : null)} sub="invested → market value" />
+          <Stat label="Portfolio growth" value={inr(absoluteGain)} tone={absoluteGain >= 0 ? 'up' : 'down'} sub={`from ${inr(startValue)} → ${inr(endValue)}`} />
         </div>
       )}
 
@@ -928,9 +936,18 @@ function Performance({ client, reload }) {
             <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--muted)' }} minTickGap={40} />
             <YAxis tick={{ fontSize: 11, fill: 'var(--muted)' }} label={{ value: 'Indexed Return (100 = Start)', angle: -90, position: 'insideLeft', offset: 10 }} width={85} />
             <Tooltip
-              formatter={(v) => `${Number(v).toFixed(1)}`}
+              formatter={(v, name) => {
+                const formatted = `${Number(v).toFixed(1)}`
+                // For portfolio return, also show absolute rupee value
+                if (name === 'Your Portfolio') {
+                  const indexed = Number(v)
+                  const absoluteValue = (indexed / 100) * startValue
+                  return `${formatted} (₹${inr(absoluteValue).slice(1)})`
+                }
+                return formatted
+              }}
               labelFormatter={(label) => `${label}`}
-              contentStyle={{ background: 'var(--surface)', border: '1px solid var(--line)' }}
+              contentStyle={{ background: 'var(--surface)', border: '1px solid var(--line)', fontSize: 12 }}
             />
             <Line type="monotone" dataKey="portfolio_return" name="Your Portfolio" stroke={benchmarkColors.portfolio_return} dot={false} strokeWidth={2.5} />
             {benchmarks.nifty_50_return && (
