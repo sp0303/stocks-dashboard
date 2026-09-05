@@ -867,24 +867,42 @@ function Performance({ client, reload }) {
     small_cap_return: 'Small Cap',
   }
 
-  // Transform data to indexed format if not already present
+  // Transform data to absolute rupee values for clarity
   const hasNewFormat = p.data.some((d) => d.portfolio_return != null)
   const transformedData = hasNewFormat
-    ? p.data
+    ? p.data.map((d) => {
+        // Convert indexed returns to absolute rupee values
+        const portfolioValue = (d.portfolio_return / 100) * startValue
+        const niftyValue = (d.nifty_50_return / 100) * startValue
+        const midcapValue = (d.mid_cap_return / 100) * startValue
+        const largecapValue = (d.large_cap_return / 100) * startValue
+        const smallcapValue = (d.small_cap_return / 100) * startValue
+        return {
+          ...d,
+          portfolio_return: portfolioValue,
+          nifty_50_return: niftyValue,
+          mid_cap_return: midcapValue,
+          large_cap_return: largecapValue,
+          small_cap_return: smallcapValue,
+        }
+      })
     : p.data.map((d) => {
-        // Convert old format to indexed returns (100 = first day)
+        // Convert old format to absolute rupee values
         const first = p.data[0]
         const firstTotal = first.invested_value + first.realized_pnl
         const currentTotal = d.invested_value + d.realized_pnl
-        const index = (currentTotal / (firstTotal || 1)) * 100
-        // Generate mock benchmarks
+        // Generate mock benchmarks (indexed returns -> convert to rupees)
+        const niftyIndex = 95 + (Math.random() * 30)
+        const midcapIndex = 92 + (Math.random() * 35)
+        const largecapIndex = 98 + (Math.random() * 25)
+        const smallcapIndex = 88 + (Math.random() * 45)
         return {
           ...d,
-          portfolio_return: index,
-          nifty_50_return: 95 + (Math.random() * 30),
-          mid_cap_return: 92 + (Math.random() * 35),
-          large_cap_return: 98 + (Math.random() * 25),
-          small_cap_return: 88 + (Math.random() * 45),
+          portfolio_return: currentTotal,
+          nifty_50_return: (niftyIndex / 100) * startValue,
+          mid_cap_return: (midcapIndex / 100) * startValue,
+          large_cap_return: (largecapIndex / 100) * startValue,
+          small_cap_return: (smallcapIndex / 100) * startValue,
         }
       })
 
@@ -934,17 +952,14 @@ function Performance({ client, reload }) {
           <LineChart data={transformedData} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
             <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--muted)' }} minTickGap={40} />
-            <YAxis tick={{ fontSize: 11, fill: 'var(--muted)' }} label={{ value: 'Indexed Return (100 = Start)', angle: -90, position: 'insideLeft', offset: 10 }} width={85} />
+            <YAxis
+              tick={{ fontSize: 11, fill: 'var(--muted)' }}
+              label={{ value: 'Portfolio Value (₹)', angle: -90, position: 'insideLeft', offset: 10 }}
+              width={85}
+              tickFormatter={(v) => inr(v)}
+            />
             <Tooltip
-              formatter={(v, name) => {
-                const indexed = Number(v)
-                const formatted = `${indexed.toFixed(1)}`
-                // Show both indexed AND rupee value for all benchmarks
-                // Calculate what the indexed return represents in rupees
-                const rupeeValue = (indexed / 100) * startValue
-                const rupeeFormatted = inr(rupeeValue).slice(1) // Remove ₹ symbol
-                return `${formatted} (₹${rupeeFormatted})`
-              }}
+              formatter={(v) => inr(Number(v))}
               labelFormatter={(label) => `${label}`}
               contentStyle={{ background: 'var(--surface)', border: '1px solid var(--line)', fontSize: 12 }}
             />
