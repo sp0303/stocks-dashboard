@@ -937,14 +937,13 @@ function Performance({ client, reload }) {
             <YAxis tick={{ fontSize: 11, fill: 'var(--muted)' }} label={{ value: 'Indexed Return (100 = Start)', angle: -90, position: 'insideLeft', offset: 10 }} width={85} />
             <Tooltip
               formatter={(v, name) => {
-                const formatted = `${Number(v).toFixed(1)}`
-                // For portfolio return, also show absolute rupee value
-                if (name === 'Your Portfolio') {
-                  const indexed = Number(v)
-                  const absoluteValue = (indexed / 100) * startValue
-                  return `${formatted} (₹${inr(absoluteValue).slice(1)})`
-                }
-                return formatted
+                const indexed = Number(v)
+                const formatted = `${indexed.toFixed(1)}`
+                // Show both indexed AND rupee value for all benchmarks
+                // Calculate what the indexed return represents in rupees
+                const rupeeValue = (indexed / 100) * startValue
+                const rupeeFormatted = inr(rupeeValue).slice(1) // Remove ₹ symbol
+                return `${formatted} (₹${rupeeFormatted})`
               }}
               labelFormatter={(label) => `${label}`}
               contentStyle={{ background: 'var(--surface)', border: '1px solid var(--line)', fontSize: 12 }}
