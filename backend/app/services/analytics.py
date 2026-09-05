@@ -266,32 +266,46 @@ def performance_series(trades: list[dict]) -> list[dict]:
 
 
 def _generate_benchmark_returns(day: str, portfolio_return: float) -> dict:
-    """Generate realistic mock benchmark returns for comparison.
+    """Generate realistic cumulative benchmark returns for comparison.
+    Benchmarks show cumulative growth (indexed) starting from 100.
     In production, these would come from a live market data API.
     """
     import hashlib
+    from datetime import datetime, timedelta
 
-    # Deterministic but varied returns based on date
+    # Parse the date to calculate days elapsed
+    day_obj = datetime.strptime(day, "%Y-%m-%d").date()
+    # Reference start date (first trading day in our data set)
+    ref_start = datetime.strptime("2026-02-16", "%Y-%m-%d").date()
+    days_elapsed = (day_obj - ref_start).days
+
+    # Use hash for deterministic but varied returns per day
     date_hash = int(hashlib.md5(day.encode()).hexdigest(), 16)
 
-    # Each benchmark has slightly different volatility and drift
-    # These patterns mimic real market behavior
-    nifty_variance = (date_hash % 300) / 1000  # 0 to 0.3% daily variance
-    midcap_variance = (date_hash % 400) / 1000  # Mid cap more volatile
-    largecap_variance = (date_hash % 200) / 1000  # Large cap less volatile
-    smallcap_variance = (date_hash % 500) / 1000  # Small cap most volatile
+    # Each benchmark accumulates returns over time with different characteristics
+    # This creates cumulative indexed returns starting at 100
 
-    # Base returns with slight upward drift
-    base_nifty = 95 + (float(day.split("-")[2]) % 30)  # Drift between 95-125
-    base_midcap = 92 + (float(day.split("-")[2]) % 35)  # Slightly lower starting point
-    base_largecap = 98 + (float(day.split("-")[2]) % 25)
-    base_smallcap = 88 + (float(day.split("-")[2]) % 45)  # More volatile
+    # Nifty 50: ~10% annualized return, modest volatility
+    nifty_daily_return = 0.0004 + ((date_hash % 15) / 10000)  # ~10% annually
+    nifty_indexed = 100 * ((1 + nifty_daily_return) ** (days_elapsed + 1))
+
+    # Mid Cap: ~12% annualized, higher volatility
+    midcap_daily_return = 0.00048 + ((date_hash % 20) / 10000)  # ~12% annually
+    midcap_indexed = 100 * ((1 + midcap_daily_return) ** (days_elapsed + 1))
+
+    # Large Cap: ~8% annualized, lower volatility
+    largecap_daily_return = 0.0003 + ((date_hash % 10) / 10000)  # ~8% annually
+    largecap_indexed = 100 * ((1 + largecap_daily_return) ** (days_elapsed + 1))
+
+    # Small Cap: ~15% annualized, high volatility
+    smallcap_daily_return = 0.0006 + ((date_hash % 25) / 10000)  # ~15% annually
+    smallcap_indexed = 100 * ((1 + smallcap_daily_return) ** (days_elapsed + 1))
 
     return {
-        "nifty_50_return": round(base_nifty + nifty_variance, 2),
-        "mid_cap_return": round(base_midcap + midcap_variance, 2),
-        "large_cap_return": round(base_largecap + largecap_variance, 2),
-        "small_cap_return": round(base_smallcap + smallcap_variance, 2),
+        "nifty_50_return": round(nifty_indexed, 2),
+        "mid_cap_return": round(midcap_indexed, 2),
+        "large_cap_return": round(largecap_indexed, 2),
+        "small_cap_return": round(smallcap_indexed, 2),
     }
 
 
