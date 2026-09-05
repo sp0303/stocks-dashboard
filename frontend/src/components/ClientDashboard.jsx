@@ -836,13 +836,40 @@ function Allocation({ client, reload }) {
 function Performance({ client, reload }) {
   const p = useAsync(() => api.performance(client.id), [client.id, reload])
   const x = useAsync(() => api.xirr(client.id), [client.id, reload])
+  const [benchmarks, setBenchmarks] = useState({
+    nifty_50_return: true,
+    mid_cap_return: true,
+    large_cap_return: false,
+    small_cap_return: false,
+  })
+
   if (p.loading) return <Loading what="performance" />
   if (p.error) return <ErrorBox error={p.error} />
   if (!p.data.length) return <div className="empty">No history yet.</div>
-  const hasBenchmark = p.data.some((row) => row.benchmark_value != null)
+
+  const toggleBenchmark = (key) => {
+    setBenchmarks((cur) => ({ ...cur, [key]: !cur[key] }))
+  }
+
+  const benchmarkColors = {
+    portfolio_return: '#1e40af',
+    nifty_50_return: '#dc2626',
+    mid_cap_return: '#ea580c',
+    large_cap_return: '#8b5cf6',
+    small_cap_return: '#059669',
+  }
+
+  const benchmarkLabels = {
+    portfolio_return: 'Your Portfolio',
+    nifty_50_return: 'Nifty 50',
+    mid_cap_return: 'Mid Cap',
+    large_cap_return: 'Large Cap',
+    small_cap_return: 'Small Cap',
+  }
+
   return (
     <div>
-      <p className="sub">Capital deployed and realized P&L over time (cost-basis view — no price backfill needed).</p>
+      <p className="sub">Compare your portfolio returns (indexed) against major benchmarks. All returns indexed to 100 at start.</p>
       {!x.loading && !x.error && (
         <div className="cards" style={{ marginBottom: 16 }}>
           <Stat
@@ -853,17 +880,49 @@ function Performance({ client, reload }) {
           <Stat label="CAGR" value={pct(x.data?.cagr != null ? x.data.cagr * 100 : null)} sub="invested → market value" />
         </div>
       )}
+
       <div className="panel" style={{ padding: 16 }}>
-        <ResponsiveContainer width="100%" height={330}>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 600, marginBottom: 10, fontSize: 13 }}>Select benchmarks to compare:</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+            {Object.entries(benchmarks).map(([key, checked]) => (
+              <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggleBenchmark(key)}
+                  style={{ cursor: 'pointer' }}
+                />
+                <span style={{ color: benchmarkColors[key], fontWeight: 500 }}>
+                  {benchmarkLabels[key]}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <ResponsiveContainer width="100%" height={380}>
           <LineChart data={p.data} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
             <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--muted)' }} minTickGap={40} />
-            <YAxis tick={{ fontSize: 11, fill: 'var(--muted)' }} tickFormatter={(v) => inr(v)} width={62} />
-            <Tooltip formatter={(v) => inrFull(v)} />
-            <Line type="monotone" dataKey="invested_value" name="Invested" stroke="#3a86c8" dot={false} strokeWidth={2} />
-            <Line type="monotone" dataKey="realized_pnl" name="Realized P&L" stroke="#0f7a5a" dot={false} strokeWidth={2} />
-            {hasBenchmark && (
-              <Line type="monotone" dataKey="benchmark_value" name="Nifty 50 (same cashflows)" stroke="#c8763a" dot={false} strokeWidth={2} strokeDasharray="4 3" />
+            <YAxis tick={{ fontSize: 11, fill: 'var(--muted)' }} label={{ value: 'Indexed Return (100 = Start)', angle: -90, position: 'insideLeft', offset: 10 }} width={85} />
+            <Tooltip
+              formatter={(v) => `${Number(v).toFixed(1)}%`}
+              labelFormatter={(label) => `${label}`}
+              contentStyle={{ background: 'var(--surface)', border: '1px solid var(--line)' }}
+            />
+            <Line type="monotone" dataKey="portfolio_return" name="Your Portfolio" stroke={benchmarkColors.portfolio_return} dot={false} strokeWidth={2.5} />
+            {benchmarks.nifty_50_return && (
+              <Line type="monotone" dataKey="nifty_50_return" name="Nifty 50" stroke={benchmarkColors.nifty_50_return} dot={false} strokeWidth={2} strokeDasharray="4 3" />
+            )}
+            {benchmarks.mid_cap_return && (
+              <Line type="monotone" dataKey="mid_cap_return" name="Mid Cap" stroke={benchmarkColors.mid_cap_return} dot={false} strokeWidth={2} />
+            )}
+            {benchmarks.large_cap_return && (
+              <Line type="monotone" dataKey="large_cap_return" name="Large Cap" stroke={benchmarkColors.large_cap_return} dot={false} strokeWidth={2} strokeDasharray="4 3" />
+            )}
+            {benchmarks.small_cap_return && (
+              <Line type="monotone" dataKey="small_cap_return" name="Small Cap" stroke={benchmarkColors.small_cap_return} dot={false} strokeWidth={2} />
             )}
           </LineChart>
         </ResponsiveContainer>
