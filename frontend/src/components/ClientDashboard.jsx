@@ -867,6 +867,10 @@ function Performance({ client, reload }) {
     small_cap_return: 'Small Cap',
   }
 
+  // Calculate starting value first (for use in transformations)
+  const firstDataRaw = p.data[0]
+  const startValue = (firstDataRaw?.invested_value || 0) + (firstDataRaw?.realized_pnl || 0)
+
   // Transform data to absolute rupee values for clarity
   const hasNewFormat = p.data.some((d) => d.portfolio_return != null)
   const transformedData = hasNewFormat
@@ -906,10 +910,8 @@ function Performance({ client, reload }) {
         }
       })
 
-  // Calculate portfolio value at start and end for absolute numbers
-  const firstData = transformedData[0]
+  // Calculate portfolio value at end for absolute gain
   const lastData = transformedData[transformedData.length - 1]
-  const startValue = (firstData?.invested_value || 0) + (firstData?.realized_pnl || 0)
   const endValue = (lastData?.invested_value || 0) + (lastData?.realized_pnl || 0)
   const absoluteGain = endValue - startValue
 
