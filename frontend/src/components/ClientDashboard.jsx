@@ -25,11 +25,84 @@ function Section({ sectionKey, title, sectionRef, children }) {
 }
 
 
+function SubNav({ sections, sectionRefs, activeSection }) {
+  const scrollToSection = (sectionKey) => {
+    const el = document.getElementById(`section-${sectionKey}`)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  return (
+    <div style={{ position: 'sticky', top: '3.5rem', background: 'var(--bg)', zIndex: 9, borderBottom: '1px solid var(--line)', overflowX: 'auto', padding: '0.5rem 1rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', minWidth: 'min-content' }}>
+        {sections.map((s) => (
+          <button
+            key={s.key}
+            onClick={() => scrollToSection(s.key)}
+            style={{
+              padding: '0.5rem 1rem',
+              borderRadius: 999,
+              border: '1px solid var(--line)',
+              background: activeSection === s.key ? 'var(--accent)' : 'transparent',
+              color: activeSection === s.key ? 'white' : 'var(--ink)',
+              fontWeight: activeSection === s.key ? 600 : 400,
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function ClientDashboard({ client }) {
   const [reload, setReload] = useState(0)
   const [symbol, setSymbol] = useState(null) // drilled into a single stock
   const [searchHoldings, setSearchHoldings] = useState('')
+  const [activeSection, setActiveSection] = useState('upload')
   const sectionRefs = useRef({})
+  const observerRef = useRef(null)
+
+  const sections = [
+    { key: 'upload', label: 'Upload' },
+    { key: 'overview', label: 'Overview' },
+    { key: 'portfolio-viewer', label: 'Portfolio Sync' },
+    { key: 'holdings', label: 'Holdings' },
+    { key: 'allocation', label: 'Allocation' },
+    { key: 'performance', label: 'Performance' },
+    { key: 'dividends', label: 'Dividends' },
+    { key: 'playbook', label: 'Playbook' },
+    { key: 'corp-actions', label: 'Corporate Actions' },
+    { key: 'watchlist', label: 'Watchlist' },
+    { key: 'kite-accounts', label: 'Kite Accounts' },
+  ]
+
+  useEffect(() => {
+    if (observerRef.current) observerRef.current.disconnect()
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            const sectionKey = entry.target.id.replace('section-', '')
+            setActiveSection(sectionKey)
+            break
+          }
+        }
+      },
+      { threshold: 0.3 }
+    )
+
+    sections.forEach((s) => {
+      const el = document.getElementById(`section-${s.key}`)
+      if (el) observer.observe(el)
+    })
+
+    observerRef.current = observer
+    return () => observer.disconnect()
+  }, [])
 
   if (symbol) {
     return <StockAnalysis client={client} symbol={symbol} onBack={() => setSymbol(null)} />
@@ -44,6 +117,9 @@ export default function ClientDashboard({ client }) {
           <p className="sub mono" style={{ margin: '0.25rem 0 0 0' }}>{client.client_code || 'no broker code'}</p>
         </div>
       </div>
+
+      {/* STICKY SUB-NAVIGATION */}
+      <SubNav sections={sections} sectionRefs={sectionRefs} activeSection={activeSection} />
 
       {/* UNIFIED SCROLLABLE DASHBOARD */}
       <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '1rem' }}>
