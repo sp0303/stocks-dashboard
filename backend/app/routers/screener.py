@@ -1,0 +1,119 @@
+"""Swing-trade screener — a read-only, decision-support view over the sector universe.
+
+Ranks every sector-covered stock on transparent technical metrics (short-term momentum,
+relative strength vs its own sector, RSI, and traded volume) so a user can spot candidates
+themselves. It intentionally makes NO buy/sell recommendation and computes no target price —
+it surfaces the raw numbers and a transparent momentum score, and the user decides.
+
+Data source: the same daily-close history + live quotes used everywhere else
+(Angel One SmartAPI with Yahoo fallback), via app.services.market_data.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from fastapi import APIRouter
+
+from app.routers.sectors import SECTORS_REGISTRY
+from app.services.market_data import get_price_matrix, get_quote_details
+
+router = APIRouter(prefix="/api/screener", tags=["screener"])
+
+
+def _round(v, n=2):
+    return round(v, n) if isinstance(v, (int, float)) else None
+
+
+@router.get("")
+async def screener():
+    """Ranked technical snapshot across all covered sectors.
+
+    Returns every stock with: momentum (1D/1W/1M/1Y %), RSI(14), volume, distance from
+    the 52-week high, relative strength (its 1W% minus its sector's average 1W%), and a
+    transparent composite momentum score. Also returns per-sector averages so the UI can
+    show sector-wise strength. No advice, no price targets — screening data only.
+    """
+    # Collect the full universe with names + exchanges, tagged by sector.
+    universe: list[dict] = []
+    for sector_id, sec in SECTORS_REGISTRY.items():
+        for c in sec["covered"] + sec["roster"]:
+            universe.append({"sector": sector_id, "ticker": c["ticker"],
+                             "name": c["name"], "exchange": c.get("exchange", "NSE")})
+
+    tickers = [u["ticker"] for u in universe]
+    exchanges = {u["ticker"]: u["exchange"] for u in universe}
+
+    # Two data pulls, both cached in market_data: momentum/RSI matrix + live quote (volume).
+    matrix = get_price_matrix(tickers, exchanges)
+    quotes = get_quote_details(tickers, exchanges)
+
+    # Per-sector average 1W% (over stocks that actually have a value) → relative strength.
+    sector_w1: dict[str, list[float]] = {}
+    for u in universe:
+        m = matrix.get(u["ticker"], {})
+        if m.get("w1") is not None:
+            sector_w1.setdefault(u["sector"], []).append(m["w1"])
+    sector_w1_avg = {s: (sum(v) / len(v)) for s, v in sector_w1.items() if v}
+
+    stocks: list[dict] = []
+    for u in universe:
+        m = matrix.get(u["ticker"], {})
+        q = quotes.get(u["ticker"], {})
+        price = m.get("price")
+        if price is None:
+            continue  # skip names with no live/among-history price (e.g. delisted symbols)
+
+        w1 = m.get("w1")
+        m1 = m.get("m1")
+        rsi = m.get("rsi")
+        rel = (w1 - sector_w1_avg[u["sector"]]) if (w1 is not None and u["sector"] in sector_w1_avg) else None
+
+        # Transparent composite momentum score. Weighted blend of short-term momentum and
+        # relative strength, with a small RSI adjustment that rewards a healthy uptrend zone
+        # (50–65) and penalises overbought (>75) / weak (<40) — NOT a recommendation, just a
+        # single sortable number. Every input is shown alongside so the user can judge.
+        score = 0.0
+        if w1 is not None:
+            score += 0.45 * w1
+        if m1 is not None:
+            score += 0.25 * m1
+        if rel is not None:
+            score += 0.30 * rel
+        if rsi is not None:
+            if 50 <= rsi <= 65:
+                score += 1.5
+            elif rsi > 75:
+                score -= 2.0
+            elif rsi < 40:
+                score -= 1.5
+
+        stocks.append({
+            "sector": u["sector"],
+            "ticker": u["ticker"],
+            "name": u["name"],
+            "price": price,
+            "d1": m.get("d1"),
+            "w1": w1,
+            "m1": m1,
+            "y1": m.get("y1"),
+            "from_52w_high": m.get("from_52w_high"),
+            "rsi": rsi,
+            "volume": q.get("volume"),
+            "rel_strength": _round(rel),
+            "score": _round(score),
+        })
+
+    # Rank-wise: highest composite score first (None scores sink to the bottom).
+    stocks.sort(key=lambda s: (s["score"] is not None, s["score"] if s["score"] is not None else 0),
+                reverse=True)
+    for i, s in enumerate(stocks, 1):
+        s["rank"] = i
+
+    return {
+        "data": {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "count": len(stocks),
+            "stocks": stocks,
+            "sectors": {s: _round(v) for s, v in sector_w1_avg.items()},
+        }
+    }

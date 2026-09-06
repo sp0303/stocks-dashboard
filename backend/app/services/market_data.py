@@ -399,9 +399,29 @@ def _closest_on_or_before(points: list[dict], target_date: str) -> dict | None:
     return candidates[-1] if candidates else None
 
 
+def _rsi(closes: list[float], period: int = 14) -> float | None:
+    """Wilder's 14-period RSI from a series of daily closes (oldest→newest).
+    Returns None when there isn't enough history (< period+1 closes)."""
+    if len(closes) < period + 1:
+        return None
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [d if d > 0 else 0.0 for d in deltas]
+    losses = [-d if d < 0 else 0.0 for d in deltas]
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    # Wilder smoothing across the remaining deltas
+    for i in range(period, len(deltas)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    if avg_loss == 0:
+        return 100.0 if avg_gain > 0 else 50.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 1)
+
+
 def _price_matrix_one(symbol: str, exchange: str) -> dict:
-    """1D/1W/1M/1Y % change + % off the 52-week high, all derived from the same
-    daily-close history used for the watchlist/stock-detail charts — no separate feed."""
+    """1D/1W/1M/1Y % change + % off the 52-week high + RSI(14), all derived from the
+    same daily-close history used for the watchlist/stock-detail charts — no separate feed."""
     from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
@@ -409,7 +429,8 @@ def _price_matrix_one(symbol: str, exchange: str) -> dict:
                         interval="1d", exchange=exchange)
     points = hist.get("points", [])
     if not points:
-        return {"price": None, "d1": None, "w1": None, "m1": None, "y1": None, "from_52w_high": None}
+        return {"price": None, "d1": None, "w1": None, "m1": None, "y1": None,
+                "from_52w_high": None, "rsi": None}
 
     latest = points[-1]
     prev = points[-2] if len(points) > 1 else None
@@ -429,6 +450,7 @@ def _price_matrix_one(symbol: str, exchange: str) -> dict:
         # than compare against its IPO-week price and imply a misleading return
         "y1": _pct(y1_ref["close"], latest["close"]) if (y1_ref and y1_ref["date"] <= (now - timedelta(days=300)).strftime("%Y-%m-%d")) else None,
         "from_52w_high": _pct(high_52w, latest["close"]) if high_52w else None,
+        "rsi": _rsi([p["close"] for p in points]),
     }
 
 
