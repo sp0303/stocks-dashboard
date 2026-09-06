@@ -171,6 +171,7 @@ export const api = {
       `/api/clients/${clientId}/playbook?sort=${sort}&order=${order}&page=${page}&page_size=${pageSize}${symbol ? `&symbol=${symbol}` : ''}`
     ).then((r) => r),
   playbookByStock: (clientId) => req(`/api/clients/${clientId}/playbook/by-stock`).then((r) => r.data),
+  pnlCalendar: (clientId) => req(`/api/clients/${clientId}/pnl-calendar`).then((r) => r.data),
   // corporate actions — splits/bonus/demerger/buyback/dividends from NSE
   corpActions: (symbol) => req(`/api/corporate-actions?symbol=${symbol}`).then((r) => r.data),
   clientCorpActions: (clientId) => req(`/api/clients/${clientId}/corporate-actions`).then((r) => r.data),
@@ -242,3 +243,36 @@ export const inrFull = (n) =>
 export const pct = (n) => (n === null || n === undefined ? '—' : `${n > 0 ? '+' : ''}${Number(n).toFixed(2)}%`)
 // plain percentage with no +/- sign — for weights/shares, not gains
 export const pctPlain = (n) => (n === null || n === undefined ? '—' : `${Number(n).toFixed(2)}%`)
+
+// compact INR for heatmap cells (abbreviated, single digit precision)
+// +38k, -2.8k, etc. Used in calendar cells where space is tight
+export const inrCompact = (n) => {
+  if (n === null || n === undefined) return '—'
+  const abs = Math.abs(n)
+  const sign = n > 0 ? '+' : n < 0 ? '−' : ''
+  if (abs >= 1e7) return `${sign}${(abs / 1e7).toFixed(1)}Cr`
+  if (abs >= 1e5) return `${sign}${(abs / 1e5).toFixed(1)}L`
+  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(0)}k`
+  return `${sign}${Math.round(abs)}`
+}
+
+// Heat colour for P&L calendar: maps realised P&L to a 9-step diverging scale
+// Shades: 4 red (loss) + 1 neutral (flat/none) + 4 green (profit)
+// Intensity based on magnitude relative to the period's p90 (avoids outlier flatness)
+export const heatColor = (pnl, p90 = 10000) => {
+  if (pnl === null || pnl === undefined || pnl === 0) return 'var(--paper)' // flat/no trade
+  const intensity = Math.min(1, Math.abs(pnl) / p90)
+  if (pnl > 0) {
+    // green scale: g1 (lightest) -> g4 (darkest)
+    if (intensity < 0.25) return 'var(--g1)'
+    if (intensity < 0.5) return 'var(--g2)'
+    if (intensity < 0.75) return 'var(--g3)'
+    return 'var(--g4)'
+  } else {
+    // red scale: l1 (lightest) -> l4 (darkest)
+    if (intensity < 0.25) return 'var(--l1)'
+    if (intensity < 0.5) return 'var(--l2)'
+    if (intensity < 0.75) return 'var(--l3)'
+    return 'var(--l4)'
+  }
+}

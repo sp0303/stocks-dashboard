@@ -10,6 +10,7 @@ import { CorporateActionsFeed } from './CorporateActions.jsx'
 import { AccountSelector } from './AccountSelector.jsx'
 import { AccountManager } from './AccountManager.jsx'
 import { PortfolioViewer } from './PortfolioViewer.jsx'
+import PnlCalendar from './PnlCalendar.jsx'
 
 
 // One continuously-scrolling page: every section is always mounted, the nav
@@ -72,6 +73,10 @@ export default function ClientDashboard({ client }) {
 
         <Section sectionKey="performance" title="Performance" sectionRef={(el) => (sectionRefs.current.performance = el)}>
           <PerformanceSection client={client} reload={reload} onOpenStock={setSymbol} />
+        </Section>
+
+        <Section sectionKey="pnl-calendar" title="P&L Calendar" sectionRef={(el) => (sectionRefs.current['pnl-calendar'] = el)}>
+          <PnlCalendar clientId={client.id} />
         </Section>
 
         <Section sectionKey="dividends" title="Dividends" sectionRef={(el) => (sectionRefs.current.dividends = el)}>

@@ -10,8 +10,8 @@ export default defineConfig({
     host: true, // bind 0.0.0.0 so the Cloudflare tunnel can reach the dev server
     allowedHosts: ['stocks.sharatpatnayakuni.site', '.sharatpatnayakuni.site'],
     proxy: {
-      // still available for local dev if VITE_API_BASE is unset
-      '/api': 'http://127.0.0.1:8011',
+      // point to live server for testing (backend deployed there)
+      '/api': 'http://200.234.41.100:8010',
     },
   },
 })
