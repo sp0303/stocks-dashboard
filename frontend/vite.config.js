@@ -11,7 +11,7 @@ export default defineConfig({
     allowedHosts: ['stocks.sharatpatnayakuni.site', '.sharatpatnayakuni.site'],
     proxy: {
       // still available for local dev if VITE_API_BASE is unset
-      '/api': 'http://127.0.0.1:8010',
+      '/api': 'http://127.0.0.1:8011',
     },
   },
 })

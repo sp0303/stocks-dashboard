@@ -303,3 +303,73 @@ def compute_round_trips(trades: Iterable[dict]) -> list[dict]:
                     dq.popleft()
 
     return round_trips
+
+
+def split_intraday(trades: Iterable[dict]) -> tuple[list[dict], list[dict]]:
+    """Separate same-day round-trip (intraday/speculative) trades from delivery trades.
+
+    Zerodha's raw tradebook export carries no Product column (MIS vs CNC/NRML) — it's
+    just symbol/date/type/qty/price — so there is no direct broker signal for which
+    trades were intraday. That isn't a gap this has to work around: Indian tax law
+    (Section 43(5)) defines intraday itself this way — a buy and a sell of the SAME stock
+    on the SAME day, without taking delivery, IS speculative business income. Same-day
+    matching is the legally correct definition, not a heuristic.
+
+    For each (symbol, date) with trades on both sides: the smaller of that day's total
+    buy qty and total sell qty is the matched (intraday) quantity, valued at that day's
+    buy/sell VWAP (real fills are often several small lots at slightly different prices,
+    so VWAP is the fair price to attribute rather than picking one fill arbitrarily).
+    Any leftover — buy_qty != sell_qty for the day — genuinely changed the delivery
+    position and is kept as ONE synthetic row (at that day's VWAP, carrying isin/exchange/
+    series metadata from an actual row that day) so the FIFO engine still sees the right
+    net quantity and cash flow for what was actually taken into/out of delivery.
+
+    Returns (delivery_trades, intraday_trades). intraday_trades are summary records
+    ({symbol, date, quantity, buy_price, sell_price, pnl}), not raw buy/sell rows — there
+    is nothing further for the FIFO engine to do with a same-day round trip.
+    """
+    trades = list(trades)
+    by_day: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for t in trades:
+        by_day[(t.get("symbol"), t.get("trade_date"))].append(t)
+
+    delivery: list[dict] = []
+    intraday: list[dict] = []
+
+    for (symbol, day), rows in by_day.items():
+        buys = [r for r in rows if str(r.get("trade_type", "")).lower() == "buy"]
+        sells = [r for r in rows if str(r.get("trade_type", "")).lower() == "sell"]
+        buy_qty = sum(r["quantity"] for r in buys)
+        sell_qty = sum(r["quantity"] for r in sells)
+
+        if not buys or not sells or min(buy_qty, sell_qty) <= 0:
+            delivery.extend(rows)  # only one side traded this day — nothing to match
+            continue
+
+        matched = min(buy_qty, sell_qty)
+        buy_val = sum(r["quantity"] * r["price"] for r in buys)
+        sell_val = sum(r["quantity"] * r["price"] for r in sells)
+        vwap_buy = buy_val / buy_qty
+        vwap_sell = sell_val / sell_qty
+
+        intraday.append({
+            "symbol": symbol, "date": day, "quantity": round(matched, 6),
+            "buy_price": round(vwap_buy, 4), "sell_price": round(vwap_sell, 4),
+            "pnl": round(matched * (vwap_sell - vwap_buy), 2),
+        })
+
+        leftover = buy_qty - sell_qty  # >0: net buy carried to delivery; <0: net sell reduced a prior holding
+        if abs(leftover) > 1e-9:
+            side_rows = buys if leftover > 0 else sells
+            vwap = vwap_buy if leftover > 0 else vwap_sell
+            synthetic = {
+                **side_rows[0],
+                "quantity": round(abs(leftover), 6),
+                "price": round(vwap, 4),
+                "trade_type": "buy" if leftover > 0 else "sell",
+                "trade_id": f"{side_rows[0].get('trade_id', '')}-delivery",
+            }
+            delivery.append(synthetic)
+        # else: fully offset same day — nothing carries to delivery
+
+    return delivery, intraday

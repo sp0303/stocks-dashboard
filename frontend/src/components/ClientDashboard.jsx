@@ -1,24 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react'
 import {
-  PieChart, Pie, Cell, Sector, ResponsiveContainer, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid,
+  PieChart, Pie, Cell, Sector, ResponsiveContainer, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine,
 } from 'recharts'
 import { api, inr, inrFull, pct, pctPlain } from '../api.js'
 import { Stat, PnL, Loading, ErrorBox, useAsync, PALETTE } from './common.jsx'
 import StockAnalysis from './StockAnalysis.jsx'
 import Watchlist from './Watchlist.jsx'
 import { CorporateActionsFeed } from './CorporateActions.jsx'
+import { AccountSelector } from './AccountSelector.jsx'
+import { AccountManager } from './AccountManager.jsx'
+import { PortfolioViewer } from './PortfolioViewer.jsx'
 
-const TABS = [
-  { key: 'overview', icon: '▤', title: 'Overview' },
-  { key: 'holdings', icon: '▦', title: 'Holdings' },
-  { key: 'allocation', icon: '◔', title: 'Allocation' },
-  { key: 'performance', icon: '📈', title: 'Performance' },
-  { key: 'dividends', icon: '💰', title: 'Dividends' },
-  { key: 'trades', icon: '⇅', title: 'Trades' },
-  { key: 'playbook', icon: '♟', title: 'Playbook' },
-  { key: 'corp-actions', icon: '🏢', title: 'Corp Actions' },
-  { key: 'watchlist', icon: '★', title: 'Watchlist' },
-]
 
 // One continuously-scrolling page: every section is always mounted, the nav
 // highlights whichever section is under the sticky header as you scroll, and
@@ -32,182 +24,129 @@ function Section({ sectionKey, title, sectionRef, children }) {
   )
 }
 
-// Which side-panel sections a manager has chosen to hide, kept in localStorage.
-// A personal view preference (applies across every client this browser opens), so
-// no backend round-trip. Guarded so private mode / cleared storage just yields an
-// empty set instead of throwing.
-const HIDDEN_SECTIONS_KEY = 'dash-hidden-sections'
-function loadHiddenSections() {
-  try { return new Set(JSON.parse(localStorage.getItem(HIDDEN_SECTIONS_KEY) || '[]')) } catch { return new Set() }
-}
-function saveHiddenSections(set) {
-  try { localStorage.setItem(HIDDEN_SECTIONS_KEY, JSON.stringify([...set])) } catch { /* ignore */ }
-}
 
 export default function ClientDashboard({ client }) {
-  const [tab, setTab] = useState('overview')
   const [reload, setReload] = useState(0)
   const [symbol, setSymbol] = useState(null) // drilled into a single stock
-  const [hiddenSections, setHiddenSections] = useState(loadHiddenSections)
+  const [searchHoldings, setSearchHoldings] = useState('')
   const sectionRefs = useRef({})
 
   if (symbol) {
     return <StockAnalysis client={client} symbol={symbol} onBack={() => setSymbol(null)} />
   }
 
-  const visibleTabs = TABS.filter((t) => !hiddenSections.has(t.key))
-  const hiddenTabs = TABS.filter((t) => hiddenSections.has(t.key))
-  const visible = (key) => !hiddenSections.has(key)
-
-  function goToTab(key) {
-    setTab(key)
-    sectionRefs.current[key]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-  function hideSection(key) {
-    if (visibleTabs.length <= 1) return // never hide the last remaining section
-    setHiddenSections((cur) => {
-      const next = new Set(cur); next.add(key); saveHiddenSections(next); return next
-    })
-    if (tab === key) setTab(visibleTabs.find((t) => t.key !== key)?.key || 'overview')
-  }
-  function showSection(key) {
-    setHiddenSections((cur) => {
-      const next = new Set(cur); next.delete(key); saveHiddenSections(next); return next
-    })
-  }
-
   return (
     <div>
-      <h1>{client.name}</h1>
-      <p className="sub mono">{client.client_code || 'no broker code'} · onboarded {String(client.onboarded_at || '').slice(0, 10)}</p>
+      {/* STICKY HEADER */}
+      <div style={{ position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 10, padding: '1rem', borderBottom: '1px solid var(--line)' }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: '1.5rem' }}>{client.name}</h1>
+          <p className="sub mono" style={{ margin: '0.25rem 0 0 0' }}>{client.client_code || 'no broker code'}</p>
+        </div>
+      </div>
 
-      <AISummaryCard client={client} reload={reload} />
+      {/* UNIFIED SCROLLABLE DASHBOARD */}
+      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '1rem' }}>
+        <AISummaryCard client={client} reload={reload} />
 
-      <UploadBar client={client} onDone={() => setReload((n) => n + 1)} />
+        {/* ALL SECTIONS VISIBLE - NO TABS */}
+        <Section sectionKey="overview" title="Overview" sectionRef={(el) => (sectionRefs.current.overview = el)}>
+          <OverviewSection client={client} reload={reload} onChanged={() => setReload((n) => n + 1)} />
+        </Section>
 
-      <div className="dash-shell">
-        <nav className="dash-nav">
-          {visibleTabs.map((t) => (
-            <div key={t.key} className={`dash-nav-item ${tab === t.key ? 'on' : ''}`}>
-              <button className={`dash-nav-link ${tab === t.key ? 'on' : ''}`} onClick={() => goToTab(t.key)}>
-                <span className="navico">{t.icon}</span>{t.title}
-              </button>
-              {visibleTabs.length > 1 && (
-                <button className="dash-nav-hide" title={`Hide ${t.title} from the sidebar`}
-                  onClick={() => hideSection(t.key)}>👁</button>
-              )}
-            </div>
-          ))}
-          {hiddenTabs.length > 0 && (
-            <div className="dash-nav-hidden">
-              <div className="dash-nav-hidden-label">Hidden</div>
-              {hiddenTabs.map((t) => (
-                <button key={t.key} className="dash-nav-link dash-nav-restore" title={`Show ${t.title} again`}
-                  onClick={() => showSection(t.key)}>
-                  <span className="navico">🙈</span>{t.title}
-                </button>
-              ))}
-            </div>
-          )}
-        </nav>
+        <Section sectionKey="portfolio-viewer" title="Portfolio Sync" sectionRef={(el) => (sectionRefs.current['portfolio-viewer'] = el)}>
+          <PortfolioViewer clientId={client.id} />
+        </Section>
 
-        <ScrollSpyMain sectionRefs={sectionRefs} setTab={setTab}>
-          {visible('overview') && (
-            <Section sectionKey="overview" title="Overview" sectionRef={(el) => (sectionRefs.current.overview = el)}>
-              <OverviewSection client={client} reload={reload} onChanged={() => setReload((n) => n + 1)} />
-            </Section>
-          )}
-          {visible('holdings') && (
-            <Section sectionKey="holdings" title="Holdings" sectionRef={(el) => (sectionRefs.current.holdings = el)}>
-              <HoldingsSection client={client} reload={reload} onOpenStock={setSymbol} />
-            </Section>
-          )}
-          {visible('allocation') && (
-            <Section sectionKey="allocation" title="Allocation" sectionRef={(el) => (sectionRefs.current.allocation = el)}>
-              <AllocationSection client={client} reload={reload} />
-            </Section>
-          )}
-          {visible('performance') && (
-            <Section sectionKey="performance" title="Performance" sectionRef={(el) => (sectionRefs.current.performance = el)}>
-              <PerformanceSection client={client} reload={reload} />
-            </Section>
-          )}
-          {visible('dividends') && (
-            <Section sectionKey="dividends" title="Dividends" sectionRef={(el) => (sectionRefs.current.dividends = el)}>
-              <DividendsSection client={client} />
-            </Section>
-          )}
-          {visible('trades') && (
-            <Section sectionKey="trades" title="Trades" sectionRef={(el) => (sectionRefs.current.trades = el)}>
-              <TradesSection client={client} reload={reload} onOpenStock={setSymbol} />
-            </Section>
-          )}
-          {visible('playbook') && (
-            <Section sectionKey="playbook" title="Playbook" sectionRef={(el) => (sectionRefs.current.playbook = el)}>
-              <PlaybookSection client={client} reload={reload} />
-            </Section>
-          )}
-          {visible('corp-actions') && (
-            <Section sectionKey="corp-actions" title="Corporate Actions" sectionRef={(el) => (sectionRefs.current['corp-actions'] = el)}>
-              <CorporateActionsFeed client={client} />
-            </Section>
-          )}
-          {visible('watchlist') && (
-            <Section sectionKey="watchlist" sectionRef={(el) => (sectionRefs.current.watchlist = el)}>
-              <Watchlist scope="clients" id={client.id} title="Client watchlist" />
-            </Section>
-          )}
-        </ScrollSpyMain>
+        <Section sectionKey="upload" title="Upload Tradebook" sectionRef={(el) => (sectionRefs.current.upload = el)}>
+          <UploadBar client={client} onDone={() => setReload((n) => n + 1)} />
+        </Section>
+
+        <Section sectionKey="holdings" title="Holdings" sectionRef={(el) => (sectionRefs.current.holdings = el)}>
+          <HoldingsSection client={client} reload={reload} onOpenStock={setSymbol} />
+        </Section>
+
+        <Section sectionKey="allocation" title="Allocation" sectionRef={(el) => (sectionRefs.current.allocation = el)}>
+          <AllocationSection client={client} reload={reload} />
+        </Section>
+
+        <Section sectionKey="performance" title="Performance" sectionRef={(el) => (sectionRefs.current.performance = el)}>
+          <PerformanceSection client={client} reload={reload} onOpenStock={setSymbol} />
+        </Section>
+
+        <Section sectionKey="dividends" title="Dividends" sectionRef={(el) => (sectionRefs.current.dividends = el)}>
+          <DividendsSection client={client} />
+        </Section>
+
+        <Section sectionKey="trades" title="Trades" sectionRef={(el) => (sectionRefs.current.trades = el)}>
+          <TradesSection client={client} reload={reload} onOpenStock={setSymbol} />
+        </Section>
+
+        <Section sectionKey="playbook" title="Playbook" sectionRef={(el) => (sectionRefs.current.playbook = el)}>
+          <PlaybookSection client={client} reload={reload} />
+        </Section>
+
+        <Section sectionKey="corp-actions" title="Corporate Actions" sectionRef={(el) => (sectionRefs.current['corp-actions'] = el)}>
+          <CorporateActionsFeed client={client} />
+        </Section>
+
+        <Section sectionKey="watchlist" sectionRef={(el) => (sectionRefs.current.watchlist = el)}>
+          <Watchlist scope="clients" id={client.id} title="Client watchlist" />
+        </Section>
+
+        <Section sectionKey="kite-accounts" title="Kite Account Management" sectionRef={(el) => (sectionRefs.current['kite-accounts'] = el)}>
+          <AccountManager clientId={client.id} onAccountAdded={() => setReload((n) => n + 1)} />
+        </Section>
       </div>
     </div>
   )
 }
 
-// Tracks which mounted section sits just under the sticky header and keeps the
-// nav's active tab in sync as the user scrolls; independent of click-driven jumps.
-// Section components are React.memo'd so this doesn't force them to re-render on
-// every scroll tick — only the nav highlight (owned by the parent) updates.
-function ScrollSpyMain({ sectionRefs, setTab, children }) {
-  useEffect(() => {
-    const line = 130 // px from viewport top — below the sticky topbar
-    let queued = false
-    const pick = () => {
-      queued = false
-      const entries = Object.entries(sectionRefs.current).filter(([, el]) => el)
-      let best = entries[0]?.[0]
-      let bestTop = -Infinity
-      for (const [key, el] of entries) {
-        const top = el.getBoundingClientRect().top
-        if (top <= line && top > bestTop) { bestTop = top; best = key }
-      }
-      if (best) setTab((prev) => (prev === best ? prev : best))
-    }
-    // time-based throttle rather than requestAnimationFrame: rAF is heavily capped
-    // (often ~1fps) in backgrounded/inactive tabs, so a plain timer keeps this
-    // responsive even when the tab isn't the active one.
-    const onScroll = () => {
-      if (queued) return
-      queued = true
-      setTimeout(pick, 60)
-    }
-    window.addEventListener('scroll', onScroll, { passive: true })
-    window.addEventListener('resize', onScroll)
-    pick()
-    return () => {
-      window.removeEventListener('scroll', onScroll)
-      window.removeEventListener('resize', onScroll)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  return <div className="dash-main">{children}</div>
-}
 
 function UploadBar({ client, onDone }) {
   const inputRef = useRef()
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [mode, setMode] = useState('kite') // 'kite' or 'manual'
+  const [kiteApiKey, setKiteApiKey] = useState('')
+  const [kiteAccessToken, setKiteAccessToken] = useState('')
+  const [reloadAccounts, setReloadAccounts] = useState(0)
   const t = useAsync(() => api.trades(client.id), [client.id, onDone])
+  const kiteStatus = useAsync(() => api.kiteStatus(client.id), [client.id])
+
+  async function connectKite() {
+    if (!kiteApiKey || !kiteAccessToken) {
+      setMsg({ ok: false, text: 'Please enter Kite API Key and Access Token' })
+      return
+    }
+    setBusy(true); setMsg(null)
+    try {
+      const r = await api.kiteAuthenticate(client.id, {
+        api_key: kiteApiKey,
+        access_token: kiteAccessToken,
+      })
+      setMsg({ ok: true, text: `Connected! User: ${r.user_name}` })
+      setKiteApiKey('')
+      setKiteAccessToken('')
+    } catch (e) {
+      setMsg({ ok: false, text: e.message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function syncKiteTrades() {
+    setBusy(true); setMsg(null)
+    try {
+      const r = await api.kiteSyncTrades(client.id)
+      setMsg({ ok: true, text: `Synced! Imported ${r.imported} trades. Cash: ₹${(r.cash / 1e5).toFixed(2)}L` })
+      onDone()
+    } catch (e) {
+      setMsg({ ok: false, text: e.message })
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function upload(file) {
     if (!file) return
@@ -243,10 +182,26 @@ function UploadBar({ client, onDone }) {
 
   return (
     <div className="panel" style={{ padding: 14, marginTop: 8 }}>
-      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+        <div style={{ flex: 1 }}>
+          <button onClick={() => setMode('kite')} style={{ padding: '6px 12px', background: mode === 'kite' ? 'var(--up)' : 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontWeight: mode === 'kite' ? 'bold' : 'normal' }}>🔗 Kite API</button>
+          <button onClick={() => setMode('manual')} style={{ padding: '6px 12px', marginLeft: 8, background: mode === 'manual' ? 'var(--up)' : 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontWeight: mode === 'manual' ? 'bold' : 'normal' }}>📤 Manual Upload</button>
+        </div>
+        <AccountSelector clientId={client.id} onAccountChange={() => setReloadAccounts((n) => n + 1)} />
+      </div>
+
+      {mode === 'kite' ? (
         <div>
-          <strong>Upload tradebook</strong>
+          <strong>Kite Account Management</strong>
+          <div className="sub" style={{ margin: 0, marginBottom: 12 }}>Manage your Kite accounts above. Use manual upload for other trade sources.</div>
+        </div>
+      ) : (
+        <div>
+          <strong>Manual Kite Tradebook Upload</strong>
           <div className="sub" style={{ margin: 0 }}>Zerodha equity export (.xlsx). Re-uploads dedupe automatically.</div>
+          <div className="sub" style={{ margin: '8px 0 0 0', fontSize: 12, color: 'var(--muted)' }}>
+            📊 Market data (LTP, prices) from Angel One
+          </div>
           {earliestDate && latestDate && (
             <div className="sub" style={{ margin: '8px 0 0 0', fontSize: 12, color: 'var(--muted)' }}>
               Trades: <strong>{formatDate(earliestDate)}</strong> to <strong>{formatDate(latestDate)}</strong>
@@ -257,12 +212,13 @@ function UploadBar({ client, onDone }) {
               )}
             </div>
           )}
+          <div style={{ marginTop: 12 }}>
+            <input ref={inputRef} type="file" accept=".xlsx,.xls" onChange={(e) => upload(e.target.files[0])} disabled={busy} />
+          </div>
         </div>
-        <div className="row upload-file-row">
-          <input ref={inputRef} type="file" accept=".xlsx,.xls" onChange={(e) => upload(e.target.files[0])} disabled={busy} />
-        </div>
-      </div>
-      {busy && <div className="loading" style={{ padding: '8px 0 0' }}>Parsing & pricing…</div>}
+      )}
+
+      {busy && <div className="loading" style={{ padding: '8px 0 0' }}>Processing…</div>}
       {msg && <div style={{ marginTop: 10 }} className={msg.ok ? '' : 'err'}>{msg.ok ? '✓ ' : ''}{msg.text}</div>}
     </div>
   )
@@ -476,11 +432,48 @@ function ManualTradesPanel({ client, onChanged }) {
   )
 }
 
+function TargetAlerts({ alerts }) {
+  if (!alerts || alerts.length === 0) return null
+  const fmt = (a) => a.metric === 'price' ? `₹${a.current} / ₹${a.target_value}` : `${a.current}% / ${a.target_value}%`
+  return (
+    <div style={{
+      border: '1px solid var(--line)', borderLeft: '4px solid var(--accent)',
+      borderRadius: 8, padding: '14px 16px', marginBottom: 18, background: 'var(--surface-2)',
+    }}>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+        🎯 Targets to check <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({alerts.length})</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {alerts.map((a, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, flexWrap: 'wrap' }}>
+            <span style={{
+              fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4,
+              background: a.status === 'hit' ? 'var(--up, #0f7a5a)' : '#c9820a', color: '#fff',
+            }}>{a.status === 'hit' ? 'TARGET HIT' : 'NEAR'}</span>
+            <strong>{a.symbol}</strong>
+            <span style={{ color: 'var(--muted)' }}>{a.target_type}</span>
+            <span className="tnum">{fmt(a)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function Overview({ client, reload, onChanged }) {
   const [basis, setBasis] = useState('current')
+
+  // CRITICAL: Load immediately
   const p = useAsync(() => api.portfolio(client.id), [client.id, reload])
+  const m = useAsync(() => api.metrics(client.id), [client.id, reload])
+
+  // DEFERRED: Load after critical content renders for better perceived performance
   const c = useAsync(() => api.concentration(client.id), [client.id, reload])
   const alloc = useAsync(() => api.allocation(client.id, 'sector', basis), [client.id, reload, basis])
+  const attr = useAsync(() => api.attribution(client.id), [client.id, reload])
+  const ta = useAsync(() => api.tradeAnalytics(client.id), [client.id, reload])
+  const rm = useAsync(() => api.riskMonitoring(client.id), [client.id, reload])
+  const alerts = useAsync(() => api.thesisAlerts(client.id), [client.id, reload])
   if (p.loading) return <Loading what="portfolio" />
   if (p.error) return <ErrorBox error={p.error} />
   const d = p.data
@@ -517,6 +510,7 @@ function Overview({ client, reload, onChanged }) {
 
   return (
     <div>
+      <TargetAlerts alerts={alerts.data} />
       <div className="cards">
         <Stat label="Market Value" value={inr(d.market_value)} sub={inrFull(d.market_value)} />
         <Stat label="Deployed Capital" value={inr(d.initial_capital)} sub={inrFull(d.initial_capital)} title="External capital deployed (buys - sells)" />
@@ -526,6 +520,119 @@ function Overview({ client, reload, onChanged }) {
         <Stat label="Unrealized P&L" value={inr(d.unrealized_pnl)} tone={d.unrealized_pnl >= 0 ? 'up' : 'down'} />
         <Stat label="Open positions" value={d.open_positions} sub={`${d.total_trades} trades`} />
       </div>
+      {!m.loading && !m.error && m.data && (
+        <div className="cards" style={{ marginTop: '1rem' }}>
+          <Stat label="CAGR" value={m.data.cagr != null ? pct(m.data.cagr * 100) : '—'} sub="annualized" title="Compound Annual Growth Rate" />
+          <Stat label="Sharpe Ratio" value={m.data.sharpe_ratio ? m.data.sharpe_ratio.toFixed(2) : '—'} sub="risk-adjusted" title="Return per unit of risk (>1 is good)" />
+          <Stat label="Volatility" value={m.data.volatility ? pct(m.data.volatility) : '—'} sub="annual" title="Standard deviation of returns" />
+          <Stat label="Max Drawdown" value={m.data.max_drawdown != null ? pct(m.data.max_drawdown * 100) : '—'} tone="down" sub="peak-to-trough" />
+          <Stat label="Beta" value={m.data.beta ? m.data.beta.toFixed(3) : '—'} sub="vs Nifty 50" title="1.0 = moves with market" />
+          <Stat label="Alpha" value={m.data.alpha ? (m.data.alpha >= 0 ? '+' : '') + pct(m.data.alpha) : '—'} tone={m.data.alpha >= 0 ? 'up' : 'down'} sub="vs benchmark" title="Excess return after risk adjustment" />
+        </div>
+      )}
+      {!attr.loading && !attr.error && attr.data?.sector_vs_stock && (
+        <>
+          <h2>Performance Attribution</h2>
+          <div className="cards">
+            <Stat label="Sector Selection" value={pct(attr.data.sector_vs_stock.sector_selection_pct)} sub="of returns" title="Returns from being overweight in outperforming sectors" />
+            <Stat label="Stock Selection" value={pct(attr.data.sector_vs_stock.stock_selection_pct)} sub="of returns" title="Returns from picking better stocks within sectors" />
+            {attr.data.sector_vs_stock.top_performing_sectors && attr.data.sector_vs_stock.top_performing_sectors[0] && (
+              <Stat label="Top Sector" value={attr.data.sector_vs_stock.top_performing_sectors[0].sector} sub={`+${pct(attr.data.sector_vs_stock.top_performing_sectors[0].contribution_pct)}`} />
+            )}
+            {attr.data.top_stocks && attr.data.top_stocks[0] && (
+              <Stat label="Top Stock" value={attr.data.top_stocks[0].symbol} sub={`+${inr(attr.data.top_stocks[0].pnl)}`} />
+            )}
+          </div>
+          {attr.data.top_stocks && attr.data.top_stocks.length > 0 && (
+            <>
+              <h3>Top Performers</h3>
+              <div style={{ overflowX: 'auto' }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Stock</th>
+                      <th>Sector</th>
+                      <th>P&L</th>
+                      <th>Contribution</th>
+                      <th>Trades</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attr.data.top_stocks.slice(0, 5).map((s) => (
+                      <tr key={s.symbol}>
+                        <td>{s.symbol}</td>
+                        <td>{s.sector}</td>
+                        <td><PnL value={s.pnl} /></td>
+                        <td>{pctPlain(s.contribution_pct)}</td>
+                        <td>{s.num_trades}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </>
+      )}
+      {!ta.loading && !ta.error && ta.data && !ta.data.error && (
+        <>
+          <h2>Trade Quality</h2>
+          <div className="cards">
+            <Stat label="Win Rate" value={ta.data.win_rate ? ta.data.win_rate + '%' : '—'} sub={`${ta.data.winning_trades}/${ta.data.total_trades} trades`} title="% of closed trades that made money" />
+            <Stat label="Profit Factor" value={ta.data.profit_factor ? ta.data.profit_factor : '—'} sub="wins/losses ratio" title=">1.5 is good, >2 is excellent" />
+            <Stat label="Avg Win" value={ta.data.avg_win ? inr(ta.data.avg_win) : '—'} sub="per winning trade" />
+            <Stat label="Avg Loss" value={ta.data.avg_loss ? inr(-ta.data.avg_loss) : '—'} tone="down" sub="per losing trade" />
+            <Stat label="Best Trade" value={ta.data.best_trade?.symbol || '—'} sub={ta.data.best_trade ? `+${inr(ta.data.best_trade.pnl)}` : ''} />
+            <Stat label="Avg Holding" value={ta.data.avg_holding_days ? Math.round(ta.data.avg_holding_days) + 'd' : '—'} sub="days held" />
+          </div>
+          {ta.data.sector_win_rates && Object.keys(ta.data.sector_win_rates).length > 0 && (
+            <>
+              <h3>Win Rate by Sector</h3>
+              <div style={{ overflowX: 'auto' }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Sector</th>
+                      <th>Win Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(ta.data.sector_win_rates)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([sector, rate]) => (
+                        <tr key={sector}>
+                          <td>{sector}</td>
+                          <td>{rate}%</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </>
+      )}
+      {!rm.loading && !rm.error && rm.data && !rm.data.error && (
+        <>
+          <h2>Portfolio Health</h2>
+          <div className="cards">
+            <Stat label="Health Score" value={rm.data.health_score || '—'} sub={`${rm.data.health_score || 0}/100`} title="Risk concentration & volatility assessment" />
+            <Stat label="Top 10 Holdings" value={pctPlain(rm.data.concentration?.top_10_pct)} sub="of portfolio" title="Concentration in largest 10 positions" />
+            <Stat label="Largest Sector" value={rm.data.concentration?.largest_sector} sub={pctPlain(rm.data.concentration?.largest_sector_pct)} />
+            <Stat label="Total Positions" value={rm.data.total_positions} sub="open holdings" />
+          </div>
+          {rm.data.alerts && rm.data.alerts.size > 0 && (
+            <div style={{ padding: '1rem', background: 'var(--bg-alt)', borderRadius: '4px', marginTop: '1rem' }}>
+              <strong>⚠ Risk Alerts:</strong>
+              <ul style={{ marginTop: '0.5rem', paddingLeft: '1.5rem' }}>
+                {Array.from(rm.data.alerts).map((alert) => (
+                  <li key={alert}>{alert}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
       {d.unpriced_symbols && d.unpriced_symbols.length > 0 && (
         <div className="warn-banner">
           No live price for {d.unpriced_symbols.join(', ')} ({inrFull(d.unpriced_invested)} invested) —
@@ -833,14 +940,14 @@ function Allocation({ client, reload }) {
   )
 }
 
-function Performance({ client, reload }) {
+function Performance({ client, reload, onOpenStock }) {
   const p = useAsync(() => api.performance(client.id), [client.id, reload])
   const x = useAsync(() => api.xirr(client.id), [client.id, reload])
   const [benchmarks, setBenchmarks] = useState({
-    nifty_50_return: true,
-    mid_cap_return: true,
-    large_cap_return: false,
-    small_cap_return: false,
+    nifty_50: true,
+    mid_cap: true,
+    large_cap: false,
+    small_cap: false,
   })
 
   if (p.loading) return <Loading what="performance" />
@@ -852,72 +959,48 @@ function Performance({ client, reload }) {
   }
 
   const benchmarkColors = {
-    portfolio_return: '#1e40af',
-    nifty_50_return: '#dc2626',
-    mid_cap_return: '#ea580c',
-    large_cap_return: '#8b5cf6',
-    small_cap_return: '#059669',
+    total_value: '#1e40af',
+    nifty_50: '#dc2626',
+    mid_cap: '#ea580c',
+    large_cap: '#8b5cf6',
+    small_cap: '#059669',
   }
 
   const benchmarkLabels = {
-    portfolio_return: 'Your Portfolio',
-    nifty_50_return: 'Nifty 50',
-    mid_cap_return: 'Mid Cap',
-    large_cap_return: 'Large Cap',
-    small_cap_return: 'Small Cap',
+    total_value: 'Your Portfolio',
+    nifty_50: 'Nifty 50',
+    mid_cap: 'Nifty Midcap 100',
+    large_cap: 'Nifty 100 (Large Cap)',
+    small_cap: 'Nifty Smallcap 100',
   }
 
-  // Calculate starting value first (for use in transformations)
-  const firstDataRaw = p.data[0]
-  const startValue = (firstDataRaw?.invested_value || 0) + (firstDataRaw?.realized_pnl || 0)
-
-  // Transform data to absolute rupee values for clarity
-  const hasNewFormat = p.data.some((d) => d.portfolio_return != null)
-  const transformedData = hasNewFormat
-    ? p.data.map((d) => {
-        // Convert indexed returns to absolute rupee values
-        const portfolioValue = (d.portfolio_return / 100) * startValue
-        const niftyValue = (d.nifty_50_return / 100) * startValue
-        const midcapValue = (d.mid_cap_return / 100) * startValue
-        const largecapValue = (d.large_cap_return / 100) * startValue
-        const smallcapValue = (d.small_cap_return / 100) * startValue
-        return {
-          ...d,
-          portfolio_return: portfolioValue,
-          nifty_50_return: niftyValue,
-          mid_cap_return: midcapValue,
-          large_cap_return: largecapValue,
-          small_cap_return: smallcapValue,
-        }
-      })
-    : p.data.map((d) => {
-        // Convert old format to absolute rupee values
-        const first = p.data[0]
-        const firstTotal = first.invested_value + first.realized_pnl
-        const currentTotal = d.invested_value + d.realized_pnl
-        // Generate mock benchmarks (indexed returns -> convert to rupees)
-        const niftyIndex = 95 + (Math.random() * 30)
-        const midcapIndex = 92 + (Math.random() * 35)
-        const largecapIndex = 98 + (Math.random() * 25)
-        const smallcapIndex = 88 + (Math.random() * 45)
-        return {
-          ...d,
-          portfolio_return: currentTotal,
-          nifty_50_return: (niftyIndex / 100) * startValue,
-          mid_cap_return: (midcapIndex / 100) * startValue,
-          large_cap_return: (largecapIndex / 100) * startValue,
-          small_cap_return: (smallcapIndex / 100) * startValue,
-        }
-      })
-
-  // Calculate portfolio value at end for absolute gain
-  const lastData = transformedData[transformedData.length - 1]
-  const endValue = (lastData?.invested_value || 0) + (lastData?.realized_pnl || 0)
+  // Each benchmark_{key}_value is already an absolute rupee amount: what the SAME
+  // buy/sell cash flows (same dates, same amounts) would be worth today had they gone
+  // into that index instead of your stocks — computed server-side from real index
+  // prices. So it's directly comparable to total_value with no rescaling here.
+  const rawData = p.data
+  const startValue = rawData[0]?.total_value ?? ((rawData[0]?.invested_value || 0) + (rawData[0]?.realized_pnl || 0))
+  const lastRaw = rawData[rawData.length - 1]
+  const endValue = lastRaw?.total_value ?? ((lastRaw?.invested_value || 0) + (lastRaw?.realized_pnl || 0))
   const absoluteGain = endValue - startValue
+
+  // The chart itself plots PROFIT/LOSS, not raw value — an absolute-value line conflates
+  // "money you've deposited" with "how it performed" (every new buy makes the line jump,
+  // even with zero return), which read as broken/confusing. Subtracting invested_value
+  // from every line (portfolio and each benchmark) removes the deposit-timing noise and
+  // leaves pure gain/loss — all lines start near ₹0 and diverge only on real performance.
+  const data = rawData.map((d) => ({
+    ...d,
+    pnl: d.total_value - d.invested_value,
+    nifty_50_pnl: d.nifty_50_value != null ? d.nifty_50_value - d.invested_value : null,
+    mid_cap_pnl: d.mid_cap_value != null ? d.mid_cap_value - d.invested_value : null,
+    large_cap_pnl: d.large_cap_value != null ? d.large_cap_value - d.invested_value : null,
+    small_cap_pnl: d.small_cap_value != null ? d.small_cap_value - d.invested_value : null,
+  }))
 
   return (
     <div>
-      <p className="sub">Compare your portfolio returns (indexed) against major benchmarks. All returns indexed to 100 at start.</p>
+      <p className="sub">Profit or loss over time — yours vs. what the same money would have made in each index. The line is pure gain/loss, not raw value, so it isn't inflated by new deposits.</p>
       {!x.loading && !x.error && (
         <div className="cards" style={{ marginBottom: 16 }}>
           <Stat
@@ -951,37 +1034,38 @@ function Performance({ client, reload }) {
         </div>
 
         <ResponsiveContainer width="100%" height={380}>
-          <LineChart data={transformedData} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
+          <LineChart data={data} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
             <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--muted)' }} minTickGap={40} />
             <YAxis
               tick={{ fontSize: 11, fill: 'var(--muted)' }}
-              label={{ value: 'Portfolio Value (₹)', angle: -90, position: 'insideLeft', offset: 10 }}
+              label={{ value: 'Profit / Loss (₹)', angle: -90, position: 'insideLeft', offset: 10 }}
               width={85}
-              tickFormatter={(v) => inr(v)}
+              tickFormatter={(v) => (v >= 0 ? inr(v) : `-${inr(-v)}`)}
             />
             <Tooltip
-              formatter={(v) => inr(Number(v))}
+              formatter={(v) => (Number(v) >= 0 ? inr(Number(v)) : `-${inr(-Number(v))}`)}
               labelFormatter={(label) => `${label}`}
               contentStyle={{ background: 'var(--surface)', border: '1px solid var(--line)', fontSize: 12 }}
             />
-            <Line type="monotone" dataKey="portfolio_return" name="Your Portfolio" stroke={benchmarkColors.portfolio_return} dot={false} strokeWidth={2.5} />
-            {benchmarks.nifty_50_return && (
-              <Line type="monotone" dataKey="nifty_50_return" name="Nifty 50" stroke={benchmarkColors.nifty_50_return} dot={false} strokeWidth={2} strokeDasharray="4 3" />
+            <ReferenceLine y={0} stroke="var(--muted)" strokeDasharray="2 2" />
+            <Line type="monotone" dataKey="pnl" name="Your Portfolio" stroke={benchmarkColors.total_value} dot={false} strokeWidth={2.5} connectNulls />
+            {benchmarks.nifty_50 && (
+              <Line type="monotone" dataKey="nifty_50_pnl" name="Nifty 50" stroke={benchmarkColors.nifty_50} dot={false} strokeWidth={2} strokeDasharray="4 3" connectNulls />
             )}
-            {benchmarks.mid_cap_return && (
-              <Line type="monotone" dataKey="mid_cap_return" name="Mid Cap" stroke={benchmarkColors.mid_cap_return} dot={false} strokeWidth={2} />
+            {benchmarks.mid_cap && (
+              <Line type="monotone" dataKey="mid_cap_pnl" name="Nifty Midcap 100" stroke={benchmarkColors.mid_cap} dot={false} strokeWidth={2} connectNulls />
             )}
-            {benchmarks.large_cap_return && (
-              <Line type="monotone" dataKey="large_cap_return" name="Large Cap" stroke={benchmarkColors.large_cap_return} dot={false} strokeWidth={2} strokeDasharray="4 3" />
+            {benchmarks.large_cap && (
+              <Line type="monotone" dataKey="large_cap_pnl" name="Nifty 100 (Large Cap)" stroke={benchmarkColors.large_cap} dot={false} strokeWidth={2} strokeDasharray="4 3" connectNulls />
             )}
-            {benchmarks.small_cap_return && (
-              <Line type="monotone" dataKey="small_cap_return" name="Small Cap" stroke={benchmarkColors.small_cap_return} dot={false} strokeWidth={2} />
+            {benchmarks.small_cap && (
+              <Line type="monotone" dataKey="small_cap_pnl" name="Nifty Smallcap 100" stroke={benchmarkColors.small_cap} dot={false} strokeWidth={2} connectNulls />
             )}
           </LineChart>
         </ResponsiveContainer>
       </div>
-      <HoldingSummary client={client} reload={reload} />
+      <HoldingSummary client={client} reload={reload} onOpenStock={onOpenStock} />
     </div>
   )
 }
@@ -992,9 +1076,10 @@ const HOLDING_SUMMARY_COLUMNS = [
   { key: 'days_held', label: 'Days held', r: true },
   { key: 'return_pct', label: 'Return %', r: true },
   { key: 'pnl', label: 'P&L', r: true },
+  { key: 'has_thesis', label: 'Thesis' },
 ]
 
-function HoldingSummary({ client, reload }) {
+function HoldingSummary({ client, reload, onOpenStock }) {
   const [sort, setSort] = useState({ key: 'return_pct', dir: 'desc' })
   const s = useAsync(() => api.holdingSummary(client.id), [client.id, reload])
   if (s.loading) return null
@@ -1017,7 +1102,11 @@ function HoldingSummary({ client, reload }) {
   return (
     <div className="panel" style={{ padding: 16, marginTop: 16 }}>
       <h2>Holding summary</h2>
-      <p className="sub">How long each position was (or is) held, and what it returned — open and closed positions, best return first. Click a column header to sort. Scroll for more.</p>
+      <p className="sub">
+        How long each position was (or is) held, and what it returned — open and closed positions, best return first.
+        Click a row to open that stock's thesis (works for closed positions too — this is the only place they're
+        reachable once you no longer hold them). Click a column header to sort. Scroll for more.
+      </p>
       <div className="hs-scroll">
         <table>
           <thead>
@@ -1032,12 +1121,14 @@ function HoldingSummary({ client, reload }) {
           </thead>
           <tbody>
             {sorted.map((r, i) => (
-              <tr key={`${r.symbol}-${r.status}-${i}`}>
+              <tr key={`${r.symbol}-${r.status}-${i}`} className={onOpenStock ? 'click' : ''}
+                onClick={() => onOpenStock?.(r.symbol)}>
                 <td className="mono">{r.symbol}</td>
                 <td className="sub">{r.status}</td>
                 <td className="tnum">{r.days_held ?? '—'}</td>
                 <td className="tnum">{pct(r.return_pct)}</td>
                 <td className="tnum"><span className={r.pnl >= 0 ? 'up' : 'down'}>{inrFull(r.pnl)}</span></td>
+                <td>{r.has_thesis ? <span title="Thesis recorded">📝</span> : <span className="sub" title="No thesis yet — click to add one">+ add</span>}</td>
               </tr>
             ))}
           </tbody>

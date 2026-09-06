@@ -22,6 +22,12 @@ _STOCK_MASTER: dict[str, tuple[str, str]] = {}
 _CLASSIFICATION_CACHE: dict[str, dict] = {}
 _CACHE_INITIALIZED = False
 
+# Negative cache for failed yfinance classification lookups: symbol -> unix ts of last
+# failure. Prevents re-hitting a rate-limited Yahoo on every request (the cause of ~30s
+# holdings loads). Retried after the TTL so genuinely new symbols eventually resolve.
+_FAILED_LOOKUPS: dict[str, float] = {}
+_FAILED_LOOKUP_TTL = 6 * 3600  # 6 hours
+
 # Non-equity asset classes
 _ASSET_CLASS_OVERRIDE = {
     "NIFTYBEES": "ETF",
@@ -109,15 +115,24 @@ def classify(symbol: str) -> dict:
         cached = _CLASSIFICATION_CACHE[symbol]
         return {"symbol": symbol, "sector": cached["sector"], "cap": cached["cap"], "asset_class": asset_class}
 
+    # Negative cache: a recent failed lookup means Yahoo is rate-limiting or the symbol
+    # isn't resolvable. Don't re-hit Yahoo on every request — that's what made holdings
+    # take ~30s (one slow, retried 429 per unclassified symbol). Retry only after a cooldown.
+    failed_at = _FAILED_LOOKUPS.get(symbol)
+    if failed_at and (time.time() - failed_at) < _FAILED_LOOKUP_TTL:
+        return {"symbol": symbol, "sector": "Unclassified", "cap": "—", "asset_class": asset_class}
+
     # Try external lookup (yfinance)
     result = _fetch_from_nse_yfinance(symbol)
     if result:
         # Store in cache for future use
         _CLASSIFICATION_CACHE[symbol] = result
+        _FAILED_LOOKUPS.pop(symbol, None)
         # Return to caller
         return {"symbol": symbol, "sector": result["sector"], "cap": result["cap"], "asset_class": asset_class}
 
-    # Fallback: unknown stock
+    # Fallback: unknown stock — remember the failure so we don't retry it every request.
+    _FAILED_LOOKUPS[symbol] = time.time()
     return {"symbol": symbol, "sector": "Unclassified", "cap": "—", "asset_class": asset_class}
 
 

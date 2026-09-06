@@ -1,0 +1,255 @@
+.portfolio-viewer {
+  padding: 20px;
+  background: #fafafa;
+  border-radius: 8px;
+  margin: 20px 0;
+}
+
+.portfolio-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+  border-bottom: 2px solid #e0e0e0;
+  padding-bottom: 15px;
+}
+
+.portfolio-header h2 {
+  margin: 0;
+  font-size: 24px;
+  color: #333;
+}
+
+.user-info {
+  margin: 5px 0 0 0;
+  font-size: 13px;
+  color: #666;
+}
+
+.btn-fetch {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.btn-fetch:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.6);
+}
+
+.btn-fetch:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.status-message {
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin-bottom: 15px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.status-message.success {
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+.status-message.error {
+  background: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+}
+
+.portfolio-empty {
+  text-align: center;
+  padding: 40px;
+  background: white;
+  border-radius: 6px;
+  color: #999;
+}
+
+/* Summary Cards */
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 15px;
+  margin-bottom: 30px;
+}
+
+.card {
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border-left: 4px solid #667eea;
+}
+
+.card-label {
+  font-size: 12px;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.card-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #333;
+  margin-bottom: 6px;
+}
+
+.card-value.gain {
+  color: #10b981;
+}
+
+.card-value.loss {
+  color: #ef4444;
+}
+
+.card-meta {
+  font-size: 13px;
+  color: #666;
+}
+
+.card-meta.gain {
+  color: #10b981;
+}
+
+.card-meta.loss {
+  color: #ef4444;
+}
+
+/* Holdings Section */
+.holdings-section,
+.trades-section {
+  margin-bottom: 30px;
+}
+
+.holdings-section h3,
+.trades-section h3 {
+  margin: 0 0 15px 0;
+  font-size: 18px;
+  color: #333;
+  font-weight: 600;
+}
+
+.empty-message {
+  text-align: center;
+  color: #999;
+  padding: 20px;
+  font-size: 14px;
+}
+
+/* Tables */
+.holdings-table-wrapper,
+.trades-table-wrapper {
+  background: white;
+  border-radius: 8px;
+  overflow-x: auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.holdings-table,
+.trades-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.holdings-table thead,
+.trades-table thead {
+  background: #f5f5f5;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.holdings-table th,
+.trades-table th {
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 600;
+  color: #333;
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+}
+
+.holdings-table tbody tr,
+.trades-table tbody tr {
+  border-bottom: 1px solid #e0e0e0;
+  transition: background 0.2s ease;
+}
+
+.holdings-table tbody tr:hover,
+.trades-table tbody tr:hover {
+  background: #f9f9f9;
+}
+
+.holdings-table td,
+.trades-table td {
+  padding: 12px 16px;
+  color: #333;
+}
+
+.holdings-table td.stock-name,
+.trades-table td.stock-name {
+  font-weight: 600;
+  color: #667eea;
+}
+
+.holdings-table tr.gain td,
+.trades-table tr.gain td {
+  color: #10b981;
+}
+
+.holdings-table tr.loss td,
+.trades-table tr.loss td {
+  color: #ef4444;
+}
+
+.holdings-table tr.buy td,
+.trades-table tr.buy td {
+  color: #10b981;
+}
+
+.holdings-table tr.sell td,
+.trades-table tr.sell td {
+  color: #ef4444;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .portfolio-header {
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .btn-fetch {
+    width: 100%;
+  }
+
+  .summary-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .holdings-table,
+  .trades-table {
+    font-size: 12px;
+  }
+
+  .holdings-table th,
+  .trades-table th,
+  .holdings-table td,
+  .trades-table td {
+    padding: 8px 12px;
+  }
+}

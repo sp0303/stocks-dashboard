@@ -195,6 +195,29 @@ class BaseStore:
     # stock thesis — investment rationale, catalysts, risks, etc.
     async def get_stock_thesis(self, client_id: str, symbol: str) -> dict | None: ...
     async def save_stock_thesis(self, client_id: str, symbol: str, thesis: dict) -> dict: ...
+    async def list_stock_theses(self, client_id: str) -> list[dict]: ...
+
+    # Angel One market data credentials
+    async def save_angel_credentials(self, client_id: str, credentials: dict) -> None: ...
+    async def get_angel_credentials(self, client_id: str) -> dict | None: ...
+
+    # Kite broker integration (trades + account data)
+    async def save_kite_credentials(self, client_id: str, credentials: dict) -> None: ...
+    async def get_kite_credentials(self, client_id: str) -> dict | None: ...
+
+    # Multi-account Kite support
+    async def list_kite_accounts(self, client_id: str) -> list[dict]: ...
+    async def add_kite_account(self, client_id: str, account: dict) -> dict: ...
+    async def get_kite_account(self, client_id: str, account_id: str) -> dict | None: ...
+    async def update_kite_account(self, client_id: str, account_id: str, patch: dict) -> dict | None: ...
+    async def delete_kite_account(self, client_id: str, account_id: str) -> bool: ...
+    async def set_active_kite_account(self, client_id: str, account_id: str) -> dict | None: ...
+    async def save_kite_account_profile(self, client_id: str, account_id: str, profile: dict) -> None: ...
+    async def get_kite_account_profile(self, client_id: str, account_id: str) -> dict | None: ...
+
+    # Portfolio snapshots - cached portfolio data from manual sync
+    async def save_portfolio_snapshot(self, client_id: str, portfolio_data: dict) -> None: ...
+    async def get_portfolio_snapshot(self, client_id: str) -> dict | None: ...
 
 
 # --------------------------------------------------------------------------- #
@@ -656,6 +679,66 @@ class JsonStore(BaseStore):
             self._flush()
         return thesis
 
+    async def list_stock_theses(self, client_id: str):
+        prefix = f"{client_id}:"
+        out = []
+        for key, thesis in self._db.get("thesis", {}).items():
+            if key.startswith(prefix):
+                out.append({"symbol": key[len(prefix):], **thesis})
+        return out
+
+    # Broker credentials (stubs for JSON store)
+    async def save_angel_credentials(self, client_id: str, credentials: dict) -> None:
+        pass  # JSON store doesn't persist broker credentials
+
+    async def get_angel_credentials(self, client_id: str) -> dict | None:
+        return None  # Not implemented for JSON store
+
+    async def save_kite_credentials(self, client_id: str, credentials: dict) -> None:
+        pass  # JSON store doesn't persist broker credentials
+
+    async def get_kite_credentials(self, client_id: str) -> dict | None:
+        return None  # Not implemented for JSON store
+
+    async def save_kite_sync_cache(self, client_id: str, data: dict) -> None:
+        pass  # JSON store doesn't cache Kite data
+
+    async def get_kite_sync_cache(self, client_id: str) -> dict | None:
+        return None  # Not implemented for JSON store
+
+    # Multi-account Kite support (stubs)
+    async def list_kite_accounts(self, client_id: str) -> list[dict]:
+        return []
+
+    async def add_kite_account(self, client_id: str, account: dict) -> dict:
+        return account
+
+    async def get_kite_account(self, client_id: str, account_id: str) -> dict | None:
+        return None
+
+    async def update_kite_account(self, client_id: str, account_id: str, patch: dict) -> dict | None:
+        return None
+
+    async def delete_kite_account(self, client_id: str, account_id: str) -> bool:
+        return False
+
+    async def set_active_kite_account(self, client_id: str, account_id: str) -> dict | None:
+        return None
+
+    async def save_kite_account_profile(self, client_id: str, account_id: str, profile: dict) -> None:
+        pass
+
+    async def get_kite_account_profile(self, client_id: str, account_id: str) -> dict | None:
+        return None
+
+    async def save_portfolio_snapshot(self, client_id: str, portfolio_data: dict) -> None:
+        """Cache portfolio snapshot (JSON store - stubs)."""
+        pass
+
+    async def get_portfolio_snapshot(self, client_id: str) -> dict | None:
+        """Get cached portfolio snapshot (JSON store - stubs)."""
+        return None
+
 
 # --------------------------------------------------------------------------- #
 # Mongo backend
@@ -689,6 +772,18 @@ class MongoStore(BaseStore):
         await self.db.corporate_actions.create_index("key", unique=True)
         await self.db.corporate_actions.create_index([("isin", 1)])
         await self.db.corporate_actions.create_index([("symbol", 1)])
+
+        # Load stock classifications (seed CSV + any persisted overrides) so sector/cap
+        # resolve locally. Without this, MongoStore left the seed master empty and every
+        # holding fell through to a rate-limited Yahoo lookup → "Unclassified".
+        from app.services import securities
+
+        stored: dict[str, dict] = {}
+        async for doc in self.db.classifications.find():
+            sym = doc.get("symbol")
+            if sym:
+                stored[sym] = {"sector": doc.get("sector"), "cap": doc.get("cap")}
+        securities.init_cache(stored)
 
     async def close(self):
         if self.client:
@@ -1030,6 +1125,271 @@ class MongoStore(BaseStore):
             upsert=True
         )
         return doc
+
+    async def list_stock_theses(self, client_id: str):
+        return [self._clean(d) async for d in self.db.thesis.find({"client_id": client_id})]
+
+    # ── Angel One credentials ──────────────────────────────────────────────
+    async def save_angel_credentials(self, client_id: str, credentials: dict):
+        """Store Angel One credentials for a client (encrypted in DB)."""
+        from cryptography.fernet import Fernet
+        import json
+
+        key = Fernet.generate_key()
+        cipher = Fernet(key)
+        encrypted = cipher.encrypt(json.dumps(credentials).encode()).decode()
+
+        await self.db.angel_credentials.update_one(
+            {"client_id": client_id},
+            {"$set": {"client_id": client_id, "credentials": encrypted, "key": key.decode()}},
+            upsert=True,
+        )
+
+    async def get_angel_credentials(self, client_id: str) -> dict | None:
+        """Retrieve and decrypt Angel One credentials for a client."""
+        from cryptography.fernet import Fernet
+        import json
+
+        doc = await self.db.angel_credentials.find_one({"client_id": client_id})
+        if not doc:
+            return None
+
+        try:
+            key = doc.get("key").encode() if isinstance(doc.get("key"), str) else doc.get("key")
+            cipher = Fernet(key)
+            decrypted = cipher.decrypt(doc.get("credentials").encode()).decode()
+            return json.loads(decrypted)
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to decrypt Angel credentials for {client_id}: {e}")
+            return None
+
+    async def save_kite_credentials(self, client_id: str, credentials: dict) -> None:
+        """Store Kite credentials encrypted for a client."""
+        from cryptography.fernet import Fernet
+        import json
+
+        key = Fernet.generate_key()
+        cipher = Fernet(key)
+        encrypted = cipher.encrypt(json.dumps(credentials).encode()).decode()
+
+        await self.db.kite_credentials.update_one(
+            {"client_id": client_id},
+            {"$set": {"client_id": client_id, "credentials": encrypted, "key": key.decode()}},
+            upsert=True,
+        )
+
+    async def get_kite_credentials(self, client_id: str) -> dict | None:
+        """Retrieve and decrypt Kite credentials for a client."""
+        from cryptography.fernet import Fernet
+        import json
+
+        doc = await self.db.kite_credentials.find_one({"client_id": client_id})
+        if not doc:
+            return None
+
+        try:
+            key = doc.get("key").encode() if isinstance(doc.get("key"), str) else doc.get("key")
+            cipher = Fernet(key)
+            decrypted = cipher.decrypt(doc.get("credentials").encode()).decode()
+            return json.loads(decrypted)
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to decrypt Kite credentials for {client_id}: {e}")
+            return None
+
+    async def save_kite_sync_cache(self, client_id: str, data: dict) -> None:
+        """Cache Kite sync data (trades, holdings, cash) to avoid rate limits."""
+        from datetime import datetime
+        await self.db.kite_sync_cache.update_one(
+            {"client_id": client_id},
+            {
+                "$set": {
+                    "client_id": client_id,
+                    "trades": data.get("trades", []),
+                    "holdings": data.get("holdings", []),
+                    "cash": data.get("cash", {}),
+                    "synced_at": datetime.utcnow(),
+                }
+            },
+            upsert=True,
+        )
+
+    async def get_kite_sync_cache(self, client_id: str) -> dict | None:
+        """Get cached Kite sync data if available."""
+        doc = await self.db.kite_sync_cache.find_one({"client_id": client_id})
+        if not doc:
+            return None
+        return {
+            "trades": doc.get("trades", []),
+            "holdings": doc.get("holdings", []),
+            "cash": doc.get("cash", {}),
+            "synced_at": doc.get("synced_at"),
+        }
+
+    async def list_kite_accounts(self, client_id: str) -> list[dict]:
+        """List all Kite accounts for a client."""
+        doc = await self.db.kite_accounts.find_one({"client_id": client_id})
+        if not doc:
+            return []
+        return doc.get("accounts", [])
+
+    async def add_kite_account(self, client_id: str, account: dict) -> dict:
+        """Add a new Kite account for a client."""
+        from cryptography.fernet import Fernet
+        import json
+        from datetime import datetime
+
+        # Generate account ID if not provided
+        if "id" not in account:
+            account["id"] = _new_id()
+
+        # Encrypt credentials
+        key = Fernet.generate_key()
+        cipher = Fernet(key)
+        creds_to_encrypt = {
+            "api_key": account.get("api_key"),
+            "api_secret": account.get("api_secret"),
+            "user_id": account.get("user_id"),
+            "password": account.get("password"),
+            "totp_secret": account.get("totp_secret"),
+        }
+        encrypted = cipher.encrypt(json.dumps(creds_to_encrypt).encode()).decode()
+
+        # Build account doc
+        account_doc = {
+            "id": account["id"],
+            "name": account.get("name", f"Account {account['id'][:8]}"),
+            "owner": account.get("owner", ""),
+            "credentials_encrypted": encrypted,
+            "credentials_key": key.decode(),
+            "is_active": account.get("is_active", False),
+            "created_at": datetime.utcnow(),
+            "synced_at": None,
+        }
+
+        # Update accounts list
+        await self.db.kite_accounts.update_one(
+            {"client_id": client_id},
+            {"$push": {"accounts": account_doc}},
+            upsert=True,
+        )
+        return account_doc
+
+    async def get_kite_account(self, client_id: str, account_id: str) -> dict | None:
+        """Get a specific Kite account with decrypted credentials."""
+        from cryptography.fernet import Fernet
+        import json
+
+        doc = await self.db.kite_accounts.find_one({"client_id": client_id})
+        if not doc:
+            return None
+
+        account = next((a for a in doc.get("accounts", []) if a["id"] == account_id), None)
+        if not account:
+            return None
+
+        # Decrypt credentials
+        try:
+            key = account.get("credentials_key").encode() if isinstance(account.get("credentials_key"), str) else account.get("credentials_key")
+            cipher = Fernet(key)
+            decrypted = cipher.decrypt(account.get("credentials_encrypted").encode()).decode()
+            creds = json.loads(decrypted)
+            return {**account, "credentials": creds}
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to decrypt Kite account {account_id}: {e}")
+            return account
+
+    async def update_kite_account(self, client_id: str, account_id: str, patch: dict) -> dict | None:
+        """Update a Kite account (non-credential fields only)."""
+        from datetime import datetime
+
+        allowed_fields = {"name", "owner", "is_active"}
+        update_patch = {k: v for k, v in patch.items() if k in allowed_fields}
+        update_patch["updated_at"] = datetime.utcnow()
+
+        result = await self.db.kite_accounts.update_one(
+            {"client_id": client_id, "accounts.id": account_id},
+            {"$set": {f"accounts.$[elem].{k}": v for k, v in update_patch.items()}},
+            array_filters=[{"elem.id": account_id}],
+        )
+        if result.matched_count == 0:
+            return None
+
+        return await self.get_kite_account(client_id, account_id)
+
+    async def delete_kite_account(self, client_id: str, account_id: str) -> bool:
+        """Delete a Kite account."""
+        result = await self.db.kite_accounts.update_one(
+            {"client_id": client_id},
+            {"$pull": {"accounts": {"id": account_id}}},
+        )
+        return result.modified_count > 0
+
+    async def set_active_kite_account(self, client_id: str, account_id: str) -> dict | None:
+        """Set a Kite account as active (deactivate others)."""
+        # Deactivate all accounts
+        await self.db.kite_accounts.update_one(
+            {"client_id": client_id},
+            {"$set": {"accounts.$[].is_active": False}},
+        )
+        # Activate the selected account
+        await self.db.kite_accounts.update_one(
+            {"client_id": client_id, "accounts.id": account_id},
+            {"$set": {"accounts.$[elem].is_active": True}},
+            array_filters=[{"elem.id": account_id}],
+        )
+        return await self.get_kite_account(client_id, account_id)
+
+    async def save_kite_account_profile(self, client_id: str, account_id: str, profile: dict) -> None:
+        """Save user profile from Kite (fetched once at account creation)."""
+        from datetime import datetime
+
+        await self.db.kite_accounts.update_one(
+            {"client_id": client_id, "accounts.id": account_id},
+            {
+                "$set": {
+                    "accounts.$[elem].profile": profile,
+                    "accounts.$[elem].profile_fetched_at": datetime.utcnow(),
+                }
+            },
+            array_filters=[{"elem.id": account_id}],
+        )
+
+    async def get_kite_account_profile(self, client_id: str, account_id: str) -> dict | None:
+        """Get cached user profile from Kite."""
+        doc = await self.db.kite_accounts.find_one({"client_id": client_id})
+        if not doc:
+            return None
+
+        account = next((a for a in doc.get("accounts", []) if a["id"] == account_id), None)
+        if not account:
+            return None
+
+        return account.get("profile")
+
+    async def save_portfolio_snapshot(self, client_id: str, portfolio_data: dict) -> None:
+        """Save portfolio snapshot (holdings, trades, margins, summary)."""
+        from datetime import datetime
+        await self.db.portfolio_snapshots.update_one(
+            {"client_id": client_id},
+            {
+                "$set": {
+                    "client_id": client_id,
+                    "data": portfolio_data,
+                    "synced_at": datetime.utcnow(),
+                }
+            },
+            upsert=True,
+        )
+
+    async def get_portfolio_snapshot(self, client_id: str) -> dict | None:
+        """Get latest cached portfolio snapshot."""
+        doc = await self.db.portfolio_snapshots.find_one({"client_id": client_id})
+        if not doc:
+            return None
+        return doc.get("data")
 
 
 # --------------------------------------------------------------------------- #

@@ -3,9 +3,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Explicitly load .env file
+env_file_path = BASE_DIR / ".env"
+if env_file_path.exists():
+    load_dotenv(env_file_path)
 
 
 class Settings(BaseSettings):
@@ -24,6 +30,9 @@ class Settings(BaseSettings):
     quote_cache_ttl_seconds: int = 900  # 15 min
     yf_suffix_default: str = ".NS"       # NSE; BSE-only symbols fall back to .BO
 
+    # Kite data caching (avoid rate limit exhaustion)
+    kite_sync_cache_ttl_seconds: int = 86400  # 24 hours
+
     # Angel One SmartAPI — preferred quote + historical source. Logs in programmatically
     # via TOTP (no browser redirect), free, and includes historical candles. When all
     # four are set, quotes/history come from Angel; otherwise the app falls back to Yahoo.
@@ -37,6 +46,22 @@ class Settings(BaseSettings):
         return bool(
             self.angel_api_key.strip() and self.angel_client_id.strip()
             and self.angel_pin.strip() and self.angel_totp_secret.strip()
+        )
+
+    # Kite broker API — persistent session, auto-authenticate from .env
+    kite_enabled: bool = False
+    kite_api_key: str = ""
+    kite_api_secret: str = ""
+    kite_user_id: str = ""
+    kite_password: str = ""
+    kite_totp_secret: str = ""
+
+    @property
+    def kite_ready(self) -> bool:
+        return bool(
+            self.kite_enabled and self.kite_api_key.strip()
+            and self.kite_api_secret.strip() and self.kite_user_id.strip()
+            and self.kite_password.strip() and self.kite_totp_secret.strip()
         )
 
     # CORS — the React dev server / GitHub Pages origin

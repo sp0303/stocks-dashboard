@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { api, inr, inrFull, pct } from '../api.js'
 import { Stat, Loading, ErrorBox, useAsync } from './common.jsx'
 
@@ -21,6 +21,12 @@ function Body({ d, clientId, symbol, thesisData, onThesisUpdate }) {
   const [thesis, setThesis] = useState(thesisData || {})
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
+
+  // thesisData is fetched async (separate from stock data), so it can arrive after this
+  // component mounts. Without syncing, the read-only view stays empty until you hit Edit.
+  useEffect(() => {
+    if (thesisData) setThesis(thesisData)
+  }, [thesisData])
 
   const handleThesisSave = async () => {
     setSaving(true)
@@ -221,13 +227,16 @@ function ThesisView({ thesis }) {
     { key: 'thesis', label: 'Thesis' },
     { key: 'variant_view', label: 'Variant View' },
     { key: 'catalysts', label: 'Catalysts' },
-    { key: 'time_horizon', label: 'Time Horizon' },
     { key: 'key_assumptions', label: 'Key Assumptions' },
     { key: 'valuation', label: 'Valuation' },
     { key: 'expected_return', label: 'Expected Return' },
     { key: 'risks', label: 'Risks' },
     { key: 'risk_reward_ratio', label: 'Risk Reward Ratio' },
   ]
+
+  // Time horizon: a custom pick stores 'custom' + a date; show the date, not the word.
+  const horizon = thesis.time_horizon === 'custom' ? thesis.custom_date : thesis.time_horizon
+  const hasTarget = thesis.target_type && thesis.target_value
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -237,6 +246,18 @@ function ThesisView({ thesis }) {
           <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{thesis[f.key]}</div>
         </div>
       ))}
+      {horizon && (
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, color: 'var(--accent)' }}>Time Horizon</div>
+          <div style={{ fontSize: 13, lineHeight: 1.6 }}>{horizon}</div>
+        </div>
+      )}
+      {hasTarget && (
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, color: 'var(--accent)' }}>Target Alert</div>
+          <div style={{ fontSize: 13, lineHeight: 1.6 }}>{thesis.target_type}: <strong>{thesis.target_value}</strong></div>
+        </div>
+      )}
     </div>
   )
 }

@@ -3,15 +3,15 @@
   "configurations": [
     {
       "name": "backend",
-      "runtimeExecutable": "backend/.venv/bin/uvicorn",
-      "runtimeArgs": ["app.main:app", "--app-dir", "backend", "--host", "127.0.0.1", "--port", "8010"],
+      "runtimeExecutable": "/Volumes/SSD/stocks-dashboard/backend/.venv/bin/uvicorn",
+      "runtimeArgs": ["app.main:app", "--app-dir", "/Volumes/SSD/stocks-dashboard/backend", "--host", "127.0.0.1", "--port", "8010"],
       "port": 8010,
       "url": "http://127.0.0.1:8010"
     },
     {
       "name": "frontend",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
+      "runtimeArgs": ["--prefix", "/Volumes/SSD/stocks-dashboard/frontend", "run", "dev"],
       "port": 5180,
       "url": "http://127.0.0.1:5180"
     }

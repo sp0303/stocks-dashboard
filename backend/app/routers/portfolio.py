@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from starlette.concurrency import run_in_threadpool
 
+import asyncio
 import hashlib
 import uuid
 
@@ -13,7 +14,7 @@ from app.models.schemas import (
     DividendCreate, DividendUpdate, ManualTradeCreate, TagCreate, TagUpdate, TradeNoteUpdate, TradeTagsUpdate,
 )
 from app.services import analytics
-from app.services.engine import compute_positions
+from app.services.engine import compute_positions, split_intraday
 from app.services.llm import fallback_narrate, narrate
 from app.services.market_data import get_dividend_history
 from app.store import get_store
@@ -22,14 +23,28 @@ router = APIRouter(prefix="/api/clients", tags=["portfolio"])
 
 BENCHMARK_SYMBOL = "^NSEI"
 
+# Real NSE index tickers backing the Performance chart's benchmark comparison — each
+# verified to return live Yahoo chart data. "Large Cap" is Nifty 100 (broader than the
+# Nifty 50 line itself, matching what the UI's checkbox implies).
+BENCHMARK_INDEX_SYMBOLS = {
+    "nifty_50": "^NSEI",
+    "mid_cap": "^CRSMID",
+    "large_cap": "^CNX100",
+    # ^CNXSC (Nifty Smallcap 100) only exposes ~1 day of history on Yahoo's chart
+    # endpoint — verified dead end. NIFTYSMLCAP250.NS is the same index family under its
+    # .NS-suffixed ticker and does carry a real daily history there.
+    "small_cap": "NIFTYSMLCAP250.NS",
+}
 
-async def _benchmark_price_map(trades: list[dict]) -> dict[str, float]:
-    """Cached-first Nifty close series covering the client's trading history. Only the
-    dates missing from the store's `benchmark_prices` cache are fetched from Yahoo."""
+
+async def _benchmark_price_map(trades: list[dict], symbol: str = BENCHMARK_SYMBOL) -> dict[str, float]:
+    """Cached-first index close series covering the client's trading history. Only the
+    dates missing from the store's `benchmark_prices` cache (keyed per symbol) are
+    fetched from Yahoo."""
     if not trades:
         return {}
     store = get_store()
-    cached = await store.get_benchmark_prices(BENCHMARK_SYMBOL)
+    cached = await store.get_benchmark_prices(symbol)
     first_trade_date = min(t["trade_date"] for t in trades)
     today = date.today().strftime("%Y-%m-%d")
 
@@ -37,19 +52,20 @@ async def _benchmark_price_map(trades: list[dict]) -> dict[str, float]:
     if cached and have_recent and min(cached.keys()) <= first_trade_date:
         return cached
 
-    # Index tickers (^NSEI) don't take the NSE/.NS suffix rewrite that get_history applies
+    # Index tickers (^XXXX) don't take the NSE/.NS suffix rewrite that get_history applies
     # to equities, so fetch the raw ticker directly.
-    fetched = _fetch_index_history(first_trade_date, today)
+    fetched = _fetch_index_history(symbol, first_trade_date, today)
     new_prices = {p["date"]: p["close"] for p in fetched}
     if new_prices:
-        await store.save_benchmark_prices(BENCHMARK_SYMBOL, new_prices)
+        await store.save_benchmark_prices(symbol, new_prices)
     merged = {**cached, **new_prices}
     return merged
 
 
-def _fetch_index_history(from_date: str, to_date: str) -> list[dict]:
-    """`^NSEI` needs the raw Yahoo ticker (no .NS/.BO suffix), so this bypasses
-    market_data.get_history's equity-ticker rewriting and hits the chart endpoint directly."""
+def _fetch_index_history(symbol: str, from_date: str, to_date: str) -> list[dict]:
+    """Index tickers (^XXXX) need the raw Yahoo ticker (no .NS/.BO suffix), so this
+    bypasses market_data.get_history's equity-ticker rewriting and hits the chart
+    endpoint directly."""
     import time as _time
     from datetime import datetime, timezone
 
@@ -64,7 +80,7 @@ def _fetch_index_history(from_date: str, to_date: str) -> list[dict]:
     p2 = int(_time.time())
 
     for host in _CHART_HOSTS:
-        url = f"{host}/v8/finance/chart/{BENCHMARK_SYMBOL}?period1={p1}&period2={p2}&interval=1d"
+        url = f"{host}/v8/finance/chart/{symbol}?period1={p1}&period2={p2}&interval=1d"
         try:
             r = httpx.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12.0)
             if r.status_code != 200:
@@ -81,11 +97,30 @@ def _fetch_index_history(from_date: str, to_date: str) -> list[dict]:
     return []
 
 
-async def _trades_or_404(client_id: str) -> list[dict]:
+async def _raw_trades_or_404(client_id: str) -> list[dict]:
+    """Every stored trade, unfiltered — same-day intraday round trips included. Only for
+    endpoints that must show the literal trade ledger (the Trades tab, manual-trade
+    listing), not derived analysis."""
     store = get_store()
     if not await store.get_client(client_id):
         raise HTTPException(404, "client not found")
     return await store.list_trades(client_id)
+
+
+async def _trades_or_404(client_id: str) -> list[dict]:
+    """Delivery/swing trades only — same-day round trips (intraday/speculative, per
+    Section 43(5)) are split out by engine.split_intraday() so they don't pollute avg
+    cost, holding days, playbook, and performance stats built on top of this. This is
+    what every holdings/analysis endpoint should use; see _raw_trades_or_404 for the
+    unfiltered ledger and _delivery_and_intraday() when the intraday side is also needed
+    (e.g. to report intraday P&L separately)."""
+    delivery, _ = await _delivery_and_intraday(client_id)
+    return delivery
+
+
+async def _delivery_and_intraday(client_id: str) -> tuple[list[dict], list[dict]]:
+    trades = await _raw_trades_or_404(client_id)
+    return split_intraday(trades)
 
 
 async def _client_or_404(client_id: str) -> dict:
@@ -161,16 +196,171 @@ async def concentration(client_id: str):
     return {"data": analytics.concentration(trades)}
 
 
+async def compute_performance_series(trades: list[dict], actions: list[dict]) -> list[dict]:
+    """Portfolio value over time (marked to market with real historical prices, not just
+    cost basis) plus, for each benchmark index, what the SAME buy/sell cash flows would be
+    worth today had they gone into that index instead. Both sides are real value curves
+    computed from real prices on the same dates — a true apples-to-apples comparison.
+    Shared by the single-client /performance route and the manager-level book/individual
+    comparison endpoint, so both use identical, real (non-mocked) methodology."""
+    from app.services import market_data
+
+    series = analytics.performance_series(trades)
+    if not trades:
+        return series
+
+    # Mark the portfolio's own line to market: fetch each traded symbol's historical
+    # close series and revalue open positions day-by-day, instead of the cost-basis
+    # fallback already in `series` (which silently omits unrealized gains/losses).
+    exchange_by_symbol = {t["symbol"]: t.get("exchange") or "NSE" for t in trades}
+    first_trade_date = min((t["trade_date"] for t in trades), default=None)
+    if first_trade_date:
+        symbols = sorted(exchange_by_symbol)
+
+        async def _history_for(sym: str) -> tuple[str, dict[str, float]]:
+            result = await run_in_threadpool(
+                market_data.get_history, sym, first_trade_date, "1d", exchange_by_symbol[sym]
+            )
+            return sym, {p["date"]: p["close"] for p in result.get("points", [])}
+
+        histories = await asyncio.gather(*(_history_for(s) for s in symbols))
+        price_maps = {sym: prices for sym, prices in histories if prices}
+        if price_maps:
+            mtm = {row["date"]: row["market_value"] for row in analytics.market_value_series(trades, price_maps, actions)}
+            for row in series:
+                if row["date"] in mtm:
+                    row["total_value"] = mtm[row["date"]]
+
+    for key, symbol in BENCHMARK_INDEX_SYMBOLS.items():
+        prices = await _benchmark_price_map(trades, symbol)
+        if not prices:
+            continue
+        bench = {row["date"]: row["benchmark_value"] for row in analytics.benchmark_series(trades, prices)}
+        for row in series:
+            row[f"{key}_value"] = bench.get(row["date"])
+
+    return series
+
+
 @router.get("/{client_id}/performance")
 async def performance(client_id: str):
     trades = await _trades_or_404(client_id)
-    series = analytics.performance_series(trades)
-    prices = await _benchmark_price_map(trades)
-    if prices:
-        bench = {row["date"]: row["benchmark_value"] for row in analytics.benchmark_series(trades, prices)}
-        for row in series:
-            row["benchmark_value"] = bench.get(row["date"])
+    actions = await _actions_for(trades)
+    series = await compute_performance_series(trades, actions)
     return {"data": series}
+
+
+@router.get("/{client_id}/metrics")
+async def metrics(client_id: str, response: Response):
+    """Phase 1: Core performance metrics (CAGR, Sharpe, volatility, drawdown, beta, alpha).
+    Compares portfolio against Nifty 50 benchmark. Cache for 5 minutes."""
+    # Add cache headers to reduce redundant calculations on client-side
+    response.headers["Cache-Control"] = "public, max-age=300"
+
+    trades = await _trades_or_404(client_id)
+    actions = await _actions_for(trades)
+
+    # Get portfolio performance series
+    performance_series = await compute_performance_series(trades, actions)
+
+    # Override the last row with current market data from holdings
+    if performance_series:
+        holdings_data = analytics.build_holdings(trades, with_prices=True, actions=actions or [])
+        current_invested = holdings_data["totals"]["invested_value"]
+        current_market_value = holdings_data["totals"]["market_value"]
+        current_unrealized = holdings_data["totals"]["unrealized_pnl"]
+
+        # Get realized P&L (constant, from closed trades)
+        _, realized = analytics.compute_positions(trades, actions=actions or [])
+
+        current_total_pnl = current_unrealized + realized
+        current_total_value = current_invested + current_total_pnl
+
+        # Update or append today's row with real current values
+        from datetime import date
+        today_str = str(date.today())
+        today_row_idx = -1
+        for i, row in enumerate(performance_series):
+            if row["date"] == today_str:
+                today_row_idx = i
+                break
+
+        if today_row_idx >= 0:
+            # Update existing today row
+            performance_series[today_row_idx]["invested_value"] = round(current_invested, 2)
+            performance_series[today_row_idx]["realized_pnl"] = round(realized, 2)
+            performance_series[today_row_idx]["total_value"] = round(current_total_value, 2)
+            performance_series[today_row_idx]["portfolio_return"] = round(
+                (current_total_value / (performance_series[0]["invested_value"] if performance_series[0]["invested_value"] > 0 else 1)) * 100, 2
+            )
+        elif performance_series[-1]["date"] != today_str:
+            # Append new today row
+            performance_series.append({
+                "date": today_str,
+                "invested_value": round(current_invested, 2),
+                "realized_pnl": round(realized, 2),
+                "total_value": round(current_total_value, 2),
+                "portfolio_return": round(
+                    (current_total_value / (performance_series[0]["invested_value"] if performance_series[0]["invested_value"] > 0 else 1)) * 100, 2
+                ),
+            })
+
+    # Extract benchmark series (Nifty 50 for comparison)
+    nifty_series = None
+    if performance_series:
+        nifty_series = [
+            {"date": row["date"], "total_value": row.get("nifty_50_value")}
+            for row in performance_series
+            if row.get("nifty_50_value") is not None
+        ]
+
+    # Calculate all Phase 1 metrics
+    metrics_data = analytics.compute_performance_metrics(
+        performance_series,
+        benchmark_performance=nifty_series,
+        risk_free_rate=0.065  # Current RBI repo rate
+    )
+
+    return {"data": metrics_data}
+
+
+@router.get("/{client_id}/attribution")
+async def attribution(client_id: str, response: Response):
+    """Phase 2: Performance attribution (sector vs stock selection breakdown).
+    Shows where returns came from: sector timing vs picking good stocks within sectors.
+    Cache for 5 minutes."""
+    # Add cache headers
+    response.headers["Cache-Control"] = "public, max-age=300"
+
+    trades = await _trades_or_404(client_id)
+    actions = await _actions_for(trades)
+    performance_series = await compute_performance_series(trades, actions)
+
+    # Calculate all Phase 2 attribution metrics
+    attribution_data = analytics.compute_attribution_metrics(
+        performance_series,
+        trades
+    )
+
+    return {"data": attribution_data}
+
+
+@router.get("/{client_id}/trade-analytics")
+async def trade_analytics(client_id: str):
+    """Phase 3: Trade quality metrics (win rate, profit factor, best/worst trades)."""
+    trades = await _trades_or_404(client_id)
+    analytics_data = analytics.compute_trade_analytics(trades)
+    return {"data": analytics_data}
+
+
+@router.get("/{client_id}/risk-monitoring")
+async def risk_monitoring(client_id: str):
+    """Phase 4: Risk monitoring (concentration, health score, alerts)."""
+    trades = await _trades_or_404(client_id)
+    actions = await _actions_for(trades)
+    performance_series = await compute_performance_series(trades, actions)
+    risk_data = analytics.compute_risk_monitoring(performance_series, trades)
+    return {"data": risk_data}
 
 
 @router.get("/{client_id}/xirr")
@@ -188,8 +378,9 @@ async def trades(
     trade_type: str | None = None,
     tag: str | None = None,
 ):
+    """Raw trade ledger — every buy/sell including same-day intraday round trips."""
     store = get_store()
-    ts = await _trades_or_404(client_id)
+    ts = await _raw_trades_or_404(client_id)
     if symbol:
         ts = [t for t in ts if t["symbol"] == symbol.upper()]
     if trade_type:
@@ -300,9 +491,17 @@ async def playbook_by_stock(client_id: str):
 async def holding_summary(client_id: str):
     """Per-stock 'held N days, made/lost X%' rows — fast, no LLM call. The narrative
     is a separate endpoint (below) so the table renders immediately instead of
-    waiting 1-3s on Cloudflare; the frontend lazy-loads the narrative after."""
+    waiting 1-3s on Cloudflare; the frontend lazy-loads the narrative after.
+    Includes has_thesis per row so closed/no-longer-held positions (this table is the
+    only place they're reachable — the Holdings tab only lists what's still open) show
+    whether an investment thesis was ever recorded for them."""
     trades = await _trades_or_404(client_id)
     rows = analytics.holding_summary(trades)
+    store = get_store()
+    theses = await store.list_stock_theses(client_id)
+    symbols_with_thesis = {t["symbol"] for t in theses if t.get("thesis") or t.get("target_type")}
+    for row in rows:
+        row["has_thesis"] = row["symbol"] in symbols_with_thesis
     return {"data": {"rows": rows}}
 
 
@@ -414,7 +613,7 @@ async def dividend_suggestions(client_id: str, symbol: str | None = None):
 async def list_manual_trades(client_id: str):
     """Opening/adjustment trades added by hand (source='manual') — for shares not in
     the uploaded tradebook (IPO allotments, bonus/split, pre-window holdings)."""
-    trades = await _trades_or_404(client_id)
+    trades = await _raw_trades_or_404(client_id)
     manual = [t for t in trades if t.get("source") == "manual"]
     manual.sort(key=lambda t: (t["trade_date"], t.get("symbol", "")))
     return {"data": manual}
@@ -475,11 +674,505 @@ async def stock(client_id: str, symbol: str):
 @router.get("/{client_id}/stocks/{symbol}/thesis")
 async def get_stock_thesis(client_id: str, symbol: str):
     await _client_or_404(client_id)
+    store = get_store()
     thesis = await store.get_stock_thesis(client_id, symbol)
     return {"data": thesis or {}}
 
 @router.post("/{client_id}/stocks/{symbol}/thesis")
 async def save_stock_thesis(client_id: str, symbol: str, body: dict):
     await _client_or_404(client_id)
+    store = get_store()
     result = await store.save_stock_thesis(client_id, symbol, body)
     return {"data": result}
+
+
+@router.get("/{client_id}/thesis-alerts")
+async def thesis_alerts(client_id: str):
+    """Home-page alerts: currently-held stocks whose thesis target (price or return) has
+    been reached ('hit') or is within 10% of being reached ('near'). Drives the
+    'Targets to check' card on the client overview."""
+    await _client_or_404(client_id)
+    store = get_store()
+    theses = await store.list_stock_theses(client_id)
+    targeted = [t for t in theses if t.get("target_type") and str(t.get("target_value") or "").strip()]
+    if not targeted:
+        return {"data": []}
+
+    trades = await store.list_trades(client_id)
+    holdings_data = analytics.build_holdings(trades, actions=await _actions_for(trades))
+    holdings = {h["symbol"]: h for h in holdings_data.get("holdings", [])}
+
+    alerts = []
+    for t in targeted:
+        sym = t["symbol"]
+        h = holdings.get(sym)
+        if not h:
+            continue  # target only meaningful for a position still held
+        try:
+            target_val = float(str(t["target_value"]).replace("%", "").replace("₹", "").replace(",", "").strip())
+        except (ValueError, TypeError):
+            continue
+        if target_val == 0:
+            continue
+
+        ttype = t["target_type"]
+        if "Price" in ttype:
+            current = h.get("ltp") or 0
+            metric = "price"
+        else:  # Return Target (%)
+            current = h.get("unrealized_pct")
+            metric = "return"
+        if current is None:
+            continue
+
+        progress = current / target_val * 100
+        hit = current >= target_val
+        near = (not hit) and progress >= 90
+        if hit or near:
+            alerts.append({
+                "symbol": sym,
+                "target_type": ttype,
+                "target_value": target_val,
+                "current": round(current, 2),
+                "metric": metric,
+                "status": "hit" if hit else "near",
+                "progress_pct": round(progress, 1),
+            })
+
+    # hit first, then nearest to target
+    alerts.sort(key=lambda a: (a["status"] != "hit", -a["progress_pct"]))
+    return {"data": alerts}
+
+
+# ── Kite broker integration (trades + account data) ────────────────────────────────────
+@router.post("/{client_id}/broker/kite/authenticate")
+async def kite_authenticate(client_id: str, credentials: dict):
+    """Authenticate with Kite and store encrypted credentials for persistent access.
+    Body: {api_key, api_secret, user_id, password} — TOTP secret from .env"""
+    try:
+        from app.services import kite
+        from app.config import settings
+
+        # Add TOTP secret from config
+        creds_with_totp = {
+            **credentials,
+            "totp_secret": settings.kite_totp_secret
+        }
+
+        # Test credentials
+        result = await run_in_threadpool(
+            kite.authenticate,
+            creds_with_totp
+        )
+        if not result:
+            raise HTTPException(status_code=401, detail="Kite authentication failed")
+
+        access_token, user_data = result
+
+        # Store encrypted credentials
+        store = get_store()
+        creds_to_store = {
+            "api_key": credentials.get("api_key", ""),
+            "access_token": access_token,
+            "user_id": user_data.get("user_id", ""),
+        }
+        await store.save_kite_credentials(client_id, creds_to_store)
+
+        return {
+            "data": {
+                "authenticated": True,
+                "user_id": user_data.get("user_id"),
+                "user_name": user_data.get("user_name"),
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Kite auth error: {str(e)}")
+
+
+@router.post("/{client_id}/broker/kite/sync")
+async def kite_sync_trades(client_id: str):
+    """Fetch trades and account data from Kite, import trades into portfolio.
+    Uses 24-hour cache to avoid exhausting rate limits."""
+    try:
+        from app.services import kite
+        from app.config import settings
+        from datetime import datetime, timedelta
+
+        store = get_store()
+        creds = await store.get_kite_credentials(client_id)
+        if not creds:
+            raise HTTPException(
+                status_code=400,
+                detail="Kite credentials not found. Please authenticate first."
+            )
+
+        # Check cache first
+        cached = await store.get_kite_sync_cache(client_id)
+        cache_valid = False
+        if cached and cached.get("synced_at"):
+            age = datetime.utcnow() - cached["synced_at"]
+            cache_valid = age < timedelta(seconds=settings.kite_sync_cache_ttl_seconds)
+
+        if cache_valid:
+            # Use cached data
+            trades_list = cached.get("trades", [])
+            cash_info = cached.get("cash", {})
+            from_cache = True
+        else:
+            # Fetch fresh from Kite (only ~4 API calls)
+            summary = await run_in_threadpool(
+                kite.account_summary,
+                creds.get("access_token"),
+                creds.get("api_key")
+            )
+            if not summary:
+                raise HTTPException(status_code=401, detail="Kite sync failed")
+
+            trades_list = summary.get("trades", [])
+            cash_info = summary.get("cash", {})
+
+            # Cache for next 24 hours
+            await store.save_kite_sync_cache(client_id, summary)
+            from_cache = False
+
+        # Import trades (deduped by fingerprint)
+        imported = 0
+        duplicates = 0
+        errors = 0
+
+        existing_trades = await store.list_trades(client_id)
+        existing_fps = {t.get("fingerprint") for t in existing_trades}
+
+        for kite_trade in trades_list:
+            try:
+                trade = {
+                    "trade_date": kite_trade["trade_date"],
+                    "symbol": kite_trade["symbol"],
+                    "action": kite_trade["action"],
+                    "quantity": kite_trade["quantity"],
+                    "price": kite_trade["price"],
+                    "broker_id": kite_trade.get("broker_id", "kite"),
+                }
+
+                # Create fingerprint
+                fp = hashlib.sha256(
+                    f"{trade['trade_date']}{trade['symbol']}{trade['action']}{trade['quantity']}{trade['price']}".encode()
+                ).hexdigest()
+
+                if fp in existing_fps:
+                    duplicates += 1
+                    continue
+
+                trade["fingerprint"] = fp
+                await store.insert_trades([trade])
+                imported += 1
+
+            except Exception as e:
+                errors += 1
+                print(f"Error importing Kite trade: {e}")
+
+        return {
+            "data": {
+                "imported": imported,
+                "duplicates": duplicates,
+                "errors": errors,
+                "cash": cash_info.get("cash", 0),
+                "available": cash_info.get("available_balance", 0),
+                "from_cache": from_cache,
+                "message": "Data from 24-hour cache" if from_cache else "Fresh data from Kite API",
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{client_id}/broker/kite/status")
+async def kite_broker_status(client_id: str):
+    """Check Kite authentication status."""
+    try:
+        store = get_store()
+        creds = await store.get_kite_credentials(client_id)
+        return {"data": {"authenticated": creds is not None}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Multi-Account Kite Management ────────────────────────────────────────────────────────
+
+@router.get("/{client_id}/broker/kite/accounts")
+async def list_kite_accounts(client_id: str):
+    """List all Kite accounts for a client with cached user profiles."""
+    try:
+        store = get_store()
+        accounts = await store.list_kite_accounts(client_id)
+        return {
+            "data": {
+                "accounts": [
+                    {
+                        "id": a["id"],
+                        "name": a.get("name", ""),
+                        "owner": a.get("owner", ""),
+                        "is_active": a.get("is_active", False),
+                        "created_at": a.get("created_at"),
+                        "synced_at": a.get("synced_at"),
+                        "profile_fetched_at": a.get("profile_fetched_at"),
+                        "user_name": a.get("profile", {}).get("user_name"),
+                        "email": a.get("profile", {}).get("email"),
+                        "phone": a.get("profile", {}).get("phone"),
+                        "account_type": a.get("profile", {}).get("account_type"),
+                    }
+                    for a in accounts
+                ]
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{client_id}/broker/kite/accounts")
+async def add_kite_account(client_id: str, account: dict):
+    """Add a new Kite account for a client.
+
+    TWO WAYS TO ADD ACCOUNT:
+
+    1. TOKEN-BASED (Recommended - No CAPTCHA):
+       Body: {name, owner, api_key, access_token}
+       Steps: User logs in manually via browser, copies access_token, provides here
+
+    2. PROGRAMMATIC (Requires CAPTCHA):
+       Body: {name, owner, api_key, api_secret, user_id, password, totp_secret}
+       Will attempt automated login (may fail with CAPTCHA)
+
+    Returns: Account details with cached user profile
+    """
+    try:
+        from app.services import kite
+
+        api_key = account.get("api_key")
+        if not api_key:
+            raise HTTPException(status_code=400, detail="api_key is required")
+
+        # Check if using token-based auth
+        access_token = account.get("access_token")
+        if access_token:
+            # TOKEN-BASED AUTH (preferred)
+            profile = await run_in_threadpool(
+                kite.validate_access_token, access_token, api_key
+            )
+            if not profile:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid access token. Please log in to Kite and get a new token."
+                )
+        else:
+            # PROGRAMMATIC AUTH (fallback)
+            creds = {
+                "api_key": api_key,
+                "api_secret": account.get("api_secret"),
+                "user_id": account.get("user_id"),
+                "password": account.get("password"),
+                "totp_secret": account.get("totp_secret"),
+            }
+
+            auth_result = await run_in_threadpool(kite.authenticate, creds)
+            if not auth_result:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Kite authentication failed (likely CAPTCHA required). Use token-based auth instead."
+                )
+
+            access_token, _ = auth_result
+
+            # Fetch user profile from Kite
+            profile = await run_in_threadpool(kite.user_profile, access_token, api_key)
+            if not profile:
+                raise HTTPException(status_code=400, detail="Could not fetch user profile from Kite")
+
+        store = get_store()
+        new_account = await store.add_kite_account(client_id, account)
+
+        # Save the user profile
+        await store.save_kite_account_profile(client_id, new_account["id"], profile)
+
+        return {
+            "data": {
+                "account": {
+                    "id": new_account["id"],
+                    "name": new_account.get("name"),
+                    "owner": new_account.get("owner"),
+                    "is_active": new_account.get("is_active"),
+                    "user_name": profile.get("user_name"),
+                    "email": profile.get("email"),
+                    "phone": profile.get("phone"),
+                    "account_type": profile.get("account_type"),
+                }
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error adding Kite account: {str(e)}")
+
+
+@router.delete("/{client_id}/broker/kite/accounts/{account_id}")
+async def delete_kite_account(client_id: str, account_id: str):
+    """Delete a Kite account."""
+    try:
+        store = get_store()
+        deleted = await store.delete_kite_account(client_id, account_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return {"data": {"deleted": True}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{client_id}/broker/kite/accounts/{account_id}/select")
+async def select_kite_account(client_id: str, account_id: str):
+    """Set a Kite account as the active account."""
+    try:
+        store = get_store()
+        account = await store.set_active_kite_account(client_id, account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return {
+            "data": {
+                "account": {
+                    "id": account["id"],
+                    "name": account.get("name"),
+                    "is_active": account.get("is_active"),
+                }
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{client_id}/broker/kite/accounts/{account_id}/sync")
+async def sync_kite_account(client_id: str, account_id: str):
+    """Manually sync trades, holdings, cash for a specific Kite account.
+
+    Only fetches when explicitly called (no daily auto-sync).
+    Caches for 24 hours to avoid rate limit exhaustion.
+    """
+    try:
+        from app.services import kite
+        from datetime import datetime, timedelta
+
+        store = get_store()
+
+        # Get account with decrypted credentials
+        account = await store.get_kite_account(client_id, account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        creds = account.get("credentials", {})
+
+        # Check cache (24-hour TTL)
+        cached = await store.get_kite_sync_cache(client_id)
+        if cached:
+            synced_at = cached.get("synced_at")
+            if synced_at:
+                age = (datetime.utcnow() - synced_at).total_seconds()
+                cache_ttl = 86400  # 24 hours
+                if age < cache_ttl:
+                    return {
+                        "data": {
+                            "trades": cached.get("trades", []),
+                            "holdings": cached.get("holdings", []),
+                            "cash": cached.get("cash", {}),
+                            "from_cache": True,
+                            "message": f"Data from cache ({int(age/3600)}h old)",
+                            "last_synced": synced_at.isoformat(),
+                        }
+                    }
+
+        # Authenticate and fetch fresh data
+        auth_result = await run_in_threadpool(kite.authenticate, creds)
+        if not auth_result:
+            raise HTTPException(status_code=401, detail="Kite authentication failed")
+
+        access_token, _ = auth_result
+
+        # Fetch account summary
+        summary = await run_in_threadpool(kite.account_summary, access_token, creds.get("api_key"))
+        if not summary:
+            raise HTTPException(status_code=500, detail="Failed to fetch account data")
+
+        # Cache the data
+        await store.save_kite_sync_cache(client_id, summary)
+
+        # Get trades from cache (import to portfolio happens in next phase)
+        trades_list = summary.get("trades", [])
+
+        return {
+            "data": {
+                "trades": trades_list,
+                "holdings": summary.get("holdings", []),
+                "cash": summary.get("cash", {}),
+                "from_cache": False,
+                "message": f"Synced {len(trades_list)} trades",
+                "imported": len(trades_list),
+                "last_synced": datetime.utcnow().isoformat(),
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        logging.error(f"Account sync error: {e}")
+        raise HTTPException(status_code=500, detail=f"Sync error: {str(e)}")
+
+
+# ── Angel One market data (persistent credentials) ────────────────────────────────────
+@router.post("/{client_id}/broker/angel/authenticate")
+async def angel_authenticate(client_id: str, credentials: dict):
+    """Store Angel One credentials for persistent market data access (quotes, historical prices).
+    Trades still come from Kite uploads. Credentials are encrypted.
+    Body: {client_id, api_key, pin, totp_secret}"""
+    try:
+        import pyotp
+        from SmartApi import SmartConnect
+
+        # Test credentials before saving
+        smart = SmartConnect(api_key=credentials.get("api_key"))
+        totp = pyotp.TOTP(credentials.get("totp_secret")).now()
+        resp = smart.generateSession(
+            credentials.get("client_id"),
+            credentials.get("pin"),
+            totp
+        )
+        if not resp.get("status"):
+            raise HTTPException(status_code=401, detail=f"Angel auth failed: {resp.get('message')}")
+
+        # Store encrypted credentials for future data fetches
+        store = get_store()
+        await store.save_angel_credentials(client_id, credentials)
+
+        return {"data": {"authenticated": True, "message": "Angel One connected. Now quotes come from Angel (not Yahoo Finance)."}}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Angel auth error: {str(e)}")
+
+
+@router.get("/{client_id}/broker/angel/status")
+async def angel_broker_status(client_id: str):
+    """Check if Angel One credentials are available for this client."""
+    try:
+        store = get_store()
+        creds = await store.get_angel_credentials(client_id)
+        return {"data": {"authenticated": creds is not None, "purpose": "market data (quotes, prices)"}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

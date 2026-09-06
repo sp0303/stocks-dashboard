@@ -1,6 +1,9 @@
 import React, { useState } from 'react'
+import {
+  ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
+} from 'recharts'
 import { api, inr, inrFull, pct } from '../api.js'
-import { Stat, Loading, ErrorBox, useAsync } from './common.jsx'
+import { Stat, Loading, ErrorBox, useAsync, PALETTE } from './common.jsx'
 
 export default function ManagerMetrics({ managerId, reload, onOpenClient, onEditClient, onToggleStatus, onDeleteClient }) {
   const m = useAsync(() => api.managerMetrics(managerId), [managerId, reload])
@@ -75,6 +78,130 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      <ManagerPerformance managerId={managerId} reload={reload} />
+    </div>
+  )
+}
+
+const BOOK_BENCHMARK_COLORS = {
+  total_value: '#1e40af',
+  nifty_50: '#dc2626',
+  mid_cap: '#ea580c',
+  large_cap: '#8b5cf6',
+  small_cap: '#059669',
+}
+const BOOK_BENCHMARK_LABELS = {
+  total_value: 'Whole Book',
+  nifty_50: 'Nifty 50',
+  mid_cap: 'Nifty Midcap 100',
+  large_cap: 'Nifty 100 (Large Cap)',
+  small_cap: 'Nifty Smallcap 100',
+}
+
+function ManagerPerformance({ managerId, reload }) {
+  const [benchmarks, setBenchmarks] = useState({ nifty_50: true, mid_cap: true, large_cap: false, small_cap: false })
+  const p = useAsync(() => api.managerPerformance(managerId), [managerId, reload])
+  if (p.loading) return <Loading what="book performance" />
+  if (p.error) return <ErrorBox error={p.error} />
+  const { book, clients } = p.data
+  if (!book?.length) return null
+
+  const toggleBenchmark = (key) => setBenchmarks((cur) => ({ ...cur, [key]: !cur[key] }))
+
+  // Same profit/loss framing as the client-level chart: raw value would be dominated by
+  // deposit timing across clients (one big new account joining looks like a "gain"), so
+  // every line is value-minus-invested — pure book-wide gain/loss vs. each benchmark.
+  const bookPnl = book.map((d) => ({
+    date: d.date,
+    pnl: d.total_value != null && d.invested_value != null ? d.total_value - d.invested_value : null,
+    nifty_50_pnl: d.nifty_50_value != null && d.invested_value != null ? d.nifty_50_value - d.invested_value : null,
+    mid_cap_pnl: d.mid_cap_value != null && d.invested_value != null ? d.mid_cap_value - d.invested_value : null,
+    large_cap_pnl: d.large_cap_value != null && d.invested_value != null ? d.large_cap_value - d.invested_value : null,
+    small_cap_pnl: d.small_cap_value != null && d.invested_value != null ? d.small_cap_value - d.invested_value : null,
+  }))
+
+  // Individual clients on one chart: capital sizes differ hugely across clients, so
+  // absolute ₹ would make a big account's line dwarf everyone else's regardless of who's
+  // actually doing better. % return puts every client on the same, fair scale.
+  const clientDates = Array.from(new Set(clients.flatMap((c) => c.series.map((r) => r.date)))).sort()
+  const clientChartData = clientDates.map((date) => {
+    const row = { date }
+    for (const c of clients) {
+      const hit = c.series.find((r) => r.date === date)
+      if (hit) row[c.id] = hit.return_pct
+    }
+    return row
+  })
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="panel" style={{ padding: 16, marginBottom: 16 }}>
+        <h2 style={{ marginTop: 0 }}>Book performance vs. market</h2>
+        <p className="sub">
+          The whole book's profit/loss vs. what the same total capital would have made in each index — every
+          client's own real, mark-to-market performance summed together.
+        </p>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 600, marginBottom: 10, fontSize: 13 }}>Select benchmarks to compare:</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+            {Object.keys(benchmarks).map((key) => (
+              <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+                <input type="checkbox" checked={benchmarks[key]} onChange={() => toggleBenchmark(key)} style={{ cursor: 'pointer' }} />
+                <span style={{ color: BOOK_BENCHMARK_COLORS[key], fontWeight: 500 }}>{BOOK_BENCHMARK_LABELS[key]}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={340}>
+          <LineChart data={bookPnl} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
+            <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--muted)' }} minTickGap={40} />
+            <YAxis
+              tick={{ fontSize: 11, fill: 'var(--muted)' }}
+              label={{ value: 'Profit / Loss (₹)', angle: -90, position: 'insideLeft', offset: 10 }}
+              width={85}
+              tickFormatter={(v) => (v >= 0 ? inr(v) : `-${inr(-v)}`)}
+            />
+            <Tooltip
+              formatter={(v) => (Number(v) >= 0 ? inr(Number(v)) : `-${inr(-Number(v))}`)}
+              contentStyle={{ background: 'var(--surface)', border: '1px solid var(--line)', fontSize: 12 }}
+            />
+            <ReferenceLine y={0} stroke="var(--muted)" strokeDasharray="2 2" />
+            <Line type="monotone" dataKey="pnl" name="Whole Book" stroke={BOOK_BENCHMARK_COLORS.total_value} dot={false} strokeWidth={2.5} connectNulls />
+            {benchmarks.nifty_50 && <Line type="monotone" dataKey="nifty_50_pnl" name="Nifty 50" stroke={BOOK_BENCHMARK_COLORS.nifty_50} dot={false} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+            {benchmarks.mid_cap && <Line type="monotone" dataKey="mid_cap_pnl" name="Nifty Midcap 100" stroke={BOOK_BENCHMARK_COLORS.mid_cap} dot={false} strokeWidth={2} connectNulls />}
+            {benchmarks.large_cap && <Line type="monotone" dataKey="large_cap_pnl" name="Nifty 100 (Large Cap)" stroke={BOOK_BENCHMARK_COLORS.large_cap} dot={false} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+            {benchmarks.small_cap && <Line type="monotone" dataKey="small_cap_pnl" name="Nifty Smallcap 100" stroke={BOOK_BENCHMARK_COLORS.small_cap} dot={false} strokeWidth={2} connectNulls />}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {clients?.length > 0 && (
+        <div className="panel" style={{ padding: 16 }}>
+          <h2 style={{ marginTop: 0 }}>Individual client performance</h2>
+          <p className="sub">
+            Each client's % return over time — normalized, not ₹ value, since clients have deployed very different
+            amounts of capital and a raw-value comparison would just reflect account size, not who's performing better.
+          </p>
+          <ResponsiveContainer width="100%" height={340}>
+            <LineChart data={clientChartData} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
+              <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--muted)' }} minTickGap={40} />
+              <YAxis
+                tick={{ fontSize: 11, fill: 'var(--muted)' }}
+                label={{ value: 'Return (%)', angle: -90, position: 'insideLeft', offset: 10 }}
+                width={60}
+                tickFormatter={(v) => `${v}%`}
+              />
+              <Tooltip formatter={(v) => `${Number(v).toFixed(2)}%`} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--line)', fontSize: 12 }} />
+              <ReferenceLine y={0} stroke="var(--muted)" strokeDasharray="2 2" />
+              {clients.map((c, i) => (
+                <Line key={c.id} type="monotone" dataKey={c.id} name={c.name} stroke={PALETTE[i % PALETTE.length]} dot={false} strokeWidth={2} connectNulls />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       )}
     </div>

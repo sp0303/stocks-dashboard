@@ -22,7 +22,7 @@ from app.store import init_store
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store = await init_store()
-    await seed_if_empty(store)
+    # await seed_if_empty(store)  # Disabled: don't overwrite production data
     app.state.store_backend = "mongo" if settings.use_mongo else "json-file"
     alert_task = asyncio.create_task(run_alert_loop(store))
     yield

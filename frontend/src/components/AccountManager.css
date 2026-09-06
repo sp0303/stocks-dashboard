@@ -1,0 +1,244 @@
+.account-manager {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.account-manager-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.account-manager-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.btn-add-account {
+  padding: 6px 12px;
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.btn-add-account:hover {
+  background: var(--color-primary-hover);
+}
+
+.error-box {
+  background: #fee;
+  border: 1px solid #fcc;
+  color: #c33;
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.error-box.success {
+  background: #efe;
+  border-color: #cfc;
+  color: #3c3;
+}
+
+.error-box.error {
+  background: #fee;
+  border-color: #fcc;
+  color: #c33;
+}
+
+.account-form {
+  background: white;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.form-group {
+  margin-bottom: 12px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 4px;
+  color: var(--color-text-secondary);
+}
+
+.form-group input {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(var(--color-primary-rgb), 0.1);
+}
+
+.form-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-top: 16px;
+  margin-bottom: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.btn-submit {
+  width: 100%;
+  padding: 10px;
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  margin-top: 8px;
+}
+
+.btn-submit:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+.btn-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.accounts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.account-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: white;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.account-item.active {
+  border-color: var(--color-primary);
+  background: rgba(var(--color-primary-rgb), 0.02);
+}
+
+.account-info {
+  flex: 1;
+}
+
+.account-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--color-text);
+  margin-bottom: 4px;
+}
+
+.account-details {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.detail-email,
+.detail-phone,
+.detail-type {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.account-meta {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge-active {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--color-success);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 12px;
+}
+
+.btn-sync {
+  padding: 4px 12px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.btn-sync:hover {
+  background: #f0f8ff;
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.btn-delete {
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.btn-delete:hover {
+  background: #fee;
+  border-color: var(--color-danger);
+}
+
+.empty-state {
+  text-align: center;
+  padding: 20px;
+  color: var(--color-text-secondary);
+}
+
+.empty-state p {
+  margin: 4px 0;
+  font-size: 14px;
+}
+
+.empty-state .hint {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}

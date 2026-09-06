@@ -18,7 +18,8 @@ from app.config import settings
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
-    # isolate persistence
+    # isolate persistence (use JsonStore, no remote Mongo)
+    monkeypatch.setattr(settings, "mongodb_url", "")
     monkeypatch.setattr(settings, "data_dir", str(tmp_path))
     # no network: the entry endpoints resolve prices/history through these
     import app.routers.watchlists as wl

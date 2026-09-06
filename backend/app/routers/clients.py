@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
+import asyncio
+
 from app.models.schemas import ClientCreate, ClientUpdate
+from app.routers.portfolio import _actions_for, compute_performance_series
 from app.services import analytics, ingestion
 from app.store import get_store
 
@@ -36,6 +39,48 @@ async def manager_metrics(manager_id: str):
     for c in clients:
         payload.append({"id": c["id"], "name": c["name"], "trades": await store.list_trades(c["id"])})
     return {"data": analytics.manager_metrics(payload)}
+
+
+@router.get("/managers/{manager_id}/performance")
+async def manager_performance(manager_id: str):
+    """Manager-level performance, in two parts:
+    - "book": the whole book's value summed across every client's own real,
+      mark-to-market performance curve, compared against the same 4 benchmark indices
+      used on a client's own Performance tab — the manager's overall portfolio vs.
+      Nifty/Midcap/Largecap/Smallcap.
+    - "clients": each client's own % return over time (NOT absolute ₹ — clients deploy
+      wildly different capital, so only a normalized return is fair to plot on one shared
+      chart; a client with 10x the capital would otherwise dominate the y-axis with no
+      bearing on who's actually performing better).
+    Every client's real prices are fetched concurrently so this scales reasonably with
+    book size."""
+    store = get_store()
+    if not await store.get_manager(manager_id):
+        raise HTTPException(404, "manager not found")
+    clients = await store.list_clients(manager_id)
+
+    async def _one_client(c: dict) -> tuple[list[dict] | None, dict | None]:
+        trades = await store.list_trades(c["id"])
+        if not trades:
+            return None, None
+        actions = await _actions_for(trades)
+        series = await compute_performance_series(trades, actions)
+        pct_series = [
+            {
+                "date": row["date"],
+                "return_pct": round((row["total_value"] - row["invested_value"]) / row["invested_value"] * 100, 2)
+                if row.get("total_value") is not None and row.get("invested_value") else 0.0,
+            }
+            for row in series
+        ]
+        return series, {"id": c["id"], "name": c["name"], "series": pct_series}
+
+    results = await asyncio.gather(*(_one_client(c) for c in clients))
+    client_series = [r[0] for r in results if r[0]]
+    client_summaries = [r[1] for r in results if r[1] is not None]
+
+    book = analytics.aggregate_performance_series(client_series)
+    return {"data": {"book": book, "clients": client_summaries}}
 
 
 @router.get("/clients")

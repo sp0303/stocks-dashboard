@@ -1,5 +1,5 @@
 import React from 'react'
-import { pct } from '../api.js'
+import { pct, inr } from '../api.js'
 
 export function Stat({ label, value, sub, tone }) {
   return (
@@ -13,7 +13,7 @@ export function Stat({ label, value, sub, tone }) {
 
 export function PnL({ value }) {
   if (value === null || value === undefined) return <span>—</span>
-  return <span className={value >= 0 ? 'up' : 'down'}>{pct(value)}</span>
+  return <span className={value >= 0 ? 'up' : 'down'}>{inr(value)}</span>
 }
 
 export function Loading({ what = 'data' }) {

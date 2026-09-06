@@ -98,7 +98,10 @@ export const api = {
     req(`/api/market/history/${symbol}?from=${from}&interval=${interval}`).then((r) => r.data),
   sectorHotels: () => req('/api/sectors/hotels').then((r) => r.data),
   sectorHotelsPriceMatrix: () => req('/api/sectors/hotels/price-matrix').then((r) => r.data),
+  sectorData: (sector) => req(`/api/sectors/${sector}`).then((r) => r.data),
+  sectorPriceMatrix: (sector) => req(`/api/sectors/${sector}/price-matrix`).then((r) => r.data),
   managerMetrics: (id) => req(`/api/managers/${id}/metrics`).then((r) => r.data),
+  managerPerformance: (id) => req(`/api/managers/${id}/performance`).then((r) => r.data),
   uploadTradebook: (clientId, file) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -111,6 +114,10 @@ export const api = {
     req(`/api/clients/${clientId}/allocation?by=${by}&basis=${basis}`).then((r) => r.data),
   concentration: (clientId) => req(`/api/clients/${clientId}/concentration`).then((r) => r.data),
   performance: (clientId) => req(`/api/clients/${clientId}/performance`).then((r) => r.data),
+  metrics: (clientId) => req(`/api/clients/${clientId}/metrics`).then((r) => r.data),
+  attribution: (clientId) => req(`/api/clients/${clientId}/attribution`).then((r) => r.data),
+  tradeAnalytics: (clientId) => req(`/api/clients/${clientId}/trade-analytics`).then((r) => r.data),
+  riskMonitoring: (clientId) => req(`/api/clients/${clientId}/risk-monitoring`).then((r) => r.data),
   xirr: (clientId) => req(`/api/clients/${clientId}/xirr`).then((r) => r.data),
   holdingSummary: (clientId) => req(`/api/clients/${clientId}/holding-summary`).then((r) => r.data),
   holdingSummaryNarrative: (clientId) => req(`/api/clients/${clientId}/holding-summary/narrative`).then((r) => r.data),
@@ -150,6 +157,7 @@ export const api = {
     req(`/api/clients/${clientId}/stocks/${symbol}/thesis`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(thesis),
     }).then((r) => r.data),
+  thesisAlerts: (clientId) => req(`/api/clients/${clientId}/thesis-alerts`).then((r) => r.data).catch(() => []),
   // opening/adjustment trades for shares not in the tradebook (IPO/bonus/pre-window)
   manualTrades: (clientId) => req(`/api/clients/${clientId}/manual-trades`).then((r) => r.data),
   addManualTrade: (clientId, body) =>
@@ -171,6 +179,41 @@ export const api = {
   corpActionsCoverage: () => req('/api/corporate-actions/coverage').then((r) => r.data),
   corpActionsRefresh: () => req('/api/corporate-actions/refresh', { method: 'POST' }).then((r) => r.data),
   corpActionsRefreshAll: () => req('/api/corporate-actions/refresh-all', { method: 'POST' }).then((r) => r.data),
+  // Kite broker integration (trades + account data)
+  kiteAuthenticate: (clientId, credentials) =>
+    req(`/api/clients/${clientId}/broker/kite/authenticate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials),
+    }).then((r) => r.data),
+  kiteSyncTrades: (clientId) =>
+    req(`/api/clients/${clientId}/broker/kite/sync`, { method: 'POST' }).then((r) => r.data),
+  kiteStatus: (clientId) =>
+    req(`/api/clients/${clientId}/broker/kite/status`).then((r) => r.data),
+  // Multi-account Kite management
+  kiteListAccounts: (clientId) =>
+    req(`/api/clients/${clientId}/broker/kite/accounts`).then((r) => r.data),
+  kiteAddAccount: (clientId, credentials) =>
+    req(`/api/clients/${clientId}/broker/kite/accounts`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials),
+    }).then((r) => r.data),
+  kiteDeleteAccount: (clientId, accountId) =>
+    req(`/api/clients/${clientId}/broker/kite/accounts/${accountId}`, { method: 'DELETE' }).then((r) => r.data),
+  kiteSelectAccount: (clientId, accountId) =>
+    req(`/api/clients/${clientId}/broker/kite/accounts/${accountId}/select`, { method: 'PUT' }).then((r) => r.data),
+  kiteSyncAccount: (clientId, accountId) =>
+    req(`/api/clients/${clientId}/broker/kite/accounts/${accountId}/sync`, { method: 'POST' }).then((r) => r.data),
+  // Portfolio viewer - manual sync
+  portfolioSync: (clientId) =>
+    req(`/api/clients/${clientId}/sync-portfolio`, { method: 'POST' }).then((r) => r.data),
+  // Angel One market data (for quotes/prices, not trades)
+  angelLogin: (clientId, credentials) =>
+    req(`/api/clients/${clientId}/broker/angel/authenticate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials),
+    }).then((r) => r.data),
+  angelStatus: (clientId) =>
+    req(`/api/clients/${clientId}/broker/angel/status`).then((r) => r.data),
 }
 
 // Human label + tone for a corporate-action type (shared by drawer/feed/badges).
