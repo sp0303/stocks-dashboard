@@ -109,6 +109,43 @@ h2{font-size:16px;margin:26px 0 12px;letter-spacing:-.01em}
   border-radius:8px;font-size:12px;line-height:1.5;color:var(--faint);white-space:pre-wrap;
   max-height:220px;overflow-y:auto}
 
+/* P&L calendar */
+.pnl-cal{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;box-shadow:var(--shadow)}
+.pnl-cal-header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.pnl-cal-hleft{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+.pnl-cal-title{margin:0;font-size:18px;font-weight:600;font-family:Fraunces,Georgia,serif}
+.pnl-cal-summary{font-size:13px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}
+.pnl-cal-nav{display:flex;gap:4px}
+.pnl-cal-navbtn{background:var(--paper);border:1px solid var(--line);border-radius:7px;padding:5px 10px;
+  cursor:pointer;font-size:14px;font-weight:600;color:var(--ink)}
+.pnl-cal-navbtn:disabled{opacity:.4;cursor:default}
+.pnl-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:14px}
+.pnl-cal-dow{font-family:var(--mono);font-size:10.5px;color:var(--muted);text-align:center;
+  padding-bottom:2px;letter-spacing:.06em;overflow:hidden}
+.pnl-cal-empty{aspect-ratio:1;border-radius:7px}
+.pnl-cal-cell{aspect-ratio:1;border-radius:7px;border:1px solid var(--line);padding:6px 7px;display:flex;
+  flex-direction:column;justify-content:space-between;overflow:hidden;transition:opacity .15s}
+.pnl-cal-date{font-family:var(--mono);font-size:10px;color:var(--muted);line-height:1}
+.pnl-cal-pnl{font-family:var(--mono);font-size:11px;font-weight:500;line-height:1.1;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pnl-cal-legend{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);flex-wrap:wrap}
+.pnl-cal-swatch{width:15px;height:15px;border-radius:4px;flex:none}
+@media (max-width:640px){
+  .pnl-cal{padding:14px 12px}
+  .pnl-cal-grid{gap:4px}
+  .pnl-cal-title{font-size:16px}
+  .pnl-cal-cell{padding:4px 4px;border-radius:5px}
+  .pnl-cal-empty{border-radius:5px}
+  .pnl-cal-date{font-size:9px}
+  .pnl-cal-pnl{font-size:9px}
+  .pnl-cal-dow{font-size:9px;letter-spacing:0}
+  .pnl-cal-swatch{width:12px;height:12px}
+}
+@media (max-width:380px){
+  .pnl-cal-pnl{font-size:8px}
+  .pnl-cal-date{font-size:8px}
+}
+
 /* tables */
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .tbl-scroll{overflow-x:auto}

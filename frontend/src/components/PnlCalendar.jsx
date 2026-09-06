@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState } from 'react'
 import { api, inrCompact, heatColor } from '../api.js'
 import { useAsync, ErrorBox, Loading } from './common.jsx'
 
@@ -54,38 +54,38 @@ export default function PnlCalendar({ clientId, onDayClick, compact = false }) {
   }
 
   return (
-    <div style={styles.container}>
+    <div className="pnl-cal">
       {/* Header with month/summary */}
-      <div style={styles.header}>
-        <div style={styles.headerLeft}>
-          <h3 style={styles.title}>
+      <div className="pnl-cal-header">
+        <div className="pnl-cal-hleft">
+          <h3 className="pnl-cal-title">
             {month.toLocaleString('en-US', { month: 'long', year: 'numeric' })}
           </h3>
           {!compact && (
-            <div style={styles.summary}>
-              <span>Realised <strong style={{ color: 'var(--teal)' }}>₹{(data.summary?.realized || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong></span>
+            <div className="pnl-cal-summary">
+              <span>Realised <strong style={{ color: 'var(--accent-ink)' }}>₹{(data.summary?.realized || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong></span>
               <span>• {data.summary?.win_days || 0}W / {data.summary?.loss_days || 0}L</span>
             </div>
           )}
         </div>
         {!compact && (
-          <div style={styles.nav}>
-            <button onClick={handlePrevMonth} disabled={!canGoPrev} style={styles.navBtn}>←</button>
-            <button onClick={handleNextMonth} disabled={!canGoNext} style={styles.navBtn}>→</button>
+          <div className="pnl-cal-nav">
+            <button className="pnl-cal-navbtn" onClick={handlePrevMonth} disabled={!canGoPrev}>←</button>
+            <button className="pnl-cal-navbtn" onClick={handleNextMonth} disabled={!canGoNext}>→</button>
           </div>
         )}
       </div>
 
       {/* Calendar grid */}
-      <div style={styles.grid}>
+      <div className="pnl-cal-grid">
         {/* Day-of-week headers */}
         {dow.map(d => (
-          <div key={d} style={styles.dowCell}>{d}</div>
+          <div key={d} className="pnl-cal-dow">{d}</div>
         ))}
 
         {/* Empty cells before first day */}
         {Array.from({ length: startDow }).map((_, i) => (
-          <div key={`empty-${i}`} style={styles.emptyCell} />
+          <div key={`empty-${i}`} className="pnl-cal-empty" />
         ))}
 
         {/* Date cells */}
@@ -98,8 +98,8 @@ export default function PnlCalendar({ clientId, onDayClick, compact = false }) {
           return (
             <div
               key={date}
+              className="pnl-cal-cell"
               style={{
-                ...styles.cell,
                 background: dayData ? heatColor(pnl, p90) : 'var(--paper)',
                 cursor: dayData ? 'pointer' : 'default',
                 opacity: dayData ? 1 : 0.5,
@@ -107,8 +107,8 @@ export default function PnlCalendar({ clientId, onDayClick, compact = false }) {
               onClick={() => dayData && handleDayClick(date)}
               title={dayData ? `${dayData.trades} trades • ${inrCompact(pnl)}` : 'No trades'}
             >
-              <div style={styles.dateNum}>{date}</div>
-              {dayData && <div style={styles.pnlText}>{inrCompact(pnl)}</div>}
+              <div className="pnl-cal-date">{date}</div>
+              {dayData && <div className="pnl-cal-pnl">{inrCompact(pnl)}</div>}
             </div>
           )
         })}
@@ -116,122 +116,20 @@ export default function PnlCalendar({ clientId, onDayClick, compact = false }) {
 
       {/* Legend */}
       {!compact && (
-        <div style={styles.legend}>
+        <div className="pnl-cal-legend">
           <span>Loss</span>
-          <div style={{ ...styles.legendSwatch, background: 'var(--l4)' }} />
-          <div style={{ ...styles.legendSwatch, background: 'var(--l3)' }} />
-          <div style={{ ...styles.legendSwatch, background: 'var(--l2)' }} />
-          <div style={{ ...styles.legendSwatch, background: 'var(--l1)' }} />
-          <div style={{ ...styles.legendSwatch, background: 'var(--paper)', border: '1px solid var(--line)' }} />
-          <div style={{ ...styles.legendSwatch, background: 'var(--g1)' }} />
-          <div style={{ ...styles.legendSwatch, background: 'var(--g2)' }} />
-          <div style={{ ...styles.legendSwatch, background: 'var(--g3)' }} />
-          <div style={{ ...styles.legendSwatch, background: 'var(--g4)' }} />
+          <div className="pnl-cal-swatch" style={{ background: 'var(--l4)' }} />
+          <div className="pnl-cal-swatch" style={{ background: 'var(--l3)' }} />
+          <div className="pnl-cal-swatch" style={{ background: 'var(--l2)' }} />
+          <div className="pnl-cal-swatch" style={{ background: 'var(--l1)' }} />
+          <div className="pnl-cal-swatch" style={{ background: 'var(--paper)', border: '1px solid var(--line)' }} />
+          <div className="pnl-cal-swatch" style={{ background: 'var(--g1)' }} />
+          <div className="pnl-cal-swatch" style={{ background: 'var(--g2)' }} />
+          <div className="pnl-cal-swatch" style={{ background: 'var(--g3)' }} />
+          <div className="pnl-cal-swatch" style={{ background: 'var(--g4)' }} />
           <span>Profit</span>
         </div>
       )}
     </div>
   )
-}
-
-const styles = {
-  container: {
-    background: 'var(--card)',
-    border: '1px solid var(--line)',
-    borderRadius: '12px',
-    padding: '20px 22px',
-    boxShadow: 'var(--shadow)',
-  },
-  header: {
-    display: 'flex',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    gap: '12px',
-    marginBottom: '16px',
-    flexWrap: 'wrap',
-  },
-  headerLeft: {
-    display: 'flex',
-    alignItems: 'baseline',
-    gap: '16px',
-  },
-  title: {
-    margin: 0,
-    fontSize: '18px',
-    fontWeight: 600,
-    fontFamily: 'Fraunces, Georgia, serif',
-  },
-  summary: {
-    fontSize: '13px',
-    color: 'var(--muted)',
-    display: 'flex',
-    gap: '10px',
-  },
-  nav: {
-    display: 'flex',
-    gap: '4px',
-  },
-  navBtn: {
-    background: 'var(--paper)',
-    border: '1px solid var(--line)',
-    borderRadius: '7px',
-    padding: '5px 10px',
-    cursor: 'pointer',
-    fontSize: '14px',
-    fontWeight: 600,
-    color: 'var(--ink)',
-  },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(7, 1fr)',
-    gap: '6px',
-    marginBottom: '14px',
-  },
-  dowCell: {
-    fontFamily: 'IBM Plex Mono, monospace',
-    fontSize: '10.5px',
-    color: 'var(--muted)',
-    textAlign: 'center',
-    paddingBottom: '2px',
-    letterSpacing: '0.08em',
-  },
-  emptyCell: {
-    aspectRatio: '1',
-    borderRadius: '7px',
-  },
-  cell: {
-    aspectRatio: '1',
-    borderRadius: '7px',
-    border: '1px solid var(--line)',
-    padding: '6px 7px',
-    display: 'flex',
-    flexDirection: 'column',
-    justifyContent: 'space-between',
-    minHeight: '52px',
-    transition: 'opacity 0.15s',
-  },
-  dateNum: {
-    fontFamily: 'IBM Plex Mono, monospace',
-    fontSize: '10px',
-    color: 'var(--muted)',
-  },
-  pnlText: {
-    fontFamily: 'IBM Plex Mono, monospace',
-    fontSize: '11px',
-    fontWeight: 500,
-    lineHeight: 1.15,
-  },
-  legend: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '5px',
-    fontSize: '11px',
-    color: 'var(--muted)',
-    flexWrap: 'wrap',
-  },
-  legendSwatch: {
-    width: '15px',
-    height: '15px',
-    borderRadius: '4px',
-  },
 }
