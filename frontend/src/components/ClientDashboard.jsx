@@ -3,14 +3,13 @@ import {
   PieChart, Pie, Cell, Sector, ResponsiveContainer, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine,
 } from 'recharts'
 import { api, inr, inrFull, pct, pctPlain } from '../api.js'
-import { Stat, PnL, Loading, ErrorBox, useAsync, PALETTE } from './common.jsx'
+import { Stat, PnL, PctPnL, Loading, ErrorBox, useAsync, PALETTE } from './common.jsx'
 import StockAnalysis from './StockAnalysis.jsx'
 import Watchlist from './Watchlist.jsx'
 import { CorporateActionsFeed } from './CorporateActions.jsx'
 import { AccountSelector } from './AccountSelector.jsx'
 import { AccountManager } from './AccountManager.jsx'
 import { PortfolioViewer } from './PortfolioViewer.jsx'
-import PnlCalendar from './PnlCalendar.jsx'
 
 
 // One continuously-scrolling page: every section is always mounted, the nav
@@ -51,16 +50,16 @@ export default function ClientDashboard({ client }) {
         <AISummaryCard client={client} reload={reload} />
 
         {/* ALL SECTIONS VISIBLE - NO TABS */}
+        <Section sectionKey="upload" title="Upload Tradebook" sectionRef={(el) => (sectionRefs.current.upload = el)}>
+          <UploadBar client={client} onDone={() => setReload((n) => n + 1)} />
+        </Section>
+
         <Section sectionKey="overview" title="Overview" sectionRef={(el) => (sectionRefs.current.overview = el)}>
           <OverviewSection client={client} reload={reload} onChanged={() => setReload((n) => n + 1)} />
         </Section>
 
         <Section sectionKey="portfolio-viewer" title="Portfolio Sync" sectionRef={(el) => (sectionRefs.current['portfolio-viewer'] = el)}>
           <PortfolioViewer clientId={client.id} />
-        </Section>
-
-        <Section sectionKey="upload" title="Upload Tradebook" sectionRef={(el) => (sectionRefs.current.upload = el)}>
-          <UploadBar client={client} onDone={() => setReload((n) => n + 1)} />
         </Section>
 
         <Section sectionKey="holdings" title="Holdings" sectionRef={(el) => (sectionRefs.current.holdings = el)}>
@@ -75,16 +74,8 @@ export default function ClientDashboard({ client }) {
           <PerformanceSection client={client} reload={reload} onOpenStock={setSymbol} />
         </Section>
 
-        <Section sectionKey="pnl-calendar" title="P&L Calendar" sectionRef={(el) => (sectionRefs.current['pnl-calendar'] = el)}>
-          <PnlCalendar clientId={client.id} />
-        </Section>
-
         <Section sectionKey="dividends" title="Dividends" sectionRef={(el) => (sectionRefs.current.dividends = el)}>
           <DividendsSection client={client} />
-        </Section>
-
-        <Section sectionKey="trades" title="Trades" sectionRef={(el) => (sectionRefs.current.trades = el)}>
-          <TradesSection client={client} reload={reload} onOpenStock={setSymbol} />
         </Section>
 
         <Section sectionKey="playbook" title="Playbook" sectionRef={(el) => (sectionRefs.current.playbook = el)}>
@@ -475,8 +466,6 @@ function Overview({ client, reload, onChanged }) {
   // DEFERRED: Load after critical content renders for better perceived performance
   const c = useAsync(() => api.concentration(client.id), [client.id, reload])
   const alloc = useAsync(() => api.allocation(client.id, 'sector', basis), [client.id, reload, basis])
-  const attr = useAsync(() => api.attribution(client.id), [client.id, reload])
-  const ta = useAsync(() => api.tradeAnalytics(client.id), [client.id, reload])
   const rm = useAsync(() => api.riskMonitoring(client.id), [client.id, reload])
   const alerts = useAsync(() => api.thesisAlerts(client.id), [client.id, reload])
   if (p.loading) return <Loading what="portfolio" />
@@ -534,88 +523,6 @@ function Overview({ client, reload, onChanged }) {
           <Stat label="Beta" value={m.data.beta ? m.data.beta.toFixed(3) : '—'} sub="vs Nifty 50" title="1.0 = moves with market" />
           <Stat label="Alpha" value={m.data.alpha ? (m.data.alpha >= 0 ? '+' : '') + pct(m.data.alpha) : '—'} tone={m.data.alpha >= 0 ? 'up' : 'down'} sub="vs benchmark" title="Excess return after risk adjustment" />
         </div>
-      )}
-      {!attr.loading && !attr.error && attr.data?.sector_vs_stock && (
-        <>
-          <h2>Performance Attribution</h2>
-          <div className="cards">
-            <Stat label="Sector Selection" value={pct(attr.data.sector_vs_stock.sector_selection_pct)} sub="of returns" title="Returns from being overweight in outperforming sectors" />
-            <Stat label="Stock Selection" value={pct(attr.data.sector_vs_stock.stock_selection_pct)} sub="of returns" title="Returns from picking better stocks within sectors" />
-            {attr.data.sector_vs_stock.top_performing_sectors && attr.data.sector_vs_stock.top_performing_sectors[0] && (
-              <Stat label="Top Sector" value={attr.data.sector_vs_stock.top_performing_sectors[0].sector} sub={`+${pct(attr.data.sector_vs_stock.top_performing_sectors[0].contribution_pct)}`} />
-            )}
-            {attr.data.top_stocks && attr.data.top_stocks[0] && (
-              <Stat label="Top Stock" value={attr.data.top_stocks[0].symbol} sub={`+${inr(attr.data.top_stocks[0].pnl)}`} />
-            )}
-          </div>
-          {attr.data.top_stocks && attr.data.top_stocks.length > 0 && (
-            <>
-              <h3>Top Performers</h3>
-              <div style={{ overflowX: 'auto' }}>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Stock</th>
-                      <th>Sector</th>
-                      <th>P&L</th>
-                      <th>Contribution</th>
-                      <th>Trades</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {attr.data.top_stocks.slice(0, 5).map((s) => (
-                      <tr key={s.symbol}>
-                        <td>{s.symbol}</td>
-                        <td>{s.sector}</td>
-                        <td><PnL value={s.pnl} /></td>
-                        <td>{pctPlain(s.contribution_pct)}</td>
-                        <td>{s.num_trades}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </>
-      )}
-      {!ta.loading && !ta.error && ta.data && !ta.data.error && (
-        <>
-          <h2>Trade Quality</h2>
-          <div className="cards">
-            <Stat label="Win Rate" value={ta.data.win_rate ? ta.data.win_rate + '%' : '—'} sub={`${ta.data.winning_trades}/${ta.data.total_trades} trades`} title="% of closed trades that made money" />
-            <Stat label="Profit Factor" value={ta.data.profit_factor ? ta.data.profit_factor : '—'} sub="wins/losses ratio" title=">1.5 is good, >2 is excellent" />
-            <Stat label="Avg Win" value={ta.data.avg_win ? inr(ta.data.avg_win) : '—'} sub="per winning trade" />
-            <Stat label="Avg Loss" value={ta.data.avg_loss ? inr(-ta.data.avg_loss) : '—'} tone="down" sub="per losing trade" />
-            <Stat label="Best Trade" value={ta.data.best_trade?.symbol || '—'} sub={ta.data.best_trade ? `+${inr(ta.data.best_trade.pnl)}` : ''} />
-            <Stat label="Avg Holding" value={ta.data.avg_holding_days ? Math.round(ta.data.avg_holding_days) + 'd' : '—'} sub="days held" />
-          </div>
-          {ta.data.sector_win_rates && Object.keys(ta.data.sector_win_rates).length > 0 && (
-            <>
-              <h3>Win Rate by Sector</h3>
-              <div style={{ overflowX: 'auto' }}>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Sector</th>
-                      <th>Win Rate</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(ta.data.sector_win_rates)
-                      .sort((a, b) => b[1] - a[1])
-                      .map(([sector, rate]) => (
-                        <tr key={sector}>
-                          <td>{sector}</td>
-                          <td>{rate}%</td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </>
       )}
       {!rm.loading && !rm.error && rm.data && !rm.data.error && (
         <>
@@ -752,7 +659,7 @@ function Playbook({ client, reload }) {
                   <td className="r tnum">{r.avg_sell_price}</td>
                   <td className="r tnum">{r.avg_days ?? '—'}</td>
                   <td className="r tnum">{r.total_pnl != null ? <span className={r.total_pnl >= 0 ? 'up' : 'down'}>{inrFull(r.total_pnl)}</span> : '—'}</td>
-                  <td className="r tnum"><PnL value={r.pnl_pct} /></td>
+                  <td className="r tnum"><PctPnL value={r.pnl_pct} /></td>
                 </tr>
               ))}
             </tbody>
@@ -818,7 +725,7 @@ function PlaybookStockModal({ client, symbol, onClose }) {
                       <td>{r.sell_date}</td>
                       <td className="r tnum">{r.days ?? '—'}</td>
                       <td className="r tnum">{r.pnl != null ? <span className={r.pnl >= 0 ? 'up' : 'down'}>{inrFull(r.pnl)}</span> : '—'}</td>
-                      <td className="r tnum"><PnL value={r.pnl_pct} /></td>
+                      <td className="r tnum"><PctPnL value={r.pnl_pct} /></td>
                       <td>{r.reason || '—'}</td>
                     </tr>
                   ))}
@@ -899,7 +806,7 @@ function Holdings({ client, reload, onOpenStock }) {
               <td className="r tnum">{inrFull(r.invested_value)}</td>
               <td className="r tnum">{inrFull(r.market_value)}</td>
               <td className="r tnum">{r.unrealized_pnl != null ? <span className={r.unrealized_pnl >= 0 ? 'up' : 'down'}>{inrFull(r.unrealized_pnl)}</span> : '—'}</td>
-              <td className="r tnum"><PnL value={r.unrealized_pct} /></td>
+              <td className="r tnum"><PctPnL value={r.unrealized_pct} /></td>
               <td className="r tnum">{r.portfolio_pct ? r.portfolio_pct + '%' : '—'}</td>
               <td>{r.sector}</td>
               <td className="mono" title={r.entry_date || ''}>{r.entry_date ? shortDate(r.entry_date) : '—'}</td>
@@ -1070,75 +977,6 @@ function Performance({ client, reload, onOpenStock }) {
           </LineChart>
         </ResponsiveContainer>
       </div>
-      <HoldingSummary client={client} reload={reload} onOpenStock={onOpenStock} />
-    </div>
-  )
-}
-
-const HOLDING_SUMMARY_COLUMNS = [
-  { key: 'symbol', label: 'Symbol' },
-  { key: 'status', label: 'Status' },
-  { key: 'days_held', label: 'Days held', r: true },
-  { key: 'return_pct', label: 'Return %', r: true },
-  { key: 'pnl', label: 'P&L', r: true },
-  { key: 'has_thesis', label: 'Thesis' },
-]
-
-function HoldingSummary({ client, reload, onOpenStock }) {
-  const [sort, setSort] = useState({ key: 'return_pct', dir: 'desc' })
-  const s = useAsync(() => api.holdingSummary(client.id), [client.id, reload])
-  if (s.loading) return null
-  if (s.error) return <ErrorBox error={s.error} />
-  const rows = s.data.rows
-  if (!rows.length) return null
-
-  const toggleSort = (key) => {
-    setSort((cur) => (cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
-  }
-  const sorted = [...rows].sort((a, b) => {
-    const av = a[sort.key], bv = b[sort.key]
-    if (av == null && bv == null) return 0
-    if (av == null) return 1
-    if (bv == null) return -1
-    if (typeof av === 'string') return sort.dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
-    return sort.dir === 'asc' ? av - bv : bv - av
-  })
-
-  return (
-    <div className="panel" style={{ padding: 16, marginTop: 16 }}>
-      <h2>Holding summary</h2>
-      <p className="sub">
-        How long each position was (or is) held, and what it returned — open and closed positions, best return first.
-        Click a row to open that stock's thesis (works for closed positions too — this is the only place they're
-        reachable once you no longer hold them). Click a column header to sort. Scroll for more.
-      </p>
-      <div className="hs-scroll">
-        <table>
-          <thead>
-            <tr>
-              {HOLDING_SUMMARY_COLUMNS.map((c) => (
-                <th key={c.key} className={c.r ? 'r' : ''} style={{ cursor: 'pointer', userSelect: 'none' }}
-                  onClick={() => toggleSort(c.key)}>
-                  {c.label}{sort.key === c.key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((r, i) => (
-              <tr key={`${r.symbol}-${r.status}-${i}`} className={onOpenStock ? 'click' : ''}
-                onClick={() => onOpenStock?.(r.symbol)}>
-                <td className="mono">{r.symbol}</td>
-                <td className="sub">{r.status}</td>
-                <td className="tnum">{r.days_held ?? '—'}</td>
-                <td className="tnum">{pct(r.return_pct)}</td>
-                <td className="tnum"><span className={r.pnl >= 0 ? 'up' : 'down'}>{inrFull(r.pnl)}</span></td>
-                <td>{r.has_thesis ? <span title="Thesis recorded">📝</span> : <span className="sub" title="No thesis yet — click to add one">+ add</span>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   )
 }
@@ -1264,221 +1102,6 @@ function shortDate(iso) {
   return `${parseInt(d, 10)} ${MONTHS[parseInt(m, 10) - 1] || m}`
 }
 
-function TagChip({ tag, onRemove }) {
-  return (
-    <span className="tag-chip" style={{ background: `${tag.color}26`, color: tag.color, borderColor: `${tag.color}55` }}>
-      {tag.name}
-      {onRemove && <button type="button" className="tag-chip-x" onClick={(e) => { e.stopPropagation(); onRemove() }}>×</button>}
-    </span>
-  )
-}
-
-// Inline tag editor for one trade — replaces free-text notes with reusable, named,
-// colored tags (matches Zerodha Console's tagging journal). Rendered as a full-width
-// row directly under the trade so it never needs a floating popover that could get
-// clipped by the table's scroll container.
-function TagEditorRow({ trade, allTags, appliedIds, onToggle, onCreateAndApply, colSpan }) {
-  const [name, setName] = useState('')
-  const [color, setColor] = useState(TAG_COLORS[0])
-
-  const submit = () => {
-    const n = name.trim()
-    if (!n) return
-    onCreateAndApply(n, color)
-    setName('')
-  }
-
-  return (
-    <tr className="tag-editor-row">
-      <td colSpan={colSpan}>
-        <div className="tag-editor">
-          <div className="tag-editor-existing">
-            {allTags.length === 0 ? (
-              <span className="sub" style={{ margin: 0 }}>No tags yet — create the first one below.</span>
-            ) : (
-              allTags.map((t) => {
-                const on = appliedIds.includes(t.id)
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={`tag-toggle ${on ? 'on' : ''}`}
-                    style={on ? { background: `${t.color}26`, color: t.color, borderColor: t.color } : {}}
-                    onClick={() => onToggle(t.id)}
-                    title={t.description || t.name}
-                  >
-                    <span className="dot" style={{ background: t.color }} />{t.name}
-                  </button>
-                )
-              })
-            )}
-          </div>
-          <div className="tag-editor-new">
-            <input
-              placeholder="New tag name, e.g. Earnings play"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && submit()}
-            />
-            <div className="tag-color-picker">
-              {TAG_COLORS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  className={`tag-swatch ${color === c ? 'on' : ''}`}
-                  style={{ background: c }}
-                  onClick={() => setColor(c)}
-                />
-              ))}
-            </div>
-            <button type="button" className="btn" onClick={submit}>+ Add & apply</button>
-          </div>
-        </div>
-      </td>
-    </tr>
-  )
-}
-
-// Compact single-line "why" note — the one-off rationale for this specific trade,
-// alongside the reusable tags. Same debounce-on-blur discipline as before: no API
-// call per keystroke across a 500-row table.
-function NoteCell({ value, onSave }) {
-  const [val, setVal] = useState(value || '')
-  const saved = useRef(value || '')
-  useEffect(() => { setVal(value || ''); saved.current = value || '' }, [value])
-  return (
-    <input
-      className="journal-cell"
-      placeholder="Why this trade…"
-      value={val}
-      onClick={(e) => e.stopPropagation()}
-      onChange={(e) => setVal(e.target.value)}
-      onBlur={() => {
-        if (val !== saved.current) {
-          saved.current = val
-          onSave(val)
-        }
-      }}
-    />
-  )
-}
-
-function Trades({ client, reload, onOpenStock }) {
-  const [q, setQ] = useState('')
-  const [tagFilter, setTagFilter] = useState('')
-  const [expanded, setExpanded] = useState(null) // fingerprint of the row being tagged
-  const [override, setOverride] = useState({}) // fingerprint -> tag_ids, optimistic local wins
-  const [page, setPage] = useState(0) // pagination
-  const t = useAsync(() => api.trades(client.id, { tag: tagFilter || undefined }), [client.id, reload, tagFilter])
-  const tagsQ = useAsync(() => api.tags(client.id), [client.id, reload])
-
-  if (t.loading || tagsQ.loading) return <Loading what="trades" />
-  if (t.error) return <ErrorBox error={t.error} />
-  const allTags = tagsQ.data || []
-  const tagsById = Object.fromEntries(allTags.map((tg) => [tg.id, tg]))
-  const rows = t.data.data.filter((r) => !q || r.symbol.includes(q.toUpperCase()))
-
-  const appliedFor = (r) => override[r.fingerprint] ?? r.tag_ids ?? []
-  const pageSize = 10
-  const paged = rows.slice(page * pageSize, (page + 1) * pageSize)
-  const totalPages = Math.ceil(rows.length / pageSize)
-
-  const toggleTag = (r, tagId) => {
-    const current = appliedFor(r)
-    const next = current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId]
-    setOverride((o) => ({ ...o, [r.fingerprint]: next }))
-    api.setTradeTags(client.id, r.fingerprint, next).catch(() => {})
-  }
-
-  const createAndApply = async (r, name, color) => {
-    try {
-      const tag = await api.createTag(client.id, { name, color })
-      tagsQ.data.push(tag) // reflect immediately without a full refetch
-      toggleTag(r, tag.id)
-    } catch { /* ignore */ }
-  }
-
-  const saveNote = (fingerprint, note) => {
-    api.setTradeNote(client.id, fingerprint, note).catch(() => {})
-  }
-
-  return (
-    <div>
-      <div className="row" style={{ marginBottom: 10, flexWrap: 'wrap' }}>
-        <input placeholder="Filter by symbol…" value={q} onChange={(e) => { setQ(e.target.value); setPage(0) }} />
-        <select value={tagFilter} onChange={(e) => { setTagFilter(e.target.value); setPage(0) }}>
-          <option value="">All tags</option>
-          {allTags.map((tg) => <option key={tg.id} value={tg.id}>{tg.name}</option>)}
-        </select>
-        <span className="sub" style={{ margin: 0 }}>{rows.length} of {t.data.meta.total} trades</span>
-      </div>
-      <p className="sub">Why you took a trade, plus tags to categorize it — click a trade's tags to add or create one.</p>
-      <div className="panel tbl-scroll">
-        <table className="trades-table">
-          <colgroup>
-            <col style={{ width: '7%' }} /><col style={{ width: '12%' }} /><col style={{ width: '6%' }} />
-            <col style={{ width: '6%' }} /><col style={{ width: '8%' }} /><col style={{ width: '11%' }} />
-            <col style={{ width: '25%' }} /><col style={{ width: '25%' }} />
-          </colgroup>
-          <thead>
-            <tr>
-              <th>Date</th><th>Symbol</th><th>Type</th><th className="r">Qty</th><th className="r">Price</th><th className="r">Value</th><th>Why</th><th>Tags</th>
-            </tr>
-          </thead>
-          <tbody>
-            {paged.map((r) => {
-              const applied = appliedFor(r).map((id) => tagsById[id]).filter(Boolean)
-              const isOpen = expanded === r.fingerprint
-              return (
-                <React.Fragment key={r.id || r.fingerprint}>
-                  <tr className="click" onClick={() => onOpenStock(r.symbol)}>
-                    <td className="mono" title={r.trade_date}>{shortDate(r.trade_date)}</td>
-                    <td style={{ fontWeight: 600, color: 'var(--accent-ink)' }}>
-                      {r.symbol}{r.exchange && r.exchange !== 'NSE' && <span className="exch-badge">{r.exchange}</span>}
-                    </td>
-                    <td><span className={`badge ${r.trade_type}`} title={r.trade_type}>{r.trade_type === 'buy' ? 'B' : 'S'}</span></td>
-                    <td className="r tnum">{r.quantity}</td>
-                    <td className="r tnum">{r.price}</td>
-                    <td className="r tnum">{inrFull(r.trade_value)}</td>
-                    <td>
-                      <NoteCell value={r.note} onSave={(v) => saveNote(r.fingerprint, v)} />
-                    </td>
-                    <td>
-                      <div className="tag-cell" onClick={(e) => { e.stopPropagation(); setExpanded(isOpen ? null : r.fingerprint) }}>
-                        {applied.map((tg) => <TagChip key={tg.id} tag={tg} />)}
-                        <button type="button" className="tag-add">{applied.length ? '+' : '+ Tag'}</button>
-                      </div>
-                    </td>
-                  </tr>
-                  {isOpen && (
-                    <TagEditorRow
-                      trade={r}
-                      allTags={allTags}
-                      appliedIds={appliedFor(r)}
-                      onToggle={(tagId) => toggleTag(r, tagId)}
-                      onCreateAndApply={(name, color) => createAndApply(r, name, color)}
-                      colSpan={8}
-                    />
-                  )}
-                </React.Fragment>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-      {totalPages > 1 && (
-        <div className="row" style={{ justifyContent: 'center', marginTop: 12, gap: 8 }}>
-          <button className="btn ghost" disabled={page === 0}
-            onClick={() => { setPage((p) => Math.max(0, p - 1)); setExpanded(null) }}>← Prev</button>
-          <span className="sub" style={{ margin: 0 }}>Page {page + 1} of {totalPages}</span>
-          <button className="btn ghost" disabled={page >= totalPages - 1}
-            onClick={() => { setPage((p) => Math.min(totalPages - 1, p + 1)); setExpanded(null) }}>Next →</button>
-        </div>
-      )}
-    </div>
-  )
-}
-
 // Every section is mounted simultaneously now (continuous-scroll dashboard), and the
 // scrollspy above changes `tab` state on every scroll tick — memoize the section
 // components so that state change doesn't force heavy children (charts, big tables)
@@ -1488,5 +1111,4 @@ const HoldingsSection = React.memo(Holdings)
 const AllocationSection = React.memo(Allocation)
 const PerformanceSection = React.memo(Performance)
 const DividendsSection = React.memo(Dividends)
-const TradesSection = React.memo(Trades)
 const PlaybookSection = React.memo(Playbook)

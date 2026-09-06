@@ -16,6 +16,11 @@ export function PnL({ value }) {
   return <span className={value >= 0 ? 'up' : 'down'}>{inr(value)}</span>
 }
 
+export function PctPnL({ value }) {
+  if (value === null || value === undefined) return <span>—</span>
+  return <span className={value >= 0 ? 'up' : 'down'}>{pct(value)}</span>
+}
+
 export function Loading({ what = 'data' }) {
   return (
     <div className="loading">
