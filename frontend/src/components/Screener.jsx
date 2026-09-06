@@ -73,6 +73,48 @@ function buildSignals(s, news) {
   return sig
 }
 
+function TechLevels({ s }) {
+  const L = s.levels || {}
+  const price = s.price
+  if (L.recent_high == null) return null
+  const rupeeMove = (price != null && L.typical_move_pct != null) ? Math.round(price * L.typical_move_pct / 100) : null
+  const pos = L.range_position
+  const where = pos == null ? '' : pos >= 70 ? 'near the top of' : pos <= 30 ? 'near the bottom of' : 'in the middle of'
+  const trend = (price != null && L.dma20 != null && L.dma50 != null)
+    ? (price > L.dma20 && price > L.dma50 ? 'above both averages (uptrend)'
+      : price < L.dma20 && price < L.dma50 ? 'below both averages (downtrend)'
+      : 'between its averages (mixed)')
+    : null
+  return (
+    <>
+      <div className="scr-brief-hd" style={{ marginTop: 16 }}>Technical levels — explained simply</div>
+      <ul className="scr-sig">
+        <li><span className="dot" />
+          <span><b>Recent range (last month):</b> ₹{L.recent_low?.toLocaleString('en-IN')} to ₹{L.recent_high?.toLocaleString('en-IN')}.
+          The low is the <b>floor</b> buyers have defended; the high is the <b>ceiling</b> it keeps hitting.
+          {pos != null && <> Right now it sits <b>{where}</b> that band ({pos}%).</>}</span>
+        </li>
+        <li><span className="dot" />
+          <span><b>Typical daily move:</b> about <b>{L.typical_move_pct}%</b>
+          {rupeeMove != null && <> — roughly ₹{rupeeMove.toLocaleString('en-IN')} up or down on a normal day</>}.
+          Bigger number = bumpier ride, so any plan needs more breathing room.</span>
+        </li>
+        {L.dma20 != null && (
+          <li><span className="dot" />
+            <span><b>Averages:</b> 20-day ₹{L.dma20?.toLocaleString('en-IN')}{L.dma50 != null && <> · 50-day ₹{L.dma50?.toLocaleString('en-IN')}</>}.
+            Price is {trend}. Above the lines = the trend is up; below = down.</span>
+          </li>
+        )}
+      </ul>
+      <div className="scr-brief-note">
+        How to read it, plainly: prices often <b>bounce up</b> near the recent low and <b>stall</b> near the recent high.
+        The 20/50-day averages show which way the tide is flowing. The typical daily move tells you how much wiggle is normal.
+        These are just the chart’s facts — <b>what you do with them is your decision</b>, not a suggestion from this tool.
+      </div>
+    </>
+  )
+}
+
 function BriefPanel({ s, news }) {
   const f = s.fundamentals || {}
   const signals = buildSignals(s, news)
@@ -100,6 +142,8 @@ function BriefPanel({ s, news }) {
           </div>
         ) : <div className="scr-brief-none">Quarterly KPIs not researched for this name yet.</div>}
         {f.note && <div className="scr-brief-note">{f.note}</div>}
+
+        <TechLevels s={s} />
       </div>
 
       {/* RIGHT: recent news */}

@@ -419,9 +419,37 @@ def _rsi(closes: list[float], period: int = 14) -> float | None:
     return round(100 - (100 / (1 + rs)), 1)
 
 
+def _levels(closes: list[float]) -> dict:
+    """Objective, close-based reference levels a swing trader eyeballs — no recommendation,
+    just chart facts computed from daily closing prices:
+      recent_high/low : the ~1-month ceiling and floor (highest/lowest close, last ~22 sessions)
+      range_position  : where today's close sits in that low→high band (0=at floor, 100=at ceiling)
+      dma20/dma50     : simple moving averages (trend context)
+      typical_move_pct: average absolute daily % move over the last 14 sessions ("how much it
+                        usually moves in a day") — a plain volatility gauge from closes.
+    """
+    if not closes:
+        return {"recent_high": None, "recent_low": None, "range_position": None,
+                "dma20": None, "dma50": None, "typical_move_pct": None}
+    last = closes[-1]
+    win = closes[-22:] if len(closes) >= 22 else closes
+    hi, lo = max(win), min(win)
+    rng = hi - lo
+    range_pos = round((last - lo) / rng * 100, 0) if rng > 0 else None
+    dma20 = round(sum(closes[-20:]) / len(closes[-20:]), 2) if len(closes) >= 20 else None
+    dma50 = round(sum(closes[-50:]) / len(closes[-50:]), 2) if len(closes) >= 50 else None
+    rets = [abs(closes[i] / closes[i - 1] - 1) for i in range(max(1, len(closes) - 14), len(closes)) if closes[i - 1]]
+    typical = round(sum(rets) / len(rets) * 100, 2) if rets else None
+    return {
+        "recent_high": round(hi, 2), "recent_low": round(lo, 2), "range_position": range_pos,
+        "dma20": dma20, "dma50": dma50, "typical_move_pct": typical,
+    }
+
+
 def _price_matrix_one(symbol: str, exchange: str) -> dict:
-    """1D/1W/1M/1Y % change + % off the 52-week high + RSI(14), all derived from the
-    same daily-close history used for the watchlist/stock-detail charts — no separate feed."""
+    """1D/1W/1M/1Y % change + % off the 52-week high + RSI(14) + close-based reference
+    levels, all derived from the same daily-close history used for the watchlist/stock-detail
+    charts — no separate feed."""
     from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
@@ -451,6 +479,7 @@ def _price_matrix_one(symbol: str, exchange: str) -> dict:
         "y1": _pct(y1_ref["close"], latest["close"]) if (y1_ref and y1_ref["date"] <= (now - timedelta(days=300)).strftime("%Y-%m-%d")) else None,
         "from_52w_high": _pct(high_52w, latest["close"]) if high_52w else None,
         "rsi": _rsi([p["close"] for p in points]),
+        **_levels([p["close"] for p in points]),
     }
 
 

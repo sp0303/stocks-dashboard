@@ -148,6 +148,14 @@ async def screener():
             "rel_strength": _round(rel),
             "score": _round(score),
             "fundamentals": u["fundamentals"],
+            "levels": {
+                "recent_high": m.get("recent_high"),
+                "recent_low": m.get("recent_low"),
+                "range_position": m.get("range_position"),
+                "dma20": m.get("dma20"),
+                "dma50": m.get("dma50"),
+                "typical_move_pct": m.get("typical_move_pct"),
+            },
         })
 
     # Rank-wise: highest composite score first (None scores sink to the bottom).
