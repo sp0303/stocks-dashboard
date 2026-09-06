@@ -487,6 +487,66 @@ async def playbook_by_stock(client_id: str):
     return {"data": analytics.playbook_by_stock(trades)}
 
 
+@router.get("/{client_id}/pnl-calendar")
+async def pnl_calendar(client_id: str):
+    """P&L calendar: realised daily P&L from closed trades, grouped by sell_date.
+    Returns all trading days ever (no date params — frontend paginates by month client-side).
+    Cached 300s to match the metrics endpoint."""
+    trades = await _trades_or_404(client_id)
+    journal = await get_store().get_trade_journal(client_id)
+    tags = await get_store().list_tags(client_id)
+
+    # Get closed round-trips from analytics.playbook (the same rows the UI Playbook table shows).
+    rows = analytics.playbook(trades, journal, tags)
+
+    # Group by sell_date: aggregate realized P&L, count wins/losses, collect symbols.
+    days: dict[str, dict] = {}
+    for row in rows:
+        sell_date = row.get("sell_date")
+        if not sell_date:
+            continue
+
+        if sell_date not in days:
+            days[sell_date] = {"pnl": 0.0, "trades": 0, "wins": 0, "losses": 0, "symbols": set()}
+
+        pnl = row.get("pnl", 0)
+        days[sell_date]["pnl"] += pnl
+        days[sell_date]["trades"] += 1
+        days[sell_date]["wins"] += 1 if pnl > 0 else 0
+        days[sell_date]["losses"] += 1 if pnl < 0 else 0
+        days[sell_date]["symbols"].add(row["symbol"])
+
+    # Convert sets to sorted lists, round P&L.
+    for d in days.values():
+        d["pnl"] = round(d["pnl"], 2)
+        d["symbols"] = sorted(list(d["symbols"]))
+
+    # Compute month summary: total realised, win/loss day counts, best/worst day.
+    total_realized = sum(d["pnl"] for d in days.values())
+    win_days = sum(1 for d in days.values() if d["pnl"] > 0)
+    loss_days = sum(1 for d in days.values() if d["pnl"] < 0)
+    best_day = max(({"date": k, "pnl": v["pnl"]} for k, v in days.items()), key=lambda x: x["pnl"], default=None)
+    worst_day = min(({"date": k, "pnl": v["pnl"]} for k, v in days.items()), key=lambda x: x["pnl"], default=None)
+
+    # Date range (earliest/latest sell_date).
+    all_dates = sorted(days.keys())
+    date_range = {"first": all_dates[0], "last": all_dates[-1]} if all_dates else {}
+
+    return {
+        "data": {
+            "days": days,
+            "summary": {
+                "realized": round(total_realized, 2),
+                "win_days": win_days,
+                "loss_days": loss_days,
+                "best_day": best_day,
+                "worst_day": worst_day,
+            },
+            "range": date_range,
+        }
+    }
+
+
 @router.get("/{client_id}/holding-summary")
 async def holding_summary(client_id: str):
     """Per-stock 'held N days, made/lost X%' rows — fast, no LLM call. The narrative
