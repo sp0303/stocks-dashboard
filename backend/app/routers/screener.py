@@ -12,12 +12,21 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.routers.sectors import SECTORS_REGISTRY
 from app.services.market_data import get_price_matrix, get_quote_details
+from app.services.stock_news import get_stock_news
 
 router = APIRouter(prefix="/api/screener", tags=["screener"])
+
+
+def _name_for_ticker(ticker: str) -> str | None:
+    for sec in SECTORS_REGISTRY.values():
+        for c in sec["covered"] + sec["roster"]:
+            if c["ticker"].upper() == ticker.upper():
+                return c["name"]
+    return None
 
 
 def _round(v, n=2):
@@ -117,3 +126,17 @@ async def screener():
             "sectors": {s: _round(v) for s, v in sector_w1_avg.items()},
         }
     }
+
+
+@router.get("/news/{ticker}")
+async def stock_news(ticker: str):
+    """Recent news headlines for one covered stock (Google News RSS, cached).
+
+    Context only: returns headline + source + date + link (+ factual keyword tags found in
+    the headline). It does NOT claim why a stock moved — the user reads the headlines and
+    judges. 404 only if the ticker isn't in the covered universe.
+    """
+    name = _name_for_ticker(ticker)
+    if not name:
+        raise HTTPException(status_code=404, detail=f"Ticker '{ticker}' not in covered universe")
+    return {"data": get_stock_news(name, ticker.upper())}

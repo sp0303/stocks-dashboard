@@ -37,29 +37,67 @@ function useTheme() {
   return [isDark, () => setTheme(isDark ? 'light' : 'dark')]
 }
 
-function Row({ s }) {
+const fmtAge = (d) => (d == null ? '' : d < 1 ? 'today' : d < 2 ? '1d ago' : `${Math.round(d)}d ago`)
+
+function NewsPanel({ news }) {
+  if (news.loading) return <div className="scr-news-box"><div className="scr-news-empty">Loading news…</div></div>
+  if (news.error) return <div className="scr-news-box"><div className="scr-news-empty">Couldn’t load news right now.</div></div>
+  const items = news.data?.headlines || []
   return (
-    <tr>
-      <td className="scr-rank">{s.rank}</td>
-      <td className="l">
-        <div className="scr-tk">{s.ticker}</div>
-        <div className="scr-nm">{s.name}</div>
-      </td>
-      <td className="l"><span className="scr-sec-pill">{SECTOR_LABELS[s.sector] || s.sector}</span></td>
-      <td>₹{s.price?.toLocaleString('en-IN')}</td>
-      <td className={pctCls(s.d1)}>{fmtPct(s.d1)}</td>
-      <td className={pctCls(s.w1)}>{fmtPct(s.w1)}</td>
-      <td className={pctCls(s.m1)}>{fmtPct(s.m1)}</td>
-      <td><span className={`scr-rsi ${rsiTone(s.rsi)}`}>{s.rsi == null ? '—' : s.rsi.toFixed(0)}</span></td>
-      <td className={pctCls(s.rel_strength)}>{s.rel_strength == null ? '—' : `${s.rel_strength > 0 ? '+' : ''}${s.rel_strength.toFixed(1)}`}</td>
-      <td className={pctCls(s.from_52w_high)}>{s.from_52w_high == null ? '—' : `${s.from_52w_high.toFixed(1)}%`}</td>
-      <td>{fmtVol(s.volume)}</td>
-      <td className="scr-score">{s.score == null ? '—' : s.score.toFixed(1)}</td>
-    </tr>
+    <div className="scr-news-box">
+      <div className="scr-news-hd">Recent news — {news.data?.company}</div>
+      {items.length === 0 ? (
+        <div className="scr-news-empty">No recent headlines found in the last 2 weeks.</div>
+      ) : items.map((h, i) => (
+        <a key={i} className="scr-news-item" href={h.link} target="_blank" rel="noopener noreferrer">
+          <div className="scr-news-title">{h.title}</div>
+          <div className="scr-news-meta">
+            {h.source && <span>{h.source}</span>}
+            {h.age_days != null && <span>· {fmtAge(h.age_days)}</span>}
+            {(h.catalysts || []).map((c) => <span key={c} className="scr-cat">{c}</span>)}
+          </div>
+        </a>
+      ))}
+      <div className="scr-news-disc">Headlines for context only — not a verified cause of any price move, and not advice.</div>
+    </div>
   )
 }
 
-function Table({ stocks }) {
+function Row({ s, expanded, news, onToggle }) {
+  return (
+    <>
+      <tr>
+        <td className="scr-rank">{s.rank}</td>
+        <td className="l">
+          <div className="scr-tk">{s.ticker}</div>
+          <div className="scr-nm">{s.name}</div>
+        </td>
+        <td className="l"><span className="scr-sec-pill">{SECTOR_LABELS[s.sector] || s.sector}</span></td>
+        <td>₹{s.price?.toLocaleString('en-IN')}</td>
+        <td className={pctCls(s.d1)}>{fmtPct(s.d1)}</td>
+        <td className={pctCls(s.w1)}>{fmtPct(s.w1)}</td>
+        <td className={pctCls(s.m1)}>{fmtPct(s.m1)}</td>
+        <td><span className={`scr-rsi ${rsiTone(s.rsi)}`}>{s.rsi == null ? '—' : s.rsi.toFixed(0)}</span></td>
+        <td className={pctCls(s.rel_strength)}>{s.rel_strength == null ? '—' : `${s.rel_strength > 0 ? '+' : ''}${s.rel_strength.toFixed(1)}`}</td>
+        <td className={pctCls(s.from_52w_high)}>{s.from_52w_high == null ? '—' : `${s.from_52w_high.toFixed(1)}%`}</td>
+        <td>{fmtVol(s.volume)}</td>
+        <td className="scr-score">{s.score == null ? '—' : s.score.toFixed(1)}</td>
+        <td>
+          <button className={`scr-newsbtn ${expanded ? 'open' : ''}`} onClick={() => onToggle(s.ticker)}>
+            {expanded ? 'Hide' : 'Why ▾'}
+          </button>
+        </td>
+      </tr>
+      {expanded && (
+        <tr>
+          <td className="scr-news-cell" colSpan={13}><NewsPanel news={news || { loading: true }} /></td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+function Table({ stocks, expanded, newsCache, onToggle }) {
   return (
     <div className="scr-tbl-scroll">
       <table className="scr-tbl">
@@ -77,10 +115,14 @@ function Table({ stocks }) {
             <th>52w High</th>
             <th>Volume</th>
             <th>Score</th>
+            <th>News</th>
           </tr>
         </thead>
         <tbody>
-          {stocks.map((s) => <Row key={s.ticker} s={s} />)}
+          {stocks.map((s) => (
+            <Row key={s.ticker} s={s} expanded={expanded === s.ticker}
+                 news={newsCache[s.ticker]} onToggle={onToggle} />
+          ))}
         </tbody>
       </table>
     </div>
@@ -92,6 +134,19 @@ export default function Screener() {
   const { loading, data, error } = useAsync(() => api.screener(), [])
   const [view, setView] = useState('rank')   // 'rank' | 'sector'
   const [limit, setLimit] = useState(20)      // 20 | 50
+  const [expanded, setExpanded] = useState(null)      // ticker whose news is open
+  const [newsCache, setNewsCache] = useState({})       // { ticker: {loading, data, error} }
+
+  const toggleNews = (ticker) => {
+    if (expanded === ticker) { setExpanded(null); return }
+    setExpanded(ticker)
+    if (!newsCache[ticker]) {
+      setNewsCache((c) => ({ ...c, [ticker]: { loading: true } }))
+      api.stockNews(ticker)
+        .then((d) => setNewsCache((c) => ({ ...c, [ticker]: { data: d } })))
+        .catch((e) => setNewsCache((c) => ({ ...c, [ticker]: { error: e.message || true } })))
+    }
+  }
 
   return (
     <div className="scr-wrap">
@@ -142,7 +197,8 @@ export default function Screener() {
           return (
             <>
               {controls}
-              <Table stocks={stocks.slice(0, limit)} />
+              <Table stocks={stocks.slice(0, limit)} expanded={expanded}
+                     newsCache={newsCache} onToggle={toggleNews} />
             </>
           )
         }
@@ -161,7 +217,8 @@ export default function Screener() {
                   {SECTOR_LABELS[sec] || sec}
                   <span className="avg">sector avg 1W: {sectors[sec] == null ? '—' : `${sectors[sec] > 0 ? '+' : ''}${sectors[sec].toFixed(1)}%`}</span>
                 </h2>
-                <Table stocks={grouped[sec].slice(0, limit)} />
+                <Table stocks={grouped[sec].slice(0, limit)} expanded={expanded}
+                       newsCache={newsCache} onToggle={toggleNews} />
               </div>
             ))}
           </>

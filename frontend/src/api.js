@@ -209,6 +209,7 @@ export const api = {
     req(`/api/clients/${clientId}/sync-portfolio`, { method: 'POST' }).then((r) => r.data),
   // Swing-trade screener (standalone /screener page)
   screener: () => req('/api/screener').then((r) => r.data),
+  stockNews: (ticker) => req(`/api/screener/news/${ticker}`).then((r) => r.data),
 }
 
 // Human label + tone for a corporate-action type (shared by drawer/feed/badges).
