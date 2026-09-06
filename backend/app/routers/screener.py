@@ -33,6 +33,42 @@ def _round(v, n=2):
     return round(v, n) if isinstance(v, (int, float)) else None
 
 
+def _fundamentals(company: dict, sector_id: str) -> dict:
+    """Normalise the hand-researched quarterly + fundamental fields (which differ per sector
+    schema) into one common shape for the 'what to watch' briefing. Covered names carry these;
+    roster names return has_results=False. Pure fact passthrough — no scoring, no advice."""
+    f = {
+        "has_results": False,
+        "market_cap_cr": company.get("market_cap_cr"),
+        "pe_label": company.get("pe_label"),
+        "pat_yoy_pct": company.get("pat_yoy_pct"),
+        "pat_yoy_label": company.get("pat_yoy_label"),
+        "rev_growth_label": None, "rev_growth_pct": None,
+        "margin_label": None, "margin_pct": None,
+        "quality_label": None, "quality_value": None, "quality_status": None,
+        "note": company.get("note"),
+    }
+    # Revenue growth (banks report NII instead of revenue).
+    if sector_id == "banks":
+        f["rev_growth_label"], f["rev_growth_pct"] = "NII YoY", company.get("nii_yoy_pct")
+        f["margin_label"], f["margin_pct"] = "NIM", company.get("nim_pct")
+        f["quality_label"], f["quality_value"] = "GNPA", company.get("gnpa_pct")
+    elif sector_id == "it":
+        f["rev_growth_label"], f["rev_growth_pct"] = "Revenue YoY", company.get("revenue_yoy_pct")
+        f["margin_label"], f["margin_pct"] = "EBIT margin", company.get("ebit_margin_pct")
+    else:  # hotels, auto
+        f["rev_growth_label"], f["rev_growth_pct"] = "Revenue YoY", company.get("revenue_yoy_pct")
+        f["margin_label"], f["margin_pct"] = "EBITDA margin", company.get("ebitda_margin_pct")
+        f["quality_label"] = "Leverage"
+        f["quality_value"] = company.get("leverage_label")
+        f["quality_status"] = company.get("leverage_status")
+
+    # "Has results" = we actually researched a P&L for this name (covered, not roster-only).
+    if any(f[k] is not None for k in ("pat_yoy_pct", "rev_growth_pct", "margin_pct")):
+        f["has_results"] = True
+    return f
+
+
 @router.get("")
 async def screener():
     """Ranked technical snapshot across all covered sectors.
@@ -42,12 +78,13 @@ async def screener():
     transparent composite momentum score. Also returns per-sector averages so the UI can
     show sector-wise strength. No advice, no price targets — screening data only.
     """
-    # Collect the full universe with names + exchanges, tagged by sector.
+    # Collect the full universe with names + exchanges + fundamentals, tagged by sector.
     universe: list[dict] = []
     for sector_id, sec in SECTORS_REGISTRY.items():
         for c in sec["covered"] + sec["roster"]:
             universe.append({"sector": sector_id, "ticker": c["ticker"],
-                             "name": c["name"], "exchange": c.get("exchange", "NSE")})
+                             "name": c["name"], "exchange": c.get("exchange", "NSE"),
+                             "fundamentals": _fundamentals(c, sector_id)})
 
     tickers = [u["ticker"] for u in universe]
     exchanges = {u["ticker"]: u["exchange"] for u in universe}
@@ -110,6 +147,7 @@ async def screener():
             "volume": q.get("volume"),
             "rel_strength": _round(rel),
             "score": _round(score),
+            "fundamentals": u["fundamentals"],
         })
 
     # Rank-wise: highest composite score first (None scores sink to the bottom).

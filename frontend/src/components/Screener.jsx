@@ -38,27 +38,88 @@ function useTheme() {
 }
 
 const fmtAge = (d) => (d == null ? '' : d < 1 ? 'today' : d < 2 ? '1d ago' : `${Math.round(d)}d ago`)
+const fmtCr = (v) => {
+  if (v == null) return '—'
+  if (v >= 1e5) return `₹${(v / 1e5).toFixed(2)}L Cr`
+  if (v >= 1e3) return `₹${(v / 1e3).toFixed(1)}k Cr`
+  return `₹${v.toLocaleString('en-IN')} Cr`
+}
+const growthCls = (v) => (v == null ? '' : v > 0 ? 'up' : v < 0 ? 'down' : '')
 
-function NewsPanel({ news }) {
-  if (news.loading) return <div className="scr-news-box"><div className="scr-news-empty">Loading news…</div></div>
-  if (news.error) return <div className="scr-news-box"><div className="scr-news-empty">Couldn’t load news right now.</div></div>
-  const items = news.data?.headlines || []
+// Build a list of plain factual signals from data the screener already has. These are
+// observations ("at 52w high", "RSI elevated"), NOT recommendations or entry calls.
+function buildSignals(s, news) {
+  const sig = []
+  if (s.from_52w_high != null) {
+    if (s.from_52w_high >= -2) sig.push({ t: 'Trading at / near its 52-week high', tone: 'up' })
+    else if (s.from_52w_high <= -25) sig.push({ t: `${Math.abs(s.from_52w_high).toFixed(0)}% below its 52-week high`, tone: 'down' })
+  }
+  if (s.rsi != null) {
+    if (s.rsi > 75) sig.push({ t: `RSI ${s.rsi.toFixed(0)} — overbought zone`, tone: 'warn' })
+    else if (s.rsi >= 50 && s.rsi <= 65) sig.push({ t: `RSI ${s.rsi.toFixed(0)} — healthy uptrend zone`, tone: 'up' })
+    else if (s.rsi < 40) sig.push({ t: `RSI ${s.rsi.toFixed(0)} — weak / oversold`, tone: 'down' })
+    else sig.push({ t: `RSI ${s.rsi.toFixed(0)} — neutral`, tone: '' })
+  }
+  if (s.rel_strength != null) {
+    if (s.rel_strength > 0) sig.push({ t: `Outperforming its sector this week (+${s.rel_strength.toFixed(1)}pp)`, tone: 'up' })
+    else if (s.rel_strength < 0) sig.push({ t: `Lagging its sector this week (${s.rel_strength.toFixed(1)}pp)`, tone: 'down' })
+  }
+  const f = s.fundamentals || {}
+  if (f.pat_yoy_pct != null) sig.push({ t: `Latest quarter PAT ${f.pat_yoy_pct > 0 ? '+' : ''}${f.pat_yoy_pct}% YoY`, tone: growthCls(f.pat_yoy_pct) })
+  else if (f.pat_yoy_label) sig.push({ t: `Latest quarter: ${f.pat_yoy_label}`, tone: '' })
+  // Aggregate unique news catalyst tags into one factual line.
+  const cats = [...new Set((news?.data?.headlines || []).flatMap((h) => h.catalysts || []))]
+  if (cats.length) sig.push({ t: `Recent news themes: ${cats.join(', ')}`, tone: '' })
+  return sig
+}
+
+function BriefPanel({ s, news }) {
+  const f = s.fundamentals || {}
+  const signals = buildSignals(s, news)
   return (
-    <div className="scr-news-box">
-      <div className="scr-news-hd">Recent news — {news.data?.company}</div>
-      {items.length === 0 ? (
-        <div className="scr-news-empty">No recent headlines found in the last 2 weeks.</div>
-      ) : items.map((h, i) => (
-        <a key={i} className="scr-news-item" href={h.link} target="_blank" rel="noopener noreferrer">
-          <div className="scr-news-title">{h.title}</div>
-          <div className="scr-news-meta">
-            {h.source && <span>{h.source}</span>}
-            {h.age_days != null && <span>· {fmtAge(h.age_days)}</span>}
-            {(h.catalysts || []).map((c) => <span key={c} className="scr-cat">{c}</span>)}
+    <div className="scr-brief">
+      {/* LEFT: factual signals + latest results / fundamentals */}
+      <div className="scr-brief-col">
+        <div className="scr-brief-hd">What the data shows — facts, you decide</div>
+        <ul className="scr-sig">
+          {signals.length === 0 ? <li className="scr-brief-none">No standout signals.</li>
+            : signals.map((g, i) => <li key={i}><span className={`dot ${g.tone}`} />{g.t}</li>)}
+        </ul>
+
+        <div className="scr-brief-hd" style={{ marginTop: 16 }}>
+          {f.has_results ? 'Latest results & fundamentals' : 'Fundamentals'}
+        </div>
+        {f.has_results || f.market_cap_cr ? (
+          <div className="scr-fund">
+            <div><span className="k">Market cap</span><span className="v">{fmtCr(f.market_cap_cr)}</span></div>
+            <div><span className="k">P/E</span><span className="v">{f.pe_label || '—'}</span></div>
+            {f.rev_growth_pct != null && <div><span className="k">{f.rev_growth_label}</span><span className={`v ${growthCls(f.rev_growth_pct)}`}>{f.rev_growth_pct > 0 ? '+' : ''}{f.rev_growth_pct}%</span></div>}
+            {f.margin_pct != null && <div><span className="k">{f.margin_label}</span><span className="v">{f.margin_pct}%</span></div>}
+            {f.pat_yoy_pct != null && <div><span className="k">PAT YoY</span><span className={`v ${growthCls(f.pat_yoy_pct)}`}>{f.pat_yoy_pct > 0 ? '+' : ''}{f.pat_yoy_pct}%</span></div>}
+            {f.quality_value != null && <div><span className="k">{f.quality_label}</span><span className="v">{typeof f.quality_value === 'number' ? `${f.quality_value}%` : f.quality_value}</span></div>}
           </div>
-        </a>
-      ))}
-      <div className="scr-news-disc">Headlines for context only — not a verified cause of any price move, and not advice.</div>
+        ) : <div className="scr-brief-none">Quarterly KPIs not researched for this name yet.</div>}
+        {f.note && <div className="scr-brief-note">{f.note}</div>}
+      </div>
+
+      {/* RIGHT: recent news */}
+      <div className="scr-brief-col">
+        <div className="scr-brief-hd">Recent news{news?.data?.company ? ` — ${news.data.company}` : ''}</div>
+        {!news || news.loading ? <div className="scr-news-empty">Loading news…</div>
+          : news.error ? <div className="scr-news-empty">Couldn’t load news right now.</div>
+          : (news.data?.headlines || []).length === 0 ? <div className="scr-news-empty">No headlines in the last 2 weeks.</div>
+          : news.data.headlines.map((h, i) => (
+            <a key={i} className="scr-news-item" href={h.link} target="_blank" rel="noopener noreferrer">
+              <div className="scr-news-title">{h.title}</div>
+              <div className="scr-news-meta">
+                {h.source && <span>{h.source}</span>}
+                {h.age_days != null && <span>· {fmtAge(h.age_days)}</span>}
+                {(h.catalysts || []).map((c) => <span key={c} className="scr-cat">{c}</span>)}
+              </div>
+            </a>
+          ))}
+        <div className="scr-news-disc">Facts for context only — not a verified cause of any move, and not investment advice.</div>
+      </div>
     </div>
   )
 }
@@ -84,13 +145,13 @@ function Row({ s, expanded, news, onToggle }) {
         <td className="scr-score">{s.score == null ? '—' : s.score.toFixed(1)}</td>
         <td>
           <button className={`scr-newsbtn ${expanded ? 'open' : ''}`} onClick={() => onToggle(s.ticker)}>
-            {expanded ? 'Hide' : 'Why ▾'}
+            {expanded ? 'Hide' : 'Watch ▾'}
           </button>
         </td>
       </tr>
       {expanded && (
         <tr>
-          <td className="scr-news-cell" colSpan={13}><NewsPanel news={news || { loading: true }} /></td>
+          <td className="scr-news-cell" colSpan={13}><BriefPanel s={s} news={news} /></td>
         </tr>
       )}
     </>
@@ -115,7 +176,7 @@ function Table({ stocks, expanded, newsCache, onToggle }) {
             <th>52w High</th>
             <th>Volume</th>
             <th>Score</th>
-            <th>News</th>
+            <th>Watch</th>
           </tr>
         </thead>
         <tbody>
