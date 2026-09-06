@@ -207,14 +207,6 @@ export const api = {
   // Portfolio viewer - manual sync
   portfolioSync: (clientId) =>
     req(`/api/clients/${clientId}/sync-portfolio`, { method: 'POST' }).then((r) => r.data),
-  // Angel One market data (for quotes/prices, not trades)
-  angelLogin: (clientId, credentials) =>
-    req(`/api/clients/${clientId}/broker/angel/authenticate`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(credentials),
-    }).then((r) => r.data),
-  angelStatus: (clientId) =>
-    req(`/api/clients/${clientId}/broker/angel/status`).then((r) => r.data),
 }
 
 // Human label + tone for a corporate-action type (shared by drawer/feed/badges).
