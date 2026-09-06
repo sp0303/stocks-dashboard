@@ -302,6 +302,25 @@ function BasisToggle({ basis, setBasis }) {
 // enlarges that slice and dims the rest so it's unambiguous which is which.
 function AllocationChart({ data, height = 300, outerRadius = 110, innerRadius = 55, labelKey = 'key' }) {
   const [hover, setHover] = useState(null)
+  const [sort, setSort] = useState({ key: 'value', dir: 'desc' })
+
+  const toggleSort = (key) => {
+    setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
+  }
+
+  const sorted = [...data].sort((a, b) => {
+    const av = a[sort.key], bv = b[sort.key]
+    if (av == null && bv == null) return 0
+    if (av == null) return 1
+    if (bv == null) return -1
+    if (typeof av === 'string') return sort.dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
+    return sort.dir === 'asc' ? av - bv : bv - av
+  })
+
+  // Map sorted array back to original indices for hover-sync with pie chart
+  const hoverRow = hover !== null ? sorted[hover] : null
+  const origIdx = hoverRow ? data.findIndex((r) => r.key === hoverRow.key) : null
+
   return (
     <div className="grid2">
       <div className="panel" style={{ padding: 12, minHeight: height }}>
@@ -312,16 +331,16 @@ function AllocationChart({ data, height = 300, outerRadius = 110, innerRadius = 
               outerRadius={outerRadius} innerRadius={innerRadius}
               label={({ pct: p }) => `${p}%`}
               labelLine={{ stroke: 'var(--muted)' }}
-              activeIndex={hover === null ? undefined : hover}
+              activeIndex={origIdx !== null ? origIdx : undefined}
               activeShape={renderActiveSlice}
-              onMouseEnter={(_, i) => setHover(i)}
+              onMouseEnter={(_, i) => setHover(data.findIndex((r) => r.key === sorted[data.findIndex((x) => x.key === data[i].key)].key))}
               onMouseLeave={() => setHover(null)}
             >
               {data.map((_, i) => (
                 <Cell
                   key={i}
                   fill={PALETTE[i % PALETTE.length]}
-                  fillOpacity={hover === null || hover === i ? 1 : 0.35}
+                  fillOpacity={origIdx === null || origIdx === i ? 1 : 0.35}
                 />
               ))}
             </Pie>
@@ -331,11 +350,11 @@ function AllocationChart({ data, height = 300, outerRadius = 110, innerRadius = 
       </div>
       <div className="panel tbl-scroll">
         <table>
-          <thead><tr><th>{labelKey}</th><th className="r">Value</th><th className="r">Weight</th></tr></thead>
+          <thead><tr><th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('key')}>{labelKey}{sort.key === 'key' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th><th className="r" style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('value')}>Value{sort.key === 'value' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th><th className="r" style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('pct')}>Weight{sort.key === 'pct' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th></tr></thead>
           <tbody>
-            {data.map((r, i) => (
+            {sorted.map((r, i) => (
               <tr key={r.key} className={hover === i ? 'hl' : ''} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
-                <td><span className="dot" style={{ background: PALETTE[i % PALETTE.length] }} />{r.key}</td>
+                <td><span className="dot" style={{ background: PALETTE[data.findIndex((x) => x.key === r.key) % PALETTE.length] }} />{r.key}</td>
                 <td className="r tnum">{inrFull(r.value)}</td>
                 <td className="r tnum">{r.pct}%</td>
               </tr>
@@ -513,6 +532,7 @@ function Overview({ client, reload, onChanged }) {
         <Stat label="Realized P&L" value={inr(d.realized_pnl)} tone={d.realized_pnl >= 0 ? 'up' : 'down'} />
         <Stat label="Unrealized P&L" value={inr(d.unrealized_pnl)} tone={d.unrealized_pnl >= 0 ? 'up' : 'down'} />
         <Stat label="Open positions" value={d.open_positions} sub={`${d.total_trades} trades`} />
+        <Stat label="Last trade date" value={d.last_trade_date ? d.last_trade_date : '—'} sub="most recent trade" />
       </div>
       {!m.loading && !m.error && m.data && (
         <div className="cards" style={{ marginTop: '1rem' }}>
