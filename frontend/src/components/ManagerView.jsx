@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { api } from '../api.js'
 import { Loading, ErrorBox, useAsync } from './common.jsx'
 import ManagerMetrics from './ManagerMetrics.jsx'
+import ManagerHoldings from './ManagerHoldings.jsx'
 
 export default function ManagerView({ managers, manager, setManager, onOpenClient }) {
   const [reload, setReload] = useState(0)
@@ -59,6 +60,12 @@ export default function ManagerView({ managers, manager, setManager, onOpenClien
             onToggleStatus={toggleStatus}
             onDeleteClient={del}
           />
+
+          {cs.data?.length > 0 && (
+            <div style={{ marginTop: 32 }}>
+              <ManagerHoldings managerId={manager.id} clients={cs.data} />
+            </div>
+          )}
         </>
       )}
 

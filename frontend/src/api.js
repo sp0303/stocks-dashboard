@@ -102,6 +102,10 @@ export const api = {
   sectorPriceMatrix: (sector) => req(`/api/sectors/${sector}/price-matrix`).then((r) => r.data),
   managerMetrics: (id) => req(`/api/managers/${id}/metrics`).then((r) => r.data),
   managerPerformance: (id) => req(`/api/managers/${id}/performance`).then((r) => r.data),
+  managerHoldings: (id, clientIds = null) => {
+    const url = clientIds ? `/api/managers/${id}/holdings?client_ids=${clientIds.join(',')}` : `/api/managers/${id}/holdings`
+    return req(url).then((r) => r.data)
+  },
   uploadTradebook: (clientId, file) => {
     const fd = new FormData()
     fd.append('file', file)

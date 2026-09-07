@@ -83,6 +83,107 @@ async def manager_performance(manager_id: str):
     return {"data": {"book": book, "clients": client_summaries}}
 
 
+@router.get("/managers/{manager_id}/holdings")
+async def manager_holdings(manager_id: str, client_ids: str = None):
+    """Aggregated holdings across selected clients for a manager.
+    Returns holdings grouped by symbol with client names, quantities, and holding %.
+
+    Args:
+        manager_id: The manager's ID
+        client_ids: Comma-separated list of client IDs to include (all if not specified)
+    """
+    from app.services import analytics
+
+    store = get_store()
+    if not await store.get_manager(manager_id):
+        raise HTTPException(404, "manager not found")
+
+    all_clients = await store.list_clients(manager_id)
+    if not all_clients:
+        return {"data": {"holdings": [], "totals": {"market_value": 0, "invested_value": 0, "unrealized_pnl": 0}}}
+
+    # Filter clients if specific ones requested
+    if client_ids:
+        requested = set(client_ids.split(","))
+        clients = [c for c in all_clients if c["id"] in requested]
+    else:
+        clients = all_clients
+
+    if not clients:
+        raise HTTPException(400, "no valid clients selected")
+
+    # Aggregate holdings from all selected clients
+    aggregated = {}
+    totals = {"market_value": 0, "invested_value": 0, "unrealized_pnl": 0}
+
+    for client in clients:
+        trades = await store.list_trades(client["id"])
+        if not trades:
+            continue
+
+        actions = await _actions_for(trades)
+        holdings_data = analytics.build_holdings(trades, with_prices=True, actions=actions)
+
+        for holding in holdings_data.get("holdings", []):
+            symbol = holding["symbol"]
+            if symbol not in aggregated:
+                aggregated[symbol] = {
+                    "symbol": symbol,
+                    "qty": 0,
+                    "buy_avg": 0,
+                    "buy_value": 0,
+                    "ltp": holding.get("ltp", 0),
+                    "present_value": 0,
+                    "pnl": 0,
+                    "pnl_pct": 0,
+                    "clients": []
+                }
+
+            # Add this client's contribution
+            aggregated[symbol]["qty"] += holding.get("qty", 0)
+            aggregated[symbol]["buy_value"] += holding.get("invested_value", 0)
+            aggregated[symbol]["present_value"] += holding.get("market_value", 0)
+            aggregated[symbol]["pnl"] += holding.get("unrealized_pnl", 0)
+            aggregated[symbol]["ltp"] = holding.get("ltp", aggregated[symbol]["ltp"])
+
+            # Track which client holds this
+            if holding.get("qty", 0) > 0:
+                aggregated[symbol]["clients"].append({
+                    "name": client["name"],
+                    "qty": holding.get("qty", 0)
+                })
+
+        # Update totals
+        totals["market_value"] += holdings_data.get("totals", {}).get("market_value", 0)
+        totals["invested_value"] += holdings_data.get("totals", {}).get("invested_value", 0)
+        totals["unrealized_pnl"] += holdings_data.get("totals", {}).get("unrealized_pnl", 0)
+
+    # Calculate buy average and percentages
+    holdings_list = []
+    for symbol, data in aggregated.items():
+        if data["buy_value"] > 0:
+            data["buy_avg"] = data["buy_value"] / data["qty"] if data["qty"] > 0 else 0
+        if data["present_value"] > 0:
+            data["pnl_pct"] = (data["pnl"] / data["buy_value"] * 100) if data["buy_value"] > 0 else 0
+
+        # Calculate holding percentage
+        holding_pct = (data["present_value"] / totals["market_value"] * 100) if totals["market_value"] > 0 else 0
+        data["holding_pct"] = holding_pct
+
+        holdings_list.append(data)
+
+    # Sort by market value descending
+    holdings_list.sort(key=lambda x: x["present_value"], reverse=True)
+
+    return {
+        "data": {
+            "holdings": holdings_list,
+            "totals": totals,
+            "client_count": len(clients)
+        }
+    }
+
+
 @router.get("/clients")
 async def list_all_clients():
     store = get_store()
