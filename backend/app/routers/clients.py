@@ -126,6 +126,12 @@ async def manager_holdings(manager_id: str, client_ids: str = None):
 
         for holding in holdings_data.get("holdings", []):
             symbol = holding["symbol"]
+            qty = holding.get("qty", 0)
+            if qty == 0 and holding.get("market_value", 0) > 0:
+                # If qty is 0 but market value exists, calculate qty from market value / ltp
+                ltp = holding.get("ltp", 1)
+                qty = holding.get("market_value", 0) / ltp if ltp > 0 else 0
+
             if symbol not in aggregated:
                 aggregated[symbol] = {
                     "symbol": symbol,
@@ -140,17 +146,18 @@ async def manager_holdings(manager_id: str, client_ids: str = None):
                 }
 
             # Add this client's contribution
-            aggregated[symbol]["qty"] += holding.get("qty", 0)
+            aggregated[symbol]["qty"] += qty
             aggregated[symbol]["buy_value"] += holding.get("invested_value", 0)
             aggregated[symbol]["present_value"] += holding.get("market_value", 0)
             aggregated[symbol]["pnl"] += holding.get("unrealized_pnl", 0)
             aggregated[symbol]["ltp"] = holding.get("ltp", aggregated[symbol]["ltp"])
 
-            # Track which client holds this
-            if holding.get("qty", 0) > 0:
+            # Track which client holds this with first 2 chars of name
+            if qty > 0:
+                client_short_name = client["name"][:2].upper()
                 aggregated[symbol]["clients"].append({
-                    "name": client["name"],
-                    "qty": holding.get("qty", 0)
+                    "name": client_short_name,
+                    "qty": qty
                 })
 
         # Update totals
