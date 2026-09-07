@@ -126,11 +126,7 @@ async def manager_holdings(manager_id: str, client_ids: str = None):
 
         for holding in holdings_data.get("holdings", []):
             symbol = holding["symbol"]
-            qty = holding.get("qty", 0)
-            if qty == 0 and holding.get("market_value", 0) > 0:
-                # If qty is 0 but market value exists, calculate qty from market value / ltp
-                ltp = holding.get("ltp", 1)
-                qty = holding.get("market_value", 0) / ltp if ltp > 0 else 0
+            qty = holding.get("quantity", 0)  # Use "quantity" not "qty"
 
             if symbol not in aggregated:
                 aggregated[symbol] = {
@@ -168,10 +164,17 @@ async def manager_holdings(manager_id: str, client_ids: str = None):
     # Calculate buy average and percentages
     holdings_list = []
     for symbol, data in aggregated.items():
+        # Calculate buy average from invested value and quantity
+        if data["qty"] > 0:
+            data["buy_avg"] = data["buy_value"] / data["qty"]
+        else:
+            data["buy_avg"] = 0
+
+        # Calculate P&L percentage
         if data["buy_value"] > 0:
-            data["buy_avg"] = data["buy_value"] / data["qty"] if data["qty"] > 0 else 0
-        if data["present_value"] > 0:
-            data["pnl_pct"] = (data["pnl"] / data["buy_value"] * 100) if data["buy_value"] > 0 else 0
+            data["pnl_pct"] = (data["pnl"] / data["buy_value"] * 100)
+        else:
+            data["pnl_pct"] = 0
 
         # Calculate holding percentage
         holding_pct = (data["present_value"] / totals["market_value"] * 100) if totals["market_value"] > 0 else 0
