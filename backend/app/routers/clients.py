@@ -148,11 +148,10 @@ async def manager_holdings(manager_id: str, client_ids: str = None):
             aggregated[symbol]["pnl"] += holding.get("unrealized_pnl", 0)
             aggregated[symbol]["ltp"] = holding.get("ltp", aggregated[symbol]["ltp"])
 
-            # Track which client holds this with first 2 chars of name
+            # Track which client holds this with full name
             if qty > 0:
-                client_short_name = client["name"][:2].upper()
                 aggregated[symbol]["clients"].append({
-                    "name": client_short_name,
+                    "name": client["name"],
                     "qty": qty
                 })
 

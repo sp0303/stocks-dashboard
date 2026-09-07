@@ -6,6 +6,9 @@ export default function ManagerHoldings({ managerId, clients = [] }) {
   const [selectedClientIds, setSelectedClientIds] = useState(
     clients.length > 0 ? clients.map(c => c.id) : []
   )
+  const [sortColumn, setSortColumn] = useState('holding_pct')
+  const [sortDir, setSortDir] = useState('desc')
+  const [hoveredRow, setHoveredRow] = useState(null)
 
   const toggle = (clientId) => {
     setSelectedClientIds(prev =>
@@ -42,6 +45,35 @@ export default function ManagerHoldings({ managerId, clients = [] }) {
     }
     return { marketValue: 0, investedValue: 0, unrealizedPnl: 0, returnPct: 0 }
   }, [holdings.data])
+
+  const sortedHoldings = useMemo(() => {
+    if (!holdings.data?.holdings) return []
+    const sorted = [...holdings.data.holdings]
+    sorted.sort((a, b) => {
+      let aVal = a[sortColumn]
+      let bVal = b[sortColumn]
+      if (typeof aVal === 'string') {
+        return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal)
+      }
+      return sortDir === 'asc' ? aVal - bVal : bVal - aVal
+    })
+    return sorted
+  }, [holdings.data?.holdings, sortColumn, sortDir])
+
+  const handleSort = (column) => {
+    if (sortColumn === column) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortColumn(column)
+      setSortDir('desc')
+    }
+  }
+
+  const SortHeader = ({ column, label }) => (
+    <th className="r" style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort(column)}>
+      {label} {sortColumn === column ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+    </th>
+  )
 
   return (
     <div>
@@ -94,21 +126,21 @@ export default function ManagerHoldings({ managerId, clients = [] }) {
               <table>
                 <thead>
                   <tr>
-                    <th>Symbol</th>
-                    <th className="r">Qty</th>
-                    <th className="r">Buy Avg</th>
-                    <th className="r">Buy Value</th>
-                    <th className="r">LTP</th>
-                    <th className="r">Present Value</th>
-                    <th className="r">Holding %</th>
-                    <th className="r">P&L</th>
-                    <th className="r">P&L %</th>
-                    <th>Clients</th>
+                    <SortHeader column="symbol" label="Symbol" />
+                    <SortHeader column="qty" label="Qty" />
+                    <SortHeader column="buy_avg" label="Buy Avg" />
+                    <SortHeader column="buy_value" label="Buy Value" />
+                    <SortHeader column="ltp" label="LTP" />
+                    <SortHeader column="present_value" label="Present Value" />
+                    <SortHeader column="holding_pct" label="Holding %" />
+                    <SortHeader column="pnl" label="P&L" />
+                    <SortHeader column="pnl_pct" label="P&L %" />
+                    <th style={{ cursor: 'pointer', userSelect: 'none' }}>Clients (hover to see)</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {holdings.data?.holdings?.map((h) => (
-                    <tr key={h.symbol}>
+                  {sortedHoldings?.map((h) => (
+                    <tr key={h.symbol} onMouseEnter={() => setHoveredRow(h.symbol)} onMouseLeave={() => setHoveredRow(null)}>
                       <td style={{ fontWeight: 600 }}>{h.symbol}</td>
                       <td className="r tnum">{h.qty.toFixed(0)}</td>
                       <td className="r tnum">₹{h.buy_avg.toFixed(2)}</td>
@@ -118,8 +150,8 @@ export default function ManagerHoldings({ managerId, clients = [] }) {
                       <td className="r tnum" style={{ fontWeight: 500 }}>{pctPlain(h.holding_pct)}</td>
                       <td className="r tnum"><span className={h.pnl >= 0 ? 'up' : 'down'}>{inrFull(h.pnl)}</span></td>
                       <td className="r tnum"><span className={h.pnl_pct >= 0 ? 'up' : 'down'}>{pctPlain(h.pnl_pct)}</span></td>
-                      <td style={{ fontSize: 12, maxWidth: 200 }}>
-                        {h.clients?.map((c, i) => (
+                      <td style={{ fontSize: 12, maxWidth: 200, color: hoveredRow === h.symbol ? 'var(--ink)' : 'transparent', transition: 'color 0.2s' }}>
+                        {hoveredRow === h.symbol && h.clients?.map((c, i) => (
                           <div key={i}>
                             {c.name} ({c.qty.toFixed(0)})
                           </div>
