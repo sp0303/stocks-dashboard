@@ -1,0 +1,11 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Redirecting…</title>
+<script>
+  // SPA fallback for static hosts that serve 404.html for unknown paths (GitHub Pages
+  // among them). Preserves the path so /orb still lands on /orb after the bounce.
+  // On a server you control, prefer the nginx try_files line in DEPLOY.md — it needs
+  // no redirect at all.
+  sessionStorage.setItem('spa-redirect', location.pathname + location.search + location.hash)
+  location.replace('/')
+</script>

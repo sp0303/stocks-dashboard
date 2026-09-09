@@ -1,10 +1,12 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// base './' keeps asset paths relative so the build also works on GitHub Pages.
+// base '/' (not './') because the app now has real path routes: from /orb, relative
+// asset paths would resolve to /orb/assets/… and 404. The server must also serve
+// index.html for unknown paths — see DEPLOY.md.
 export default defineConfig({
   plugins: [react()],
-  base: './',
+  base: '/',
   server: {
     port: 5180,
     host: true, // bind 0.0.0.0 so the Cloudflare tunnel can reach the dev server
