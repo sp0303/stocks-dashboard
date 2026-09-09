@@ -164,3 +164,29 @@ class BarBuilder:
         out = [self._pending[m] for m in sorted(self._pending)]
         self._pending = {}
         return out
+
+
+def densify(bars: list[Bar], session_start: int = MARKET_OPEN,
+            session_end: int = MARKET_CLOSE) -> list[Bar]:
+    """Fill minutes that carry no bar, so every stored session has the same shape.
+
+    Angel's REST candles omit minutes with no trades; the live builder synthesises them.
+    Storing both dense means a bar count is a meaningful health number, reconciliation
+    compares like with like, and the opening range can ask "is this window complete?"
+    without a special case for quiet stocks.
+
+    The invented bars are flat at the last real close and carry zero volume — which is
+    what actually happened — and are flagged `syn` so nothing downstream mistakes them
+    for trading."""
+    have = {b.minute: b for b in bars}
+    out: list[Bar] = []
+    last: int | None = None
+    for m in range(session_start, session_end):
+        b = have.get(m)
+        if b is not None:
+            out.append(b)
+            last = b.c
+        elif last is not None:
+            out.append(Bar(minute=m, o=last, h=last, l=last, c=last, v=0, syn=True))
+        # Before the first real bar there is no price to carry, so nothing is invented.
+    return out

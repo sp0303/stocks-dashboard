@@ -372,3 +372,55 @@ def get_history(symbol: str, from_date: str | None = None, interval: str = "1d",
             d = str(c[0])[:10]
         points.append({"date": d, "close": round(float(c[4]), 2)})
     return points
+
+
+# ── raw candles (used by the ORB engine) ───────────────────────────
+# get_history() above returns daily closes for charts. The ORB backfill needs full
+# OHLCV at minute resolution, the exchange's own timestamps, and the ability to say
+# "this window returned nothing" distinctly from "this call failed" — so it gets its
+# own entry point rather than widening get_history()'s contract.
+CANDLE_INTERVALS = {
+    "1m": "ONE_MINUTE", "3m": "THREE_MINUTE", "5m": "FIVE_MINUTE", "10m": "TEN_MINUTE",
+    "15m": "FIFTEEN_MINUTE", "30m": "THIRTY_MINUTE", "1h": "ONE_HOUR", "1d": "ONE_DAY",
+}
+
+# Angel caps the span of a single historical request by interval. Callers must chunk.
+MAX_DAYS_PER_REQUEST = {
+    "ONE_MINUTE": 30, "THREE_MINUTE": 60, "FIVE_MINUTE": 100, "TEN_MINUTE": 100,
+    "FIFTEEN_MINUTE": 200, "THIRTY_MINUTE": 200, "ONE_HOUR": 400, "ONE_DAY": 2000,
+}
+
+
+def get_candles(token: str, exchange: str, interval: str, from_str: str,
+                to_str: str) -> list[list] | None:
+    """Raw candles for one instrument and window.
+
+    `interval` is a short key from CANDLE_INTERVALS ("1m", "1d", ...) or an Angel
+    constant. Dates are "YYYY-MM-DD HH:MM" in IST, as Angel expects.
+
+    Returns Angel's rows — [timestamp, open, high, low, close, volume] — or None when
+    the call failed or the budget is exhausted. An empty list means the window really
+    held no trades (a holiday, or a symbol that had not listed yet), which is a fact the
+    calendar derivation depends on being able to tell apart from a failure.
+    """
+    ivl = CANDLE_INTERVALS.get(interval, interval)
+    params = {"exchange": exchange, "symboltoken": str(token), "interval": ivl,
+              "fromdate": from_str, "todate": to_str}
+    try:
+        smart = _ensure_session()
+        resp = _call(smart.getCandleData, params, _candle_limiter, "getCandleData")
+        if _is_auth_error(resp):
+            log.warning("angel getCandleData: %s — re-authenticating and retrying",
+                        resp.get("message"))
+            _invalidate_session()
+            resp = _call(_ensure_session().getCandleData, params, _candle_limiter,
+                         "getCandleData")
+    except Exception as exc:
+        log.warning("angel getCandleData error for token %s: %s", token, exc)
+        return None
+    if not resp:
+        return None
+    if not resp.get("status"):
+        log.warning("angel getCandleData %s: %s", token, resp.get("message"))
+        return None
+    return resp.get("data") or []
