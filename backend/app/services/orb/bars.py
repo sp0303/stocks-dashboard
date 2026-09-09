@@ -56,6 +56,7 @@ class BarBuilder:
         self._next_minute = session_start     # first minute not yet accounted for
         self._emitted: dict[int, Bar] = {}    # recent closed bars, still amendable
         self._pending: dict[int, Bar] = {}    # closed or amended, not yet persisted
+        self._session: dict[int, Bar] = {}    # every closed bar of the session
 
     # ── ingest ────────────────────────────────────────────────────
     def on_tick(self, minute: int, ltp: int, cum_vol: int | None = None) -> None:
@@ -138,8 +139,11 @@ class BarBuilder:
         self._next_minute = max(self._next_minute, stop)
 
     def _emit(self, bar: Bar) -> None:
-        # _pending holds everything awaiting a write and is never pruned behind the
-        # caller's back; _emitted is only the short amendment window.
+        # Three views of the same Bar objects, each with a different lifetime:
+        #   _session  every bar of the day — what the strategy reads
+        #   _pending  awaiting a write, never pruned behind the caller's back
+        #   _emitted  the short amendment window for late packets
+        self._session[bar.minute] = bar
         self._pending[bar.minute] = bar
         self._emitted[bar.minute] = bar
         for m in sorted(self._emitted)[:-AMEND_WINDOW]:
@@ -158,6 +162,15 @@ class BarBuilder:
         if self._cur is not None:
             self._close_current()
         self._fill_gap_to(self.session_end)
+
+    def session_bars(self, before_minute: int | None = None) -> list[Bar]:
+        """Every closed bar of the session, oldest first. This is what the strategy
+        reads: the amendment window is far too short to compute an opening range from,
+        and going back to the database on every decision would make job ordering
+        load-bearing for correctness."""
+        out = [self._session[m] for m in sorted(self._session)
+               if before_minute is None or m < before_minute]
+        return out
 
     def take_dirty(self) -> list[Bar]:
         """Bars written or amended since the last call — this is what gets persisted."""

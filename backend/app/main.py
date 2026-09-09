@@ -12,10 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import (
-    admin, broker, clients, corporate_actions, market, portfolio, screener, sectors, watchlists,
+    admin, broker, clients, corporate_actions, market, orb, portfolio, screener, sectors,
+    watchlists,
 )
 from app.seed import seed_if_empty
 from app.services.alerts import run_alert_loop
+from app.services.orb.engine import start_engine, stop_engine
 from app.store import init_store
 
 
@@ -25,7 +27,12 @@ async def lifespan(app: FastAPI):
     # await seed_if_empty(store)  # Disabled: don't overwrite production data
     app.state.store_backend = "mongo" if settings.use_mongo else "json-file"
     alert_task = asyncio.create_task(run_alert_loop(store))
+    # The ORB engine runs on its own threads (the websocket SDK is thread-based and
+    # every Angel call blocks), and never raises into startup: a misconfigured engine
+    # must not stop the dashboard from serving.
+    start_engine()
     yield
+    stop_engine()
     alert_task.cancel()
     await store.close()
 
@@ -49,6 +56,7 @@ app.include_router(sectors.router)
 app.include_router(screener.router)
 app.include_router(broker.router)
 app.include_router(corporate_actions.router)
+app.include_router(orb.router)
 
 
 @app.get("/api/health")
