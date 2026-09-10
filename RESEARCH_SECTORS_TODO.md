@@ -21,12 +21,27 @@ Scope: **research side only** (`/screener` + `/sectors`). The managers'/holdings
 Files: `backend/app/data/{pharma,fmcg,metals,energy,realty,cement}_sector.py`,
 `backend/app/data/_sector_scaffold.py`; registered in `backend/app/routers/sectors.py`.
 
-## ⬜ TODO — KPI research phase (do next)
+## ✅ Done (KPI phase — headline fundamentals)
 
-### 1. Fill operational/quarterly KPI values (the main task)
-Source decision still open: **(a)** hand-research from earnings filings, or **(b)** a
-fundamentals API/data file. Kite MCP does **not** provide fundamentals (confirmed — it's
-market-data only), so it can't fill these.
+- **All 48 covered stocks** (6 new sectors × 8) now carry FY26 consolidated fundamentals:
+  market cap, P/E, revenue + YoY, EBITDA + margin, PAT + YoY. Live on the screener's Watch
+  panel. Source: **Tijori Finance** (read-only, personal R&D), via ticker→company→`pl_c_d`
+  (consolidated P&L) with entity-symbol verification + `mcap ≈ P/E×PAT` cross-check.
+- Known gaps/notes: SUNPHARMA market cap didn't resolve (left null); VEDL mid-demerger;
+  realty developers (DLF, Godrej Props) report profit via JV income below the operating
+  line, so operating margin understates and PAT can exceed EBITDA (noted inline).
+
+## ⬜ TODO — remaining KPI work
+
+### 1. Deeper / operational KPIs (beyond the headline P&L)
+The headline P&L is done. Still to add the *sector-specific operational* metrics:
+- **Pharma:** US sales %, R&D %, USFDA status. **FMCG:** volume growth, A&P %.
+  **Metals:** EBITDA/tonne, net-debt/EBITDA. **Energy:** GRM, PLF, mmscmd. **Realty:**
+  pre-sales/collections. **Cement:** realisation/EBITDA per tonne.
+- Roster stocks (non-covered) still have no KPIs — headline set could be pulled the same way.
+- Fill SUNPHARMA market cap; refresh VEDL post-demerger.
+Source options: **(a)** hand-research, or **(b)** a fundamentals API/data file. Kite MCP
+does **not** provide fundamentals (confirmed — market-data only).
 
 Per-sector KPIs to populate (fields already stubbed in each `*_COVERED` entry):
 - **Pharma:** US sales %, R&D % of sales, API vs formulations mix, USFDA plant status,
