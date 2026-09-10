@@ -25,7 +25,12 @@ async def lifespan(app: FastAPI):
     # await seed_if_empty(store)  # Disabled: don't overwrite production data
     app.state.store_backend = "mongo" if settings.use_mongo else "json-file"
     alert_task = asyncio.create_task(run_alert_loop(store))
+    # Pre-warm the screener snapshot in the background so the first user doesn't pay the
+    # ~1-min cold fetch. Runs off the request path; never blocks startup or serving.
+    from app.routers.screener import warm_screener
+    warm_task = asyncio.create_task(warm_screener())
     yield
+    warm_task.cancel()
     alert_task.cancel()
     await store.close()
 

@@ -8,6 +8,8 @@ Portfolio holdings cross-reference open positions from the connected client/Kite
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException
 
 from app.data import (
@@ -131,7 +133,9 @@ async def _build_sector_response(sector_id: str) -> dict:
 
     tickers = sec["tickers"]
     exchanges = sec["exchanges"]
-    quotes = get_quote_details(tickers, exchanges)
+    # Offload the blocking provider fetch to a worker thread so a cold quote pull never
+    # freezes the event loop (and other endpoints stay responsive).
+    quotes = await asyncio.to_thread(get_quote_details, tickers, exchanges)
     held_map = await _get_held_positions_map()
 
     def with_market_and_portfolio(company: dict) -> dict:
@@ -171,7 +175,7 @@ async def _build_price_matrix_response(sector_id: str) -> dict:
     tickers = sec["tickers"]
     exchanges = sec["exchanges"]
     names = {c["ticker"]: c["name"] for c in sec["covered"] + sec["roster"]}
-    matrix = get_price_matrix(tickers, exchanges)
+    matrix = await asyncio.to_thread(get_price_matrix, tickers, exchanges)
 
     return {
         "data": [

@@ -10,6 +10,9 @@ Data source: the same daily-close history + live quotes used everywhere else
 """
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
@@ -17,6 +20,8 @@ from fastapi import APIRouter, HTTPException
 from app.routers.sectors import SECTORS_REGISTRY
 from app.services.market_data import get_price_matrix, get_quote_details
 from app.services.stock_news import get_stock_news
+
+log = logging.getLogger("screener")
 
 router = APIRouter(prefix="/api/screener", tags=["screener"])
 
@@ -69,15 +74,21 @@ def _fundamentals(company: dict, sector_id: str) -> dict:
     return f
 
 
-@router.get("")
-async def screener():
-    """Ranked technical snapshot across all covered sectors.
+# ── Snapshot cache ────────────────────────────────────────────────────────────────
+# The full compute fetches ~1 year of history for the whole covered universe (160+ symbols),
+# paced by Angel's ~3 candle-calls/sec limit → ~1 minute cold. That must NEVER run inline on
+# the event loop (it froze the whole backend). Instead we compute it in a worker thread,
+# cache the result, and serve the cached snapshot immediately — refreshing in the background
+# when stale (stale-while-revalidate), with an asyncio lock for single-flight so concurrent
+# misses share one refresh instead of each launching its own fetch storm.
+_SNAPSHOT: dict = {"data": None, "computed_at": 0.0}
+_SNAPSHOT_TTL = 600.0          # serve cached for 10 min, then refresh in the background
+_refresh_lock = asyncio.Lock()
 
-    Returns every stock with: momentum (1D/1W/1M/1Y %), RSI(14), volume, distance from
-    the 52-week high, relative strength (its 1W% minus its sector's average 1W%), and a
-    transparent composite momentum score. Also returns per-sector averages so the UI can
-    show sector-wise strength. No advice, no price targets — screening data only.
-    """
+
+def _compute_screener() -> dict:
+    """The heavy synchronous compute — runs in a worker thread (asyncio.to_thread), never
+    on the event loop. Returns the inner data dict (without the {"data": ...} envelope)."""
     # Collect the full universe with names + exchanges + fundamentals, tagged by sector.
     universe: list[dict] = []
     for sector_id, sec in SECTORS_REGISTRY.items():
@@ -165,13 +176,58 @@ async def screener():
         s["rank"] = i
 
     return {
-        "data": {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "count": len(stocks),
-            "stocks": stocks,
-            "sectors": {s: _round(v) for s, v in sector_w1_avg.items()},
-        }
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "count": len(stocks),
+        "stocks": stocks,
+        "sectors": {s: _round(v) for s, v in sector_w1_avg.items()},
     }
+
+
+async def _ensure_snapshot_fresh() -> None:
+    """Recompute the snapshot off the event loop, single-flight. A caller that finds the
+    lock held waits for the in-flight refresh rather than launching its own fetch storm."""
+    async with _refresh_lock:
+        # Someone may have refreshed while we waited for the lock.
+        if _SNAPSHOT["data"] is not None and (time.time() - _SNAPSHOT["computed_at"]) < _SNAPSHOT_TTL:
+            return
+        data = await asyncio.to_thread(_compute_screener)
+        _SNAPSHOT["data"] = data
+        _SNAPSHOT["computed_at"] = time.time()
+
+
+async def warm_screener() -> None:
+    """Pre-warm the snapshot at startup so the first user never pays the cold cost.
+    Never raises into startup."""
+    try:
+        await _ensure_snapshot_fresh()
+        log.info("screener snapshot pre-warmed: %d stocks", (_SNAPSHOT["data"] or {}).get("count", 0))
+    except Exception:
+        log.exception("screener pre-warm failed (will compute lazily on first request)")
+
+
+@router.get("")
+async def screener():
+    """Ranked technical snapshot across all covered sectors.
+
+    Served from a background-refreshed snapshot (stale-while-revalidate): the heavy
+    ~1-minute fetch runs in a worker thread and never blocks the event loop. Returns each
+    stock's momentum (1D/1W/1M/1Y), RSI(14), volume, distance-from-52w-high, relative
+    strength, a transparent composite score, plus per-sector averages. No advice.
+    """
+    snap = _SNAPSHOT
+    age = time.time() - snap["computed_at"]
+    if snap["data"] is not None and age < _SNAPSHOT_TTL:
+        return {"data": snap["data"]}                              # fresh — instant
+    if snap["data"] is not None:
+        asyncio.create_task(_ensure_snapshot_fresh())             # stale — refresh in bg
+        return {"data": {**snap["data"], "stale": True}}          # serve stale immediately
+    # Cold start: compute once, off-loop + single-flight. The event loop stays responsive
+    # for every other endpoint while this runs.
+    await _ensure_snapshot_fresh()
+    data = _SNAPSHOT["data"] or {
+        "generated_at": None, "count": 0, "stocks": [], "sectors": {}, "warming": True,
+    }
+    return {"data": data}
 
 
 @router.get("/news/{ticker}")
