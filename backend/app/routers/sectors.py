@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.data import auto_sector, banking_sector, hotel_sector, it_sector
+from app.data import (
+    auto_sector, banking_sector, cement_sector, energy_sector, fmcg_sector,
+    hotel_sector, it_sector, metals_sector, pharma_sector, realty_sector,
+)
 from app.services.engine import compute_positions, split_intraday
 from app.services.market_data import get_price_matrix, get_quote_details
 from app.store import get_store
@@ -45,6 +48,51 @@ SECTORS_REGISTRY = {
         "industry": auto_sector.INDUSTRY_BENCHMARK,
         "tickers": auto_sector.ALL_TICKERS,
         "exchanges": auto_sector.EXCHANGES,
+    },
+    # ── Newer sectors: validated NSE rosters + domain-specific sub-industry labels.
+    # Quarterly KPI values are pending research (see RESEARCH_TODO.md); live market data
+    # (price/momentum/RSI/levels) works for these now.
+    "pharma": {
+        "covered": pharma_sector.PHARMA_COVERED,
+        "roster": pharma_sector.PHARMA_ROSTER,
+        "industry": pharma_sector.INDUSTRY_BENCHMARK,
+        "tickers": pharma_sector.ALL_TICKERS,
+        "exchanges": pharma_sector.EXCHANGES,
+    },
+    "fmcg": {
+        "covered": fmcg_sector.FMCG_COVERED,
+        "roster": fmcg_sector.FMCG_ROSTER,
+        "industry": fmcg_sector.INDUSTRY_BENCHMARK,
+        "tickers": fmcg_sector.ALL_TICKERS,
+        "exchanges": fmcg_sector.EXCHANGES,
+    },
+    "metals": {
+        "covered": metals_sector.METALS_COVERED,
+        "roster": metals_sector.METALS_ROSTER,
+        "industry": metals_sector.INDUSTRY_BENCHMARK,
+        "tickers": metals_sector.ALL_TICKERS,
+        "exchanges": metals_sector.EXCHANGES,
+    },
+    "energy": {
+        "covered": energy_sector.ENERGY_COVERED,
+        "roster": energy_sector.ENERGY_ROSTER,
+        "industry": energy_sector.INDUSTRY_BENCHMARK,
+        "tickers": energy_sector.ALL_TICKERS,
+        "exchanges": energy_sector.EXCHANGES,
+    },
+    "realty": {
+        "covered": realty_sector.REALTY_COVERED,
+        "roster": realty_sector.REALTY_ROSTER,
+        "industry": realty_sector.INDUSTRY_BENCHMARK,
+        "tickers": realty_sector.ALL_TICKERS,
+        "exchanges": realty_sector.EXCHANGES,
+    },
+    "cement": {
+        "covered": cement_sector.CEMENT_COVERED,
+        "roster": cement_sector.CEMENT_ROSTER,
+        "industry": cement_sector.INDUSTRY_BENCHMARK,
+        "tickers": cement_sector.ALL_TICKERS,
+        "exchanges": cement_sector.EXCHANGES,
     },
 }
 
