@@ -36,11 +36,18 @@ CEMENT_COVERED = [
             ebitda_cr=958, ebitda_margin_pct=13.8, pat_cr=380, pat_yoy_pct=-7.7, pat_yoy_label="−7.7% YoY"),
 ]
 
+# FY26 fundamentals from Tijori. BIRLACORPN left profile-only (entity didn't resolve).
 CEMENT_ROSTER = [
-    roster("NUVOCO", "Nuvoco Vistas", "Cement (East)"),
-    roster("INDIACEM", "The India Cements", "Cement (South)"),
+    roster("NUVOCO", "Nuvoco Vistas", "Cement (East)",
+           market_cap_cr=11970, pe_label="~31x", revenue_cr=11594, revenue_yoy_pct=2.3,
+           ebitda_cr=1907, ebitda_margin_pct=16.4, pat_cr=386, pat_yoy_pct=7.5),
+    roster("INDIACEM", "The India Cements", "Cement (South)",
+           market_cap_cr=10898, pe_label="~118x", revenue_cr=4479, revenue_yoy_pct=-0.1,
+           ebitda_cr=469, ebitda_margin_pct=10.5, pat_cr=92, pat_yoy_pct=237.5),
     roster("BIRLACORPN", "Birla Corporation", "Cement (Central)"),
-    roster("STARCEMENT", "Star Cement", "Cement (North-East)"),
+    roster("STARCEMENT", "Star Cement", "Cement (North-East)",
+           market_cap_cr=7740, pe_label="~21x", revenue_cr=3807, revenue_yoy_pct=20.4,
+           ebitda_cr=902, ebitda_margin_pct=23.7, pat_cr=366, pat_yoy_pct=116.7),
 ]
 
 INDUSTRY_BENCHMARK = {"period": None, "source": None, "note": "to research"}

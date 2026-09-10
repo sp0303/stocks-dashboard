@@ -41,11 +41,18 @@ REALTY_COVERED = [
             ebitda_cr=364, ebitda_margin_pct=6.5, pat_cr=231, pat_yoy_pct=19.5, pat_yoy_label="+19.5% YoY"),
 ]
 
+# FY26 fundamentals from Tijori. MAHLIFE left profile-only (tiny/lumpy RE — figures noisy).
 REALTY_ROSTER = [
     roster("MAHLIFE", "Mahindra Lifespace Developers", "Residential"),
-    roster("SUNTECK", "Sunteck Realty", "Residential"),
-    roster("ANANTRAJ", "Anant Raj", "Residential + Data Centres"),
-    roster("NBCC", "NBCC (India)", "Construction / PMC (PSU)"),
+    roster("SUNTECK", "Sunteck Realty", "Residential",
+           market_cap_cr=4293, pe_label="~20x", revenue_cr=1127, revenue_yoy_pct=32.1,
+           ebitda_cr=323, ebitda_margin_pct=28.7, pat_cr=210, pat_yoy_pct=39.7),
+    roster("ANANTRAJ", "Anant Raj", "Residential + Data Centres",
+           market_cap_cr=22075, pe_label="~38x", revenue_cr=2551, revenue_yoy_pct=1.6,
+           ebitda_cr=688, ebitda_margin_pct=27.0, pat_cr=575, pat_yoy_pct=3.3),
+    roster("NBCC", "NBCC (India)", "Construction / PMC (PSU)",
+           market_cap_cr=22572, pe_label="~30x", revenue_cr=12752, revenue_yoy_pct=-1.1,
+           ebitda_cr=656, ebitda_margin_pct=5.1, pat_cr=765, pat_yoy_pct=6.3),
 ]
 
 INDUSTRY_BENCHMARK = {"period": None, "source": None, "note": "to research"}

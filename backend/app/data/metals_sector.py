@@ -37,14 +37,27 @@ METALS_COVERED = [
             ebitda_cr=9162, ebitda_margin_pct=47.4, pat_cr=6754, pat_yoy_pct=16.5, pat_yoy_label="+16.5% YoY"),
 ]
 
+# FY26 fundamentals from Tijori. MOIL left profile-only (PAT didn't resolve cleanly).
 METALS_ROSTER = [
-    roster("HINDZINC", "Hindustan Zinc", "Non-Ferrous (Zinc)"),
-    roster("APLAPOLLO", "APL Apollo Tubes", "Steel Products (Tubes)"),
-    roster("JSL", "Jindal Stainless", "Stainless Steel"),
-    roster("RATNAMANI", "Ratnamani Metals & Tubes", "Steel Pipes"),
-    roster("WELCORP", "Welspun Corp", "Steel Pipes"),
+    roster("HINDZINC", "Hindustan Zinc", "Non-Ferrous (Zinc)",
+           market_cap_cr=256054, pe_label="~15x", revenue_cr=46820, revenue_yoy_pct=14.6,
+           ebitda_cr=26255, ebitda_margin_pct=56.1, pat_cr=17067, pat_yoy_pct=23.4),
+    roster("APLAPOLLO", "APL Apollo Tubes", "Steel Products (Tubes)",
+           market_cap_cr=60182, pe_label="~49x", revenue_cr=22897, revenue_yoy_pct=-0.8,
+           ebitda_cr=1841, ebitda_margin_pct=8.0, pat_cr=1229, pat_yoy_pct=2.2),
+    roster("JSL", "Jindal Stainless", "Stainless Steel",
+           market_cap_cr=64536, pe_label="~20x", revenue_cr=44026, revenue_yoy_pct=2.5,
+           ebitda_cr=5580, ebitda_margin_pct=12.7, pat_cr=3174, pat_yoy_pct=-0.6),
+    roster("RATNAMANI", "Ratnamani Metals & Tubes", "Steel Pipes",
+           market_cap_cr=20064, pe_label="~46x", revenue_cr=4314, revenue_yoy_pct=-4.0,
+           ebitda_cr=732, ebitda_margin_pct=17.0, pat_cr=514, pat_yoy_pct=6.6),
+    roster("WELCORP", "Welspun Corp", "Steel Pipes",
+           market_cap_cr=68795, pe_label="~30x", revenue_cr=17300, revenue_yoy_pct=3.2,
+           ebitda_cr=2403, ebitda_margin_pct=13.9, pat_cr=1405, pat_yoy_pct=-12.9),
     roster("MOIL", "MOIL", "Mining (Manganese, PSU)"),
-    roster("HINDCOPPER", "Hindustan Copper", "Non-Ferrous (Copper, PSU)"),
+    roster("HINDCOPPER", "Hindustan Copper", "Non-Ferrous (Copper, PSU)",
+           market_cap_cr=51480, pe_label="~45x", revenue_cr=3498, revenue_yoy_pct=13.6,
+           ebitda_cr=1662, ebitda_margin_pct=47.5, pat_cr=1139, pat_yoy_pct=24.0),
 ]
 
 INDUSTRY_BENCHMARK = {"period": None, "source": None, "note": "to research"}

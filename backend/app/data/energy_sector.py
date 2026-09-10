@@ -37,16 +37,34 @@ ENERGY_COVERED = [
             ebitda_cr=14939, ebitda_margin_pct=10.1, pat_cr=8445, pat_yoy_pct=11.4, pat_yoy_label="+11.4% YoY"),
 ]
 
+# FY26 (consolidated) fundamentals from Tijori. HINDPETRO left profile-only (PAT figure
+# didn't resolve cleanly — to re-read).
 ENERGY_ROSTER = [
     roster("HINDPETRO", "Hindustan Petroleum", "Refining / OMC (PSU)"),
-    roster("TATAPOWER", "Tata Power", "Power (Integrated)"),
-    roster("ADANIGREEN", "Adani Green Energy", "Renewables"),
-    roster("OIL", "Oil India", "Upstream (E&P, PSU)"),
-    roster("PETRONET", "Petronet LNG", "Gas (LNG regas)"),
-    roster("IGL", "Indraprastha Gas", "Gas Distribution (CGD)"),
-    roster("JSWENERGY", "JSW Energy", "Power Generation"),
-    roster("NHPC", "NHPC", "Power (Hydro, PSU)"),
-    roster("TORNTPOWER", "Torrent Power", "Power (Integrated)"),
+    roster("TATAPOWER", "Tata Power", "Power (Integrated)",
+           market_cap_cr=117908, pe_label="~31x", revenue_cr=63445, revenue_yoy_pct=1.6,
+           ebitda_cr=14639, ebitda_margin_pct=23.1, pat_cr=4436, pat_yoy_pct=18.4),
+    roster("ADANIGREEN", "Adani Green Energy", "Renewables",
+           market_cap_cr=216472, pe_label="~121x", revenue_cr=13559, revenue_yoy_pct=4.9,
+           ebitda_cr=11711, ebitda_margin_pct=86.4, pat_cr=1788, pat_yoy_pct=8.2),
+    roster("OIL", "Oil India", "Upstream (E&P, PSU)",
+           market_cap_cr=81168, pe_label="~9.7x", revenue_cr=41186, revenue_yoy_pct=21.3,
+           ebitda_cr=13887, ebitda_margin_pct=33.7, pat_cr=8954, pat_yoy_pct=35.3),
+    roster("PETRONET", "Petronet LNG", "Gas (LNG regas)",
+           market_cap_cr=42818, pe_label="~10x", revenue_cr=37173, revenue_yoy_pct=-14.5,
+           ebitda_cr=5711, ebitda_margin_pct=15.4, pat_cr=4093, pat_yoy_pct=4.6),
+    roster("IGL", "Indraprastha Gas", "Gas Distribution (CGD)",
+           market_cap_cr=21336, pe_label="~16x", revenue_cr=18563, revenue_yoy_pct=14.8,
+           ebitda_cr=1627, ebitda_margin_pct=8.8, pat_cr=1071, pat_yoy_pct=-30.9),
+    roster("JSWENERGY", "JSW Energy", "Power Generation",
+           market_cap_cr=98027, pe_label="~50x", revenue_cr=18965, revenue_yoy_pct=0.3,
+           ebitda_cr=10149, ebitda_margin_pct=53.5, pat_cr=2448, pat_yoy_pct=9.3),
+    roster("NHPC", "NHPC", "Power (Hydro, PSU)",
+           market_cap_cr=77146, pe_label="~20x", revenue_cr=12210, revenue_yoy_pct=5.1,
+           ebitda_cr=5787, ebitda_margin_pct=47.4, pat_cr=4264, pat_yoy_pct=13.2),
+    roster("TORNTPOWER", "Torrent Power", "Power (Integrated)",
+           market_cap_cr=65717, pe_label="~28x", revenue_cr=29184, revenue_yoy_pct=0.8,
+           ebitda_cr=5596, ebitda_margin_pct=19.2, pat_cr=2390, pat_yoy_pct=-1.1),
 ]
 
 INDUSTRY_BENCHMARK = {"period": None, "source": None, "note": "to research"}

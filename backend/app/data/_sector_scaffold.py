@@ -31,12 +31,19 @@ def covered(ticker: str, name: str, segment: str = "", **kpis) -> dict:
     return base
 
 
-def roster(ticker: str, name: str, segment: str = "", note: str = "") -> dict:
-    """A 'roster' stock: profile only (no KPIs), same shape as the existing sector rosters."""
-    return {
+def roster(ticker: str, name: str, segment: str = "", note: str = "", **kpis) -> dict:
+    """A 'roster' stock. Profile by default; KPI fields (same schema as covered()) default to
+    None and can be filled via kwargs so roster names can also carry FY26 fundamentals."""
+    base = {
         "ticker": ticker, "exchange": "NSE", "name": name, "segment": segment,
         "model": None, "scale": "", "cap_label": "", "note": note,
+        "market_cap_cr": None, "pe_label": None,
+        "revenue_cr": None, "revenue_yoy_pct": None,
+        "ebitda_cr": None, "ebitda_margin_pct": None,
+        "pat_cr": None, "pat_yoy_pct": None, "pat_yoy_label": None,
     }
+    base.update(kpis)
+    return base
 
 
 def finalize(covered_list: list[dict], roster_list: list[dict]) -> tuple[list[str], dict]:

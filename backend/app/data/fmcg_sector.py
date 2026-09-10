@@ -36,14 +36,29 @@ FMCG_COVERED = [
             ebitda_cr=2492, ebitda_margin_pct=17.4, pat_cr=1952, pat_yoy_pct=10.8, pat_yoy_label="+10.8% YoY"),
 ]
 
+# FY26 fundamentals from Tijori. COLPAL left profile-only (P&L didn't resolve cleanly).
+# UBL/RADICO revenue_yoy omitted — their "Net Sales" line switched gross/net (excise),
+# which produces a bogus YoY; other figures kept.
 FMCG_ROSTER = [
     roster("COLPAL", "Colgate-Palmolive (India)", "Oral Care"),
-    roster("TATACONSUM", "Tata Consumer Products", "Beverages / Foods"),
-    roster("UBL", "United Breweries", "Beverages (Beer)"),
-    roster("RADICO", "Radico Khaitan", "Beverages (Spirits)"),
-    roster("EMAMILTD", "Emami", "Personal Care"),
-    roster("PGHH", "Procter & Gamble Hygiene & Health Care", "Personal Care (MNC)"),
-    roster("JYOTHYLAB", "Jyothy Labs", "Home Care"),
+    roster("TATACONSUM", "Tata Consumer Products", "Beverages / Foods",
+           market_cap_cr=99315, pe_label="~61x", revenue_cr=20860, revenue_yoy_pct=2.8,
+           ebitda_cr=2909, ebitda_margin_pct=13.9, pat_cr=1736, pat_yoy_pct=12.6),
+    roster("UBL", "United Breweries", "Beverages (Beer)",
+           market_cap_cr=33512, pe_label="~85x", revenue_cr=18002,
+           ebitda_cr=777, ebitda_margin_pct=4.3, pat_cr=396, pat_yoy_pct=-4.2),
+    roster("RADICO", "Radico Khaitan", "Beverages (Spirits)",
+           market_cap_cr=59348, pe_label="~84x", revenue_cr=21531,
+           ebitda_cr=1138, ebitda_margin_pct=5.3, pat_cr=692, pat_yoy_pct=14.4),
+    roster("EMAMILTD", "Emami", "Personal Care",
+           market_cap_cr=16111, pe_label="~22x", revenue_cr=3915, revenue_yoy_pct=3.6,
+           ebitda_cr=976, ebitda_margin_pct=24.9, pat_cr=754, pat_yoy_pct=-2.8),
+    roster("PGHH", "Procter & Gamble Hygiene & Health Care", "Personal Care (MNC)",
+           market_cap_cr=24737, pe_label="~31x", revenue_cr=4245, revenue_yoy_pct=-1.1,
+           ebitda_cr=1075, ebitda_margin_pct=25.3, pat_cr=791, pat_yoy_pct=-7.7),
+    roster("JYOTHYLAB", "Jyothy Labs", "Home Care",
+           market_cap_cr=7175, pe_label="~25x", revenue_cr=2847, revenue_yoy_pct=3.3,
+           ebitda_cr=500, ebitda_margin_pct=17.5, pat_cr=370, pat_yoy_pct=0.3),
 ]
 
 INDUSTRY_BENCHMARK = {"period": None, "source": None, "note": "to research"}
