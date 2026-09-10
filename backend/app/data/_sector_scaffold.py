@@ -10,10 +10,13 @@ KPI *values* are pending.
 from __future__ import annotations
 
 
-def covered(ticker: str, name: str, segment: str = "") -> dict:
-    """A 'covered' stock: full KPI schema present but unfilled (None), ready for research.
-    Field names match the hotels/auto schema the screener's _fundamentals() reads."""
-    return {
+def covered(ticker: str, name: str, segment: str = "", **kpis) -> dict:
+    """A 'covered' stock. KPI fields default to None (ready for research) and can be filled
+    via kwargs — e.g. covered("TATASTEEL", "Tata Steel", "Ferrous", market_cap_cr=235376,
+    pe_label="~21x", revenue_cr=239756, revenue_yoy_pct=3.3, ebitda_margin_pct=15.1, ...).
+    Field names match the hotels/auto schema the screener's _fundamentals() reads.
+    Fundamental values here are FY26 (consolidated) snapshots compiled from Tijori Finance."""
+    base = {
         "ticker": ticker, "exchange": "NSE", "name": name, "segment": segment,
         "model": None,
         "market_cap_cr": None, "pe_label": None,
@@ -24,6 +27,8 @@ def covered(ticker: str, name: str, segment: str = "") -> dict:
         "driver": None, "driver_note": None, "note": None,
         "segments": [],
     }
+    base.update(kpis)
+    return base
 
 
 def roster(ticker: str, name: str, segment: str = "", note: str = "") -> dict:
