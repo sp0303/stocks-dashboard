@@ -6,7 +6,11 @@ import { Loading, ErrorBox, useAsync } from './common.jsx'
 // dashboard UI. Read-only, decision-support: shows momentum, relative strength, RSI and
 // volume for the covered sector universe and ranks them — it makes no recommendation.
 
-const SECTOR_LABELS = { hotels: 'Hotels', banks: 'Banking / BFSI', it: 'IT Services', auto: 'Automotive' }
+const SECTOR_LABELS = {
+  hotels: 'Hotels', banks: 'Banking / BFSI', it: 'IT Services', auto: 'Automotive',
+  pharma: 'Pharma & Healthcare', fmcg: 'FMCG', metals: 'Metals & Mining',
+  energy: 'Energy & Power', realty: 'Realty', cement: 'Cement',
+}
 
 const pctCls = (v) => (v == null ? '' : v > 0 ? 'up' : v < 0 ? 'down' : '')
 const fmtPct = (v) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`)
