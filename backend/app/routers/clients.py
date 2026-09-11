@@ -126,7 +126,7 @@ async def manager_holdings(manager_id: str, client_ids: str = None):
 
         for holding in holdings_data.get("holdings", []):
             symbol = holding["symbol"]
-            qty = holding.get("quantity", 0)  # Use "quantity" not "qty"
+            qty = holding.get("quantity") or 0  # Use "quantity" not "qty"; coerce None→0
 
             if symbol not in aggregated:
                 aggregated[symbol] = {
@@ -141,12 +141,13 @@ async def manager_holdings(manager_id: str, client_ids: str = None):
                     "clients": []
                 }
 
-            # Add this client's contribution
+            # Add this client's contribution (coerce None→0: a symbol Angel couldn't price
+            # returns market_value/pnl = None, which used to crash the += aggregation).
             aggregated[symbol]["qty"] += qty
-            aggregated[symbol]["buy_value"] += holding.get("invested_value", 0)
-            aggregated[symbol]["present_value"] += holding.get("market_value", 0)
-            aggregated[symbol]["pnl"] += holding.get("unrealized_pnl", 0)
-            aggregated[symbol]["ltp"] = holding.get("ltp", aggregated[symbol]["ltp"])
+            aggregated[symbol]["buy_value"] += holding.get("invested_value") or 0
+            aggregated[symbol]["present_value"] += holding.get("market_value") or 0
+            aggregated[symbol]["pnl"] += holding.get("unrealized_pnl") or 0
+            aggregated[symbol]["ltp"] = holding.get("ltp") or aggregated[symbol]["ltp"]
 
             # Track which client holds this with full name
             if qty > 0:
@@ -155,10 +156,11 @@ async def manager_holdings(manager_id: str, client_ids: str = None):
                     "qty": qty
                 })
 
-        # Update totals
-        totals["market_value"] += holdings_data.get("totals", {}).get("market_value", 0)
-        totals["invested_value"] += holdings_data.get("totals", {}).get("invested_value", 0)
-        totals["unrealized_pnl"] += holdings_data.get("totals", {}).get("unrealized_pnl", 0)
+        # Update totals (coerce None→0)
+        _t = holdings_data.get("totals", {})
+        totals["market_value"] += _t.get("market_value") or 0
+        totals["invested_value"] += _t.get("invested_value") or 0
+        totals["unrealized_pnl"] += _t.get("unrealized_pnl") or 0
 
     # Calculate buy average and percentages
     holdings_list = []
