@@ -142,10 +142,10 @@ export default function ManagerHoldings({ managerId, clients = [] }) {
                   {sortedHoldings?.map((h) => (
                     <tr key={h.symbol} onMouseEnter={() => setHoveredRow(h.symbol)} onMouseLeave={() => setHoveredRow(null)}>
                       <td style={{ fontWeight: 600 }}>{h.symbol}</td>
-                      <td className="r tnum">{h.qty.toFixed(0)}</td>
-                      <td className="r tnum">₹{h.buy_avg.toFixed(2)}</td>
+                      <td className="r tnum">{h.qty != null ? h.qty.toFixed(0) : '—'}</td>
+                      <td className="r tnum">{h.buy_avg != null ? `₹${h.buy_avg.toFixed(2)}` : '—'}</td>
                       <td className="r tnum">{inrFull(h.buy_value)}</td>
-                      <td className="r tnum">₹{h.ltp.toFixed(2)}</td>
+                      <td className="r tnum">{h.ltp != null ? `₹${h.ltp.toFixed(2)}` : '—'}</td>
                       <td className="r tnum">{inrFull(h.present_value)}</td>
                       <td className="r tnum" style={{ fontWeight: 500 }}>{pctPlain(h.holding_pct)}</td>
                       <td className="r tnum"><span className={h.pnl >= 0 ? 'up' : 'down'}>{inrFull(h.pnl)}</span></td>
@@ -153,7 +153,7 @@ export default function ManagerHoldings({ managerId, clients = [] }) {
                       <td style={{ fontSize: 12, maxWidth: 200, color: hoveredRow === h.symbol ? 'var(--ink)' : 'transparent', transition: 'color 0.2s' }}>
                         {hoveredRow === h.symbol && h.clients?.map((c, i) => (
                           <div key={i}>
-                            {c.name} ({c.qty.toFixed(0)})
+                            {c.name} ({c.qty != null ? c.qty.toFixed(0) : '—'})
                           </div>
                         ))}
                       </td>
