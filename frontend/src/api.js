@@ -19,6 +19,16 @@ const _wlEntries = (scope, id, wlId) =>
 
 export const api = {
   health: () => req('/api/health'),
+
+  // ── ORB engine (read-only; the engine is paper-only and places no orders) ──
+  orbStatus: () => req('/api/orb/status').then((r) => r.data),
+  orbUniverse: () => req('/api/orb/universe').then((r) => r.data),
+  orbDay: (date) => req(`/api/orb/day${date ? `?date=${date}` : ''}`).then((r) => r.data),
+  orbChart: (symbol, date) =>
+    req(`/api/orb/chart/${symbol}${date ? `?date=${date}` : ''}`).then((r) => r.data),
+  orbJournal: (days = 30) => req(`/api/orb/journal?days=${days}`).then((r) => r.data),
+  orbHealth: (days = 15) => req(`/api/orb/health?days=${days}`).then((r) => r.data),
+  orbCalendar: (days = 60) => req(`/api/orb/calendar?days=${days}`).then((r) => r.data),
   overview: () => req('/api/admin/overview').then((r) => r.data),
   managers: () => req('/api/admin/managers').then((r) => r.data),
   createManager: (body) =>

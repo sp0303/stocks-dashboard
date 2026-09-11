@@ -64,6 +64,14 @@ class Settings(BaseSettings):
             and self.kite_password.strip() and self.kite_totp_secret.strip()
         )
 
+    # ── ORB engine ────────────────────────────────────────────────
+    # Opening Range Breakout. Requires MONGODB_URL and the four ANGEL_* variables.
+    # orb_strategy_enabled stays false until reconciliation has scored five clean
+    # sessions: the recorder has to earn the right to be traded on. Nothing in the
+    # engine places an order in either mode — signals are paper only.
+    orb_enabled: bool = False
+    orb_strategy_enabled: bool = False
+
     # CORS — the React dev server / GitHub Pages origin
     cors_origins: str = "*"
 
