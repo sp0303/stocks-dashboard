@@ -242,7 +242,9 @@ export default function Screener() {
   const [isDark, toggleTheme] = useTheme()
   const { loading, data, error } = useAsync(() => api.screener(), [])
   const [view, setView] = useState('rank')   // 'rank' | 'sector'
-  const [limit, setLimit] = useState(20)      // 20 | 50
+  const [limit, setLimit] = useState(50)      // 20 | 50 | 100 | 0(all)
+  const [sectorFilter, setSectorFilter] = useState('')  // '' = all sectors
+  const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState(null)      // ticker whose news is open
   const [newsCache, setNewsCache] = useState({})       // { ticker: {loading, data, error} }
 
@@ -263,7 +265,8 @@ export default function Screener() {
         <div>
           <h1 className="scr-title">Swing Screener</h1>
           <p className="scr-sub">
-            Momentum · relative strength · RSI(14) · volume across the covered sector universe
+            Nifty 500 · momentum · relative strength · RSI(14) · FY26 fundamentals
+            {data?.count ? ` · ${data.count} stocks` : ''}
             {data?.generated_at && ` · updated ${new Date(data.generated_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}`}
           </p>
         </div>
@@ -280,8 +283,17 @@ export default function Screener() {
       </div>
 
       {loading ? <Loading what="screener" /> : error ? <ErrorBox error={error} /> : (() => {
-        const stocks = data?.stocks || []
+        const allStocks = data?.stocks || []
         const sectors = data?.sectors || {}
+        const sectorNames = Object.keys(sectors).sort()
+
+        // Apply sector + search filters (rank order preserved).
+        const q = search.trim().toUpperCase()
+        const stocks = allStocks.filter((s) =>
+          (!sectorFilter || s.sector === sectorFilter) &&
+          (!q || s.ticker.toUpperCase().includes(q) || (s.name || '').toUpperCase().includes(q))
+        )
+        const cap = (arr) => (limit ? arr.slice(0, limit) : arr)
 
         const controls = (
           <div className="scr-controls">
@@ -295,10 +307,26 @@ export default function Screener() {
             <div>
               <span className="scr-seg-label">Show</span>
               <div className="scr-seg">
-                <button className={limit === 20 ? 'on' : ''} onClick={() => setLimit(20)}>Top 20</button>
-                <button className={limit === 50 ? 'on' : ''} onClick={() => setLimit(50)}>Top 50</button>
+                {[20, 50, 100, 0].map((n) => (
+                  <button key={n} className={limit === n ? 'on' : ''} onClick={() => setLimit(n)}>
+                    {n === 0 ? 'All' : `Top ${n}`}
+                  </button>
+                ))}
               </div>
             </div>
+            <div>
+              <span className="scr-seg-label">Sector</span>
+              <select className="scr-select" value={sectorFilter} onChange={(e) => setSectorFilter(e.target.value)}>
+                <option value="">All ({allStocks.length})</option>
+                {sectorNames.map((s) => <option key={s} value={s}>{SECTOR_LABELS[s] || s}</option>)}
+              </select>
+            </div>
+            <div>
+              <span className="scr-seg-label">Find</span>
+              <input className="scr-input" placeholder="ticker / name" value={search}
+                     onChange={(e) => setSearch(e.target.value)} />
+            </div>
+            <span className="scr-count">{stocks.length} shown</span>
           </div>
         )
 
@@ -306,7 +334,7 @@ export default function Screener() {
           return (
             <>
               {controls}
-              <Table stocks={stocks.slice(0, limit)} expanded={expanded}
+              <Table stocks={cap(stocks)} expanded={expanded}
                      newsCache={newsCache} onToggle={toggleNews} />
             </>
           )
@@ -326,7 +354,7 @@ export default function Screener() {
                   {SECTOR_LABELS[sec] || sec}
                   <span className="avg">sector avg 1W: {sectors[sec] == null ? '—' : `${sectors[sec] > 0 ? '+' : ''}${sectors[sec].toFixed(1)}%`}</span>
                 </h2>
-                <Table stocks={grouped[sec].slice(0, limit)} expanded={expanded}
+                <Table stocks={cap(grouped[sec])} expanded={expanded}
                        newsCache={newsCache} onToggle={toggleNews} />
               </div>
             ))}

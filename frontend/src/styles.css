@@ -161,6 +161,10 @@ h2{font-size:16px;margin:26px 0 12px;letter-spacing:-.01em}
 .scr-seg button.on{background:var(--accent);color:#fff}
 .scr-seg-label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);
   font-weight:600;margin-right:8px}
+.scr-select,.scr-input{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+  padding:6px 10px;font-size:13px;color:var(--ink);font-family:inherit;max-width:220px}
+.scr-input{width:130px}
+.scr-count{font-size:12px;color:var(--muted);align-self:center;margin-left:auto}
 .scr-tbl-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
 .scr-tbl{width:100%;border-collapse:collapse;font-size:13px;min-width:820px}
 .scr-tbl th{text-align:right;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;
