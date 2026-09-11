@@ -27,10 +27,19 @@ router = APIRouter(prefix="/api/screener", tags=["screener"])
 
 
 def _name_for_ticker(ticker: str) -> str | None:
+    t = ticker.upper()
     for sec in SECTORS_REGISTRY.values():
         for c in sec["covered"] + sec["roster"]:
-            if c["ticker"].upper() == ticker.upper():
+            if c["ticker"].upper() == t:
                 return c["name"]
+    # Fall back to the broad Nifty-500 universe (for the news lookup on 500 stocks).
+    try:
+        from app.services import screener_daily
+        rec = screener_daily._load_kpis().get(t)
+        if rec:
+            return rec.get("name")
+    except Exception:
+        pass
     return None
 
 
@@ -88,99 +97,12 @@ _refresh_lock = asyncio.Lock()
 
 def _compute_screener() -> dict:
     """The heavy synchronous compute — runs in a worker thread (asyncio.to_thread), never
-    on the event loop. Returns the inner data dict (without the {"data": ...} envelope)."""
-    # Collect the full universe with names + exchanges + fundamentals, tagged by sector.
-    universe: list[dict] = []
-    for sector_id, sec in SECTORS_REGISTRY.items():
-        for c in sec["covered"] + sec["roster"]:
-            universe.append({"sector": sector_id, "ticker": c["ticker"],
-                             "name": c["name"], "exchange": c.get("exchange", "NSE"),
-                             "fundamentals": _fundamentals(c, sector_id)})
-
-    tickers = [u["ticker"] for u in universe]
-    exchanges = {u["ticker"]: u["exchange"] for u in universe}
-
-    # Two data pulls, both cached in market_data: momentum/RSI matrix + live quote (volume).
-    matrix = get_price_matrix(tickers, exchanges)
-    quotes = get_quote_details(tickers, exchanges)
-
-    # Per-sector average 1W% (over stocks that actually have a value) → relative strength.
-    sector_w1: dict[str, list[float]] = {}
-    for u in universe:
-        m = matrix.get(u["ticker"], {})
-        if m.get("w1") is not None:
-            sector_w1.setdefault(u["sector"], []).append(m["w1"])
-    sector_w1_avg = {s: (sum(v) / len(v)) for s, v in sector_w1.items() if v}
-
-    stocks: list[dict] = []
-    for u in universe:
-        m = matrix.get(u["ticker"], {})
-        q = quotes.get(u["ticker"], {})
-        price = m.get("price")
-        if price is None:
-            continue  # skip names with no live/among-history price (e.g. delisted symbols)
-
-        w1 = m.get("w1")
-        m1 = m.get("m1")
-        rsi = m.get("rsi")
-        rel = (w1 - sector_w1_avg[u["sector"]]) if (w1 is not None and u["sector"] in sector_w1_avg) else None
-
-        # Transparent composite momentum score. Weighted blend of short-term momentum and
-        # relative strength, with a small RSI adjustment that rewards a healthy uptrend zone
-        # (50–65) and penalises overbought (>75) / weak (<40) — NOT a recommendation, just a
-        # single sortable number. Every input is shown alongside so the user can judge.
-        score = 0.0
-        if w1 is not None:
-            score += 0.45 * w1
-        if m1 is not None:
-            score += 0.25 * m1
-        if rel is not None:
-            score += 0.30 * rel
-        if rsi is not None:
-            if 50 <= rsi <= 65:
-                score += 1.5
-            elif rsi > 75:
-                score -= 2.0
-            elif rsi < 40:
-                score -= 1.5
-
-        stocks.append({
-            "sector": u["sector"],
-            "ticker": u["ticker"],
-            "name": u["name"],
-            "price": price,
-            "d1": m.get("d1"),
-            "w1": w1,
-            "m1": m1,
-            "y1": m.get("y1"),
-            "from_52w_high": m.get("from_52w_high"),
-            "rsi": rsi,
-            "volume": q.get("volume"),
-            "rel_strength": _round(rel),
-            "score": _round(score),
-            "fundamentals": u["fundamentals"],
-            "levels": {
-                "recent_high": m.get("recent_high"),
-                "recent_low": m.get("recent_low"),
-                "range_position": m.get("range_position"),
-                "dma20": m.get("dma20"),
-                "dma50": m.get("dma50"),
-                "typical_move_pct": m.get("typical_move_pct"),
-            },
-        })
-
-    # Rank-wise: highest composite score first (None scores sink to the bottom).
-    stocks.sort(key=lambda s: (s["score"] is not None, s["score"] if s["score"] is not None else 0),
-                reverse=True)
-    for i, s in enumerate(stocks, 1):
-        s["rank"] = i
-
-    return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "count": len(stocks),
-        "stocks": stocks,
-        "sectors": {s: _round(v) for s, v in sector_w1_avg.items()},
-    }
+    on the event loop. Now the BROAD Nifty-500 screen: momentum/RSI/levels/ATR read from the
+    Mongo daily store (zero Angel calls) + FY26 fundamentals from nifty500_kpis.json.
+    See app.services.screener_daily. The curated 10-sector data still powers the /sectors
+    (R&D) page and the per-stock news lookup below."""
+    from app.services import screener_daily
+    return screener_daily.compute()
 
 
 async def _ensure_snapshot_fresh() -> None:
