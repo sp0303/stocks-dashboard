@@ -243,6 +243,7 @@ async def warm_performance_cache() -> None:
                 continue
             actions = await _actions_for(trades)
             await cached_performance_series(c["id"], trades, actions)
+            await cached_trade_analytics(c["id"], trades)
             done += 1
         except Exception as exc:
             log.warning("performance warm %s: %s", c.get("id"), exc)
@@ -398,12 +399,30 @@ async def attribution(client_id: str, response: Response):
     return {"data": attribution_data}
 
 
+_ta_cache: dict[str, tuple[dict, float]] = {}
+_TA_TTL = 900
+
+
+async def cached_trade_analytics(client_id: str, trades: list[dict]) -> dict:
+    """compute_trade_analytics resolves a sector per distinct symbol (a possible network
+    lookup) and matches every round trip — heavy for a big book, and the section polls.
+    Memoise per client, invalidated by trade count + last trade date."""
+    import time as _t
+    last = max((t["trade_date"] for t in trades), default="")
+    key = f"{client_id}:{len(trades)}:{last}"
+    hit = _ta_cache.get(key)
+    if hit and _t.time() - hit[1] < _TA_TTL:
+        return hit[0]
+    data = await run_in_threadpool(analytics.compute_trade_analytics, trades)
+    _ta_cache[key] = (data, _t.time())
+    return data
+
+
 @router.get("/{client_id}/trade-analytics")
 async def trade_analytics(client_id: str):
     """Phase 3: Trade quality metrics (win rate, profit factor, best/worst trades)."""
     trades = await _trades_or_404(client_id)
-    analytics_data = analytics.compute_trade_analytics(trades)
-    return {"data": analytics_data}
+    return {"data": await cached_trade_analytics(client_id, trades)}
 
 
 @router.get("/{client_id}/risk-monitoring")

@@ -1289,10 +1289,19 @@ def compute_trade_analytics(trades: list[dict]) -> dict:
     total_win = sum(rt.get("pnl", 0) for rt in winning) if winning else 0
     total_loss = abs(sum(rt.get("pnl", 0) for rt in losing)) if losing else 0
 
-    # Win rate by sector
+    # Win rate by sector. classify() can do a per-symbol network lookup, so resolve each
+    # DISTINCT symbol once (3,000+ round trips collapse to a few hundred symbols) instead
+    # of once per round trip — the difference between ~seconds and ~a minute.
+    _sector_of: dict[str, str] = {}
+
+    def _sec(sym: str) -> str:
+        if sym not in _sector_of:
+            _sector_of[sym] = classify(sym).get("sector", "Unclassified")
+        return _sector_of[sym]
+
     by_sector = defaultdict(lambda: {"win": 0, "loss": 0})
     for rt in round_trips:
-        sector = classify(rt["symbol"]).get("sector", "Unclassified")
+        sector = _sec(rt["symbol"])
         if rt.get("pnl", 0) > 0:
             by_sector[sector]["win"] += 1
         else:
