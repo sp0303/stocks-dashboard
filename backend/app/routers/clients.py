@@ -216,22 +216,38 @@ async def manager_trade_log(manager_id: str):
             continue
         rts = await run_in_threadpool(compute_round_trips, trades)
         journal = await store.get_trade_journal(c["id"])
+
+        # Collapse FIFO lot-fragments: one sell matched across several buy lots produces a
+        # row per lot. Group them back to one line per (symbol, buy_date, sell_date) so the
+        # log reads like the manager's sheet — one row per buy->sell, not 26 one-share slivers.
+        groups: dict[tuple, dict] = {}
         for rt in rts:
-            note = (journal.get(rt.get("buy_fingerprint")) or {}).get("note", "")
+            k = (rt["symbol"], rt.get("buy_date"), rt.get("sell_date"))
+            g = groups.get(k)
+            if g is None:
+                g = groups[k] = {"symbol": rt["symbol"], "buy_date": rt.get("buy_date"),
+                                 "sell_date": rt.get("sell_date"), "days": rt["days"],
+                                 "qty": 0.0, "buy_val": 0.0, "sell_val": 0.0, "pnl": 0.0,
+                                 "buy_fingerprint": rt.get("buy_fingerprint")}
+            q = rt["quantity"]
+            g["qty"] += q
+            g["buy_val"] += q * rt["buy_price"]
+            g["sell_val"] += q * rt["sell_price"]
+            g["pnl"] += rt["pnl"]
+
+        for g in groups.values():
+            q = g["qty"] or 1
+            buy_price = g["buy_val"] / q
+            sell_price = g["sell_val"] / q
+            note = (journal.get(g["buy_fingerprint"]) or {}).get("note", "")
             rows.append({
-                "account": c["name"],
-                "client_id": c["id"],
-                "symbol": rt["symbol"],
-                "quantity": rt["quantity"],
-                "buy_price": rt["buy_price"],
-                "sell_price": rt["sell_price"],
-                "buy_date": rt.get("buy_date"),
-                "sell_date": rt.get("sell_date"),
-                "days": rt["days"],
-                "pnl": rt["pnl"],
-                "pnl_pct": rt["pnl_pct"],
-                "reason": note,
-                "buy_fingerprint": rt.get("buy_fingerprint"),
+                "account": c["name"], "client_id": c["id"], "symbol": g["symbol"],
+                "quantity": round(g["qty"], 2),
+                "buy_price": round(buy_price, 2), "sell_price": round(sell_price, 2),
+                "buy_date": g["buy_date"], "sell_date": g["sell_date"], "days": g["days"],
+                "pnl": round(g["pnl"], 2),
+                "pnl_pct": round((sell_price - buy_price) / buy_price * 100, 2) if buy_price else 0.0,
+                "reason": note, "buy_fingerprint": g["buy_fingerprint"],
             })
     rows.sort(key=lambda r: r.get("sell_date") or "", reverse=True)
     return {"data": rows, "meta": {"total": len(rows), "clients": len(clients)}}
