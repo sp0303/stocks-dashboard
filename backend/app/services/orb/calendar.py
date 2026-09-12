@@ -109,6 +109,46 @@ def entry(day: str) -> dict | None:
     return store.get(store.CALENDAR, day)
 
 
+# NSE equity full-day trading holidays. The derived calendar above is hindsight only —
+# today's entry does not exist until after the close — so the LIVE engine needs a
+# forward-looking check. NSE's holiday API refuses datacenter traffic (see the module
+# docstring), so this is a maintained constant: refresh it once a year from the NSE
+# circular. It is only an OPTIMISATION that stops the engine subscribing on a known
+# closure; the reactive tick-probe (engine.market_open_probe) remains the authority, so
+# a stale entry here at worst wastes or skips one paper session, never trades a shut
+# market. Bias the list toward certainty — omit a doubtful date rather than skip a real
+# session; an unlisted holiday is caught by the probe anyway.
+NSE_HOLIDAYS: set[str] = {
+    # 2026 — verify against the NSE circular when it publishes 2027.
+    "2026-01-26",  # Republic Day
+    "2026-03-03",  # Holi
+    "2026-03-26",  # Ram Navami
+    "2026-03-31",  # Mahavir Jayanti
+    "2026-04-03",  # Good Friday
+    "2026-04-14",  # Ambedkar Jayanti
+    "2026-05-01",  # Maharashtra Day
+    "2026-05-28",  # Bakri Eid
+    "2026-06-26",  # Muharram
+    "2026-09-14",  # Ganesh Chaturthi
+    "2026-10-02",  # Gandhi Jayanti
+    "2026-10-20",  # Dussehra
+    "2026-11-10",  # Diwali (Balipratipada)
+    "2026-11-24",  # Guru Nanak Jayanti
+    "2026-12-25",  # Christmas
+}
+
+
+def is_scheduled_market_day(day: str) -> bool:
+    """Forward-looking weekday/holiday check for the live engine. Weekends and listed
+    holidays are non-trading; every other day is assumed to trade and is confirmed by the
+    reactive tick-probe. (Muhurat's special evening session is not the 09:15 ORB session,
+    so a Muhurat weekend correctly reads as non-trading here.)"""
+    d = date.fromisoformat(day)
+    if d.weekday() >= 5:
+        return False
+    return day not in NSE_HOLIDAYS
+
+
 def is_trading_day(day: str) -> bool:
     e = entry(day)
     return bool(e and e.get("trading"))

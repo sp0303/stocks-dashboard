@@ -68,6 +68,13 @@ class Engine:
     # ── 08:45 ─────────────────────────────────────────────────────
     def job_prep(self, day: str) -> str:
         self.day = day
+        # No market today (weekend or a listed NSE holiday): do not subscribe the feed or
+        # build baselines. The reactive tick-probe still backstops any day this misjudges.
+        if not orb_calendar.is_scheduled_market_day(day):
+            self.feed.stop()
+            self.shortlist = []
+            log.info("%s is not a scheduled market day — standing down", day)
+            return "non-trading day (weekend/holiday) — standing down"
         self.recorder = Recorder()
         self.book = signals.PaperBook(day, self.cfg)
         self.shortlist = []
@@ -101,6 +108,10 @@ class Engine:
         return f"market_open={open_now}"
 
     def market_open_probe(self) -> bool:
+        # A known non-trading day stands every market job down immediately — no need to
+        # wait for the tick-probe to conclude the obvious.
+        if not orb_calendar.is_scheduled_market_day(today_ist().isoformat()):
+            return False
         n = now_ist()
         if (n.hour * 60 + n.minute) < PROBE_MINUTE:
             return True                       # too early to conclude anything
