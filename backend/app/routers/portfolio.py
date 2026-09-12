@@ -552,11 +552,17 @@ async def playbook(
 
 @router.get("/{client_id}/playbook/by-stock")
 async def playbook_by_stock(client_id: str, min_days: int | None = None,
-                            max_days: int | None = None):
+                            max_days: int | None = None, intraday: bool = False):
     """Playbook collapsed one row per stock (weighted-avg buy/sell price, total P&L).
     Detail lots for a symbol are fetched via GET /playbook?symbol=... for the
     click-through modal, so this endpoint carries no pagination of its own.
-    Optional min_days/max_days slice by holding period (intraday=0..0, week=1..7)."""
+
+    `intraday=true` returns the same-day round trips (split out of delivery per Section
+    43(5)); otherwise min_days/max_days slice the delivery playbook by holding period
+    (e.g. within a week = 1..7)."""
+    if intraday:
+        _, intraday_recs = await _delivery_and_intraday(client_id)
+        return {"data": analytics.intraday_by_stock(intraday_recs)}
     trades = await _trades_or_404(client_id)
     return {"data": analytics.playbook_by_stock(trades, min_days, max_days)}
 

@@ -185,10 +185,11 @@ export const api = {
     req(
       `/api/clients/${clientId}/playbook?sort=${sort}&order=${order}&page=${page}&page_size=${pageSize}${symbol ? `&symbol=${symbol}` : ''}`
     ).then((r) => r),
-  playbookByStock: (clientId, { minDays, maxDays } = {}) => {
+  playbookByStock: (clientId, { minDays, maxDays, intraday } = {}) => {
     const p = new URLSearchParams()
     if (minDays != null) p.set('min_days', minDays)
     if (maxDays != null) p.set('max_days', maxDays)
+    if (intraday) p.set('intraday', 'true')
     const qs = p.toString()
     return req(`/api/clients/${clientId}/playbook/by-stock${qs ? `?${qs}` : ''}`).then((r) => r.data)
   },

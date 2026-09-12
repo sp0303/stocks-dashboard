@@ -713,6 +713,34 @@ def playbook_by_stock(trades: list[dict], min_days: int | None = None,
     return out
 
 
+def intraday_by_stock(records: list[dict]) -> list[dict]:
+    """Same-day (intraday) round trips collapsed one row per stock, in the identical shape
+    as playbook_by_stock. Input is engine.split_intraday's summary records
+    ({symbol, date, quantity, buy_price, sell_price, pnl}) — all 0-day by definition, so
+    they can't go through compute_round_trips (they aren't buy/sell rows)."""
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        groups[r["symbol"]].append(r)
+    out = []
+    for symbol, rs in groups.items():
+        total_qty = sum(r["quantity"] for r in rs)
+        total_buy_value = sum(r["buy_price"] * r["quantity"] for r in rs)
+        total_sell_value = sum(r["sell_price"] * r["quantity"] for r in rs)
+        total_pnl = sum(r["pnl"] for r in rs)
+        out.append({
+            "symbol": symbol,
+            "trades_count": len(rs),
+            "total_qty": round(total_qty, 4),
+            "avg_buy_price": round(total_buy_value / total_qty, 2) if total_qty else 0,
+            "avg_sell_price": round(total_sell_value / total_qty, 2) if total_qty else 0,
+            "total_pnl": round(total_pnl, 2),
+            "pnl_pct": round(total_pnl / total_buy_value * 100, 2) if total_buy_value else 0,
+            "avg_days": 0,
+        })
+    out.sort(key=lambda r: r["total_pnl"], reverse=True)
+    return out
+
+
 def stock_analysis(trades: list[dict], symbol: str, actions: list[dict] | None = None) -> dict | None:
     symbol = symbol.upper()
     sym_trades = [t for t in trades if t["symbol"] == symbol]
