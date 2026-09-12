@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 
-CONFIG_VERSION = "orb-1.0.0"
+CONFIG_VERSION = "orb-1.1.0"
 
 
 @dataclass(frozen=True)
@@ -45,9 +45,10 @@ class OrbConfig:
 
     # ── D · VWAP and context ──────────────────────────────────────
     vwap_slope_lookback_min: int = 15             # D3
-    vwap_slope_min_pct: float = 0.02              # D3
-    require_sector_alignment: bool = True         # D5
-    require_market_alignment: bool = True         # D6
+    vwap_slope_min_pct: float = 0.15              # D3  raised from 0.02 (loss analysis:
+                                                  #     flat-VWAP breakouts are chop)
+    require_sector_alignment: bool = False        # D5  backtest showed alignment is
+    require_market_alignment: bool = False        # D6  anti-predictive here (rel. strength)
     vwap_drift_tolerance_bps: float = 10.0        # D7  ours vs the feed's average_traded_price
 
     # ── E · entry, stop, target ───────────────────────────────────
@@ -57,6 +58,11 @@ class OrbConfig:
     t1_book_fraction: float = 0.5
     trail_lookback_bars: int = 2                  # 5-minute bars, after T1
     max_risk_atr_mult: float = 1.2                # reject if stop is further than this
+    # Quality floors found by the backtest's loss analysis — the strategy bleeds on
+    # tight-stop, low-volatility chop and earns on real movers. Validated out-of-sample
+    # (thresholds fit on year 1, held on year 2). 0.0 disables a floor.
+    min_risk_pct: float = 0.6                     # E4  stop at least this %% of price
+    min_atr_pct: float = 3.2                      # B6  ATR14 at least this %% of price
 
     # ── F · risk ──────────────────────────────────────────────────
     capital: float = 1_000_000.0

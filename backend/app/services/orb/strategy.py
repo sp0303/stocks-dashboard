@@ -250,6 +250,32 @@ def decide(ctx: SessionContext) -> Decision:
           round(c.max_risk_atr_mult * ctx.atr14, 1) if ctx.atr14 else None,
           "stop too far to be a day trade")
 
+    # E4 — a floor under the stop distance. Too-tight stops sit inside the noise and are
+    # the worst cohort in the backtest; below this %% of price the setup is chop.
+    t.add("E4", not c.min_risk_pct or risk >= c.min_risk_pct / 100.0 * bar.c,
+          round(risk / bar.c * 100, 3), c.min_risk_pct, "stop distance vs price")
+
+    # B6 — a volatility floor. ORB needs a name that can travel; low-ATR names chop and
+    # fail the breakout. ATR14 is through yesterday, so this leaks nothing.
+    atr_pct = (ctx.atr14 / bar.c * 100) if ctx.atr14 else None
+    t.add("B6", not c.min_atr_pct or (atr_pct is not None and atr_pct >= c.min_atr_pct),
+          round(atr_pct, 2) if atr_pct is not None else None, c.min_atr_pct,
+          "ATR14 vs price")
+
+    # B5 — room to run before yesterday's high/low. A trade breaking into fresh ground
+    # (already beyond PDH/PDL) is the good case and passes; only a nearby prior-day cap
+    # standing between the trigger and its T1 fails. Skipped when the level is unknown.
+    t1_dist = c.t1_r_multiple * risk
+    room = None
+    if side == LONG and ctx.pdh is not None:
+        room = ctx.pdh - bar.c
+    elif side == SHORT and ctx.pdl is not None:
+        room = bar.c - ctx.pdl
+    t.add("B5", room is None or room <= 0 or room >= c.headroom_mult * t1_dist,
+          round(room) if room is not None else None,
+          round(c.headroom_mult * t1_dist),
+          "clearance to PDH/PDL is at least headroom_mult x the T1 distance")
+
     if not t.passed:
         return Decision("none", t, side=side, reason=f"failed {t.failed_rule}")
     return Decision("enter", t, side=side, stop=stop, trigger=bar.c, or_width=o.width)
