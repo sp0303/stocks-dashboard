@@ -152,6 +152,37 @@ def _history_stats(points: list[dict]) -> dict:
 _history_cache: dict[tuple, tuple[dict, float]] = {}  # (sym,from,interval,exch) -> (result, ts)
 _HISTORY_TTL = max(settings.quote_cache_ttl_seconds, 1800)  # ≥30 min
 
+_daily_coll = None
+_daily_coll_tried = False
+
+
+def _mongo_daily_history(symbol: str, from_date: str | None) -> list[dict] | None:
+    """Daily closes for `symbol` from the ORB Mongo store (orb_candles_1d), or None if the
+    store is unavailable or has no data for it. Prices are stored in integer paise; this is
+    the one conversion point back to rupees. Filtered from `from_date` inclusive."""
+    global _daily_coll, _daily_coll_tried
+    if not getattr(settings, "use_mongo", False):
+        return None
+    if not _daily_coll_tried:
+        _daily_coll_tried = True
+        try:
+            from pymongo import MongoClient
+            _daily_coll = MongoClient(settings.mongodb_url,
+                                      serverSelectionTimeoutMS=1500)[settings.mongodb_db]["orb_candles_1d"]
+        except Exception:
+            _daily_coll = None
+    if _daily_coll is None:
+        return None
+    try:
+        doc = _daily_coll.find_one({"_id": symbol.upper()})
+    except Exception:
+        return None
+    if not doc or not doc.get("rows"):
+        return None
+    pts = [{"date": r["date"], "close": (r["c"] or 0) / 100.0} for r in doc["rows"]
+           if r.get("c") is not None and (not from_date or r["date"] >= from_date)]
+    return pts or None
+
 
 def get_history(symbol: str, from_date: str | None = None, interval: str = "1d",
                 exchange: str = "NSE") -> dict:
@@ -183,6 +214,17 @@ def _get_history(symbol: str, from_date: str | None = None, interval: str = "1d"
 
     if interval not in ("1d", "1wk", "1mo"):
         interval = "1d"
+
+    # Daily history lives in the ORB Mongo store already (orb_candles_1d, ~2,600 symbols),
+    # put there by the backfill and used by the screener. Read it FIRST for 1d: it is a
+    # single indexed lookup with zero Angel calls, which is what stops the manager
+    # holdings/performance pages from hammering getCandleData and blowing the rate limit.
+    # Only symbols not in the store (or non-daily intervals) fall through to the providers.
+    if interval == "1d":
+        pts = _mongo_daily_history(symbol, from_date)
+        if pts:
+            return {"symbol": symbol, "interval": interval, "from": from_date,
+                    "points": pts, "stats": _history_stats(pts)}
 
     from app.services import angel
     if angel.is_enabled():
