@@ -1306,6 +1306,76 @@ def compute_trade_analytics(trades: list[dict]) -> dict:
     # Sort best/worst
     sorted_rt = sorted(round_trips, key=lambda x: x.get("pnl", 0), reverse=True)
 
+    def _tt(rt: dict) -> dict:
+        return {"symbol": rt["symbol"], "pnl": rt.get("pnl", 0),
+                "pnl_pct": rt.get("pnl_pct", 0), "days": rt.get("days", 0),
+                "date": rt.get("sell_date", "")}
+
+    # ── equity curve + drawdown: cumulative realised P&L by exit date ──
+    by_exit = sorted(round_trips, key=lambda x: x.get("sell_date", ""))
+    equity_curve, cum, peak = [], 0.0, 0.0
+    for rt in by_exit:
+        cum += rt.get("pnl", 0)
+        peak = max(peak, cum)
+        equity_curve.append({"date": rt.get("sell_date", ""), "cum_pnl": round(cum, 2),
+                             "drawdown": round(cum - peak, 2)})
+
+    # ── P&L distribution by return % ──
+    _edges = [(-1e9, -20), (-20, -10), (-10, -5), (-5, 0),
+              (0, 5), (5, 10), (10, 20), (20, 50), (50, 1e9)]
+    _labels = ["<-20%", "-20/-10%", "-10/-5%", "-5/0%",
+               "0/5%", "5/10%", "10/20%", "20/50%", ">50%"]
+    distribution = []
+    for (lo, hi), lab in zip(_edges, _labels):
+        b = [rt for rt in round_trips if lo <= rt.get("pnl_pct", 0) < hi]
+        distribution.append({"bucket": lab, "count": len(b),
+                             "pnl": round(sum(rt.get("pnl", 0) for rt in b), 0)})
+
+    # ── monthly P&L ──
+    _mon: dict[str, dict] = defaultdict(lambda: {"pnl": 0.0, "trades": 0, "wins": 0})
+    for rt in round_trips:
+        mkey = (rt.get("sell_date") or "")[:7]
+        if not mkey:
+            continue
+        _mon[mkey]["pnl"] += rt.get("pnl", 0)
+        _mon[mkey]["trades"] += 1
+        if rt.get("pnl", 0) > 0:
+            _mon[mkey]["wins"] += 1
+    monthly_pnl = [{"month": k, "pnl": round(v["pnl"], 0), "trades": v["trades"],
+                    "win_rate": round(v["wins"] / v["trades"] * 100, 1) if v["trades"] else 0}
+                   for k, v in sorted(_mon.items())]
+
+    # ── win rate by exit weekday ──
+    _wd: dict[str, dict] = defaultdict(lambda: {"pnl": 0.0, "trades": 0, "wins": 0})
+    for rt in round_trips:
+        try:
+            dow = date.fromisoformat((rt.get("sell_date") or "")[:10]).strftime("%a")
+        except (ValueError, TypeError):
+            continue
+        _wd[dow]["pnl"] += rt.get("pnl", 0)
+        _wd[dow]["trades"] += 1
+        if rt.get("pnl", 0) > 0:
+            _wd[dow]["wins"] += 1
+    by_weekday = [{"day": d, "trades": _wd[d]["trades"], "pnl": round(_wd[d]["pnl"], 0),
+                   "win_rate": round(_wd[d]["wins"] / _wd[d]["trades"] * 100, 1) if _wd[d]["trades"] else 0}
+                  for d in ["Mon", "Tue", "Wed", "Thu", "Fri"] if _wd[d]["trades"]]
+
+    # ── win rate by holding period ──
+    _hb = [("Intraday", 0, 0), ("1-7d", 1, 7), ("8-30d", 8, 30),
+           ("31-90d", 31, 90), ("90d+", 91, 10 ** 9)]
+    by_holding = []
+    for lab, lo, hi in _hb:
+        b = [rt for rt in round_trips if lo <= rt.get("days", 0) <= hi]
+        if not b:
+            continue
+        w = sum(1 for rt in b if rt.get("pnl", 0) > 0)
+        by_holding.append({"bucket": lab, "trades": len(b),
+                           "pnl": round(sum(rt.get("pnl", 0) for rt in b), 0),
+                           "win_rate": round(w / len(b) * 100, 1)})
+
+    total_wins_r = total_win
+    expectancy = round((total_pnl / len(round_trips)), 2) if round_trips else 0
+
     return {
         "total_trades": len(round_trips),
         "winning_trades": len(winning),
@@ -1314,6 +1384,8 @@ def compute_trade_analytics(trades: list[dict]) -> dict:
         "profit_factor": round(total_win / total_loss, 2) if total_loss > 0 else None,
         "avg_win": round(total_win / len(winning), 2) if winning else 0,
         "avg_loss": round(total_loss / len(losing), 2) if losing else 0,
+        "expectancy": expectancy,
+        "total_pnl": round(total_pnl, 2),
         "best_trade": {
             "symbol": sorted_rt[0]["symbol"],
             "pnl": sorted_rt[0].get("pnl", 0),
@@ -1324,8 +1396,15 @@ def compute_trade_analytics(trades: list[dict]) -> dict:
             "pnl": sorted_rt[-1].get("pnl", 0),
             "days": sorted_rt[-1].get("days", 0),
         } if sorted_rt else None,
+        "top_winners": [_tt(rt) for rt in sorted_rt[:5]],
+        "top_losers": [_tt(rt) for rt in sorted_rt[::-1][:5]],
         "sector_win_rates": sector_win_rates,
         "avg_holding_days": round(sum(rt.get("days", 0) for rt in round_trips) / len(round_trips), 0) if round_trips else 0,
+        "equity_curve": equity_curve,
+        "distribution": distribution,
+        "monthly_pnl": monthly_pnl,
+        "by_weekday": by_weekday,
+        "by_holding": by_holding,
     }
 
 

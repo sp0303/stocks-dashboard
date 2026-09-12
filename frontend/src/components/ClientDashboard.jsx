@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import {
   PieChart, Pie, Cell, Sector, ResponsiveContainer, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine,
+  BarChart, Bar, Area, ComposedChart, Legend,
 } from 'recharts'
 import { api, inr, inrFull, pct, pctPlain } from '../api.js'
 import { Stat, PnL, PctPnL, Loading, ErrorBox, useAsync, PALETTE } from './common.jsx'
@@ -72,6 +73,7 @@ export default function ClientDashboard({ client }) {
     { key: 'holdings', label: 'Holdings' },
     { key: 'allocation', label: 'Allocation' },
     { key: 'performance', label: 'Performance' },
+    { key: 'trade-analytics', label: 'Trade Analytics' },
     { key: 'dividends', label: 'Dividends' },
     { key: 'playbook', label: 'Playbook' },
     { key: 'corp-actions', label: 'Corporate Actions' },
@@ -147,6 +149,10 @@ export default function ClientDashboard({ client }) {
 
         <Section sectionKey="performance" title="Performance" sectionRef={(el) => (sectionRefs.current.performance = el)}>
           <PerformanceSection client={client} reload={reload} onOpenStock={setSymbol} />
+        </Section>
+
+        <Section sectionKey="trade-analytics" title="Trade Analytics" sectionRef={(el) => (sectionRefs.current['trade-analytics'] = el)}>
+          <TradeAnalyticsSection client={client} reload={reload} />
         </Section>
 
         <Section sectionKey="dividends" title="Dividends" sectionRef={(el) => (sectionRefs.current.dividends = el)}>
@@ -1076,6 +1082,139 @@ function Performance({ client, reload, onOpenStock }) {
   )
 }
 
+// ── Trade Analytics: equity curve, win/loss stats, P&L distribution, timing ──────────
+const UP = 'var(--up, #0f7a5a)'
+const DOWN = 'var(--down, #c0392b)'
+const AX = { fontSize: 11, fill: 'var(--muted)' }
+const TT = { background: 'var(--surface)', border: '1px solid var(--line)', fontSize: 12 }
+const money = (v) => (Number(v) >= 0 ? inr(Number(v)) : `-${inr(-Number(v))}`)
+
+function MiniTradeTable({ rows, tone }) {
+  if (!rows || !rows.length) return null
+  return (
+    <table className="ledger" style={{ width: '100%', fontSize: 13 }}>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={i}>
+            <td style={{ fontWeight: 600 }}>{r.symbol}</td>
+            <td className="r tnum" style={{ color: tone === 'up' ? UP : DOWN, fontWeight: 500 }}>{money(r.pnl)}</td>
+            <td className="r tnum" style={{ color: 'var(--muted)' }}>{r.pnl_pct >= 0 ? '+' : ''}{r.pnl_pct}%</td>
+            <td className="r tnum" style={{ color: 'var(--muted)' }}>{r.days}d</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function WinRateTable({ rows, keyField }) {
+  if (!rows || !rows.length) return <div className="sub">No data.</div>
+  return (
+    <table className="ledger" style={{ width: '100%', fontSize: 13 }}>
+      <thead><tr><th style={{ textAlign: 'left' }}>{keyField === 'day' ? 'Day' : 'Held'}</th><th className="r">Trades</th><th className="r">Win %</th><th className="r">P&L</th></tr></thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={i}>
+            <td>{r[keyField]}</td>
+            <td className="r tnum">{r.trades}</td>
+            <td className="r tnum" style={{ fontWeight: 600, color: r.win_rate >= 50 ? UP : 'var(--ink)' }}>{r.win_rate}%</td>
+            <td className="r tnum" style={{ color: r.pnl >= 0 ? UP : DOWN }}>{money(r.pnl)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function TradeAnalytics({ client, reload }) {
+  const a = useAsync(() => api.tradeAnalytics(client.id), [client.id, reload])
+  if (a.loading) return <Loading />
+  if (a.error) return <ErrorBox error={a.error} />
+  const d = a.data
+  if (!d || d.error || !d.total_trades) return <div className="empty">No closed trades yet — upload a tradebook to see trade analytics.</div>
+
+  return (
+    <div>
+      {/* 1 · Win / loss stats */}
+      <div className="cards">
+        <Stat label="Win rate" value={`${d.win_rate}%`} sub={`${d.winning_trades}W / ${d.losing_trades}L`} tone={d.win_rate >= 50 ? 'up' : ''} />
+        <Stat label="Profit factor" value={d.profit_factor ?? '—'} tone={(d.profit_factor || 0) >= 1 ? 'up' : 'down'} />
+        <Stat label="Expectancy / trade" value={money(d.expectancy)} tone={d.expectancy >= 0 ? 'up' : 'down'} />
+        <Stat label="Avg win" value={inr(d.avg_win)} tone="up" />
+        <Stat label="Avg loss" value={`-${inr(d.avg_loss)}`} tone="down" />
+        <Stat label="Avg holding" value={`${d.avg_holding_days}d`} />
+        <Stat label="Total realized" value={money(d.total_pnl)} tone={d.total_pnl >= 0 ? 'up' : 'down'} />
+        <Stat label="Closed trades" value={d.total_trades} />
+      </div>
+
+      {/* 2 · Equity curve + drawdown */}
+      <h4 style={{ margin: '22px 0 6px' }}>Equity curve — cumulative realized P&L</h4>
+      <div className="sub" style={{ marginBottom: 8 }}>Every closed trade in sequence; the shaded band is the drawdown from the running peak.</div>
+      <ResponsiveContainer width="100%" height={320}>
+        <ComposedChart data={d.equity_curve} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
+          <XAxis dataKey="date" tick={AX} minTickGap={60} />
+          <YAxis tick={AX} width={82} tickFormatter={money} />
+          <Tooltip formatter={money} contentStyle={TT} />
+          <ReferenceLine y={0} stroke="var(--muted)" strokeDasharray="2 2" />
+          <Area type="monotone" dataKey="drawdown" name="Drawdown" stroke={DOWN} fill={DOWN} fillOpacity={0.14} strokeWidth={1} />
+          <Line type="monotone" dataKey="cum_pnl" name="Cumulative P&L" stroke="var(--accent)" dot={false} strokeWidth={2.5} />
+        </ComposedChart>
+      </ResponsiveContainer>
+
+      {/* 3 · Distribution + best/worst */}
+      <div className="grid2" style={{ marginTop: 22 }}>
+        <div>
+          <h4 style={{ margin: '0 0 6px' }}>P&L distribution (by return %)</h4>
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={d.distribution} margin={{ top: 8, right: 8, bottom: 30, left: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" vertical={false} />
+              <XAxis dataKey="bucket" tick={{ ...AX, fontSize: 10 }} interval={0} angle={-35} textAnchor="end" height={48} />
+              <YAxis tick={AX} width={36} allowDecimals={false} />
+              <Tooltip contentStyle={TT} formatter={(v, n, p) => [`${v} trades · ${money(p.payload.pnl)}`, p.payload.bucket]} />
+              <Bar dataKey="count" radius={[3, 3, 0, 0]}>
+                {d.distribution.map((b, i) => <Cell key={i} fill={i < 4 ? DOWN : UP} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div>
+          <h4 style={{ margin: '0 0 6px' }}>Top winners</h4>
+          <MiniTradeTable rows={d.top_winners} tone="up" />
+          <h4 style={{ margin: '14px 0 6px' }}>Top losers</h4>
+          <MiniTradeTable rows={d.top_losers} tone="down" />
+        </div>
+      </div>
+
+      {/* 4 · Timing */}
+      <h4 style={{ margin: '22px 0 6px' }}>Monthly P&L</h4>
+      <ResponsiveContainer width="100%" height={240}>
+        <BarChart data={d.monthly_pnl} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" vertical={false} />
+          <XAxis dataKey="month" tick={AX} minTickGap={24} />
+          <YAxis tick={AX} width={82} tickFormatter={money} />
+          <Tooltip contentStyle={TT} formatter={(v, n, p) => [`${money(v)} · ${p.payload.trades} trades · ${p.payload.win_rate}% win`, p.payload.month]} />
+          <ReferenceLine y={0} stroke="var(--muted)" />
+          <Bar dataKey="pnl" radius={[3, 3, 0, 0]}>
+            {d.monthly_pnl.map((m, i) => <Cell key={i} fill={m.pnl >= 0 ? UP : DOWN} />)}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+
+      <div className="grid2" style={{ marginTop: 18 }}>
+        <div>
+          <h4 style={{ margin: '0 0 6px' }}>By weekday (exit)</h4>
+          <WinRateTable rows={d.by_weekday} keyField="day" />
+        </div>
+        <div>
+          <h4 style={{ margin: '0 0 6px' }}>By holding period</h4>
+          <WinRateTable rows={d.by_holding} keyField="bucket" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Dividends({ client }) {
   const [reload, setReload] = useState(0)
   const [suggestions, setSuggestions] = useState(null)
@@ -1205,5 +1344,6 @@ const OverviewSection = React.memo(Overview)
 const HoldingsSection = React.memo(Holdings)
 const AllocationSection = React.memo(Allocation)
 const PerformanceSection = React.memo(Performance)
+const TradeAnalyticsSection = React.memo(TradeAnalytics)
 const DividendsSection = React.memo(Dividends)
 const PlaybookSection = React.memo(Playbook)
