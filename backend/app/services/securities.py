@@ -97,10 +97,12 @@ def init_cache(stored_classifications: dict | None = None):
     _CACHE_INITIALIZED = True
 
 
-def classify(symbol: str) -> dict:
+def classify(symbol: str, network: bool = True) -> dict:
     """Classify a stock by symbol, with automatic lookup for unknown stocks.
 
-    Returns dict with sector, cap, and asset class.
+    Returns dict with sector, cap, and asset class. Pass network=False in bulk/hot paths
+    (e.g. per-round-trip trade analytics) to use only seed + cache and never block on a
+    yfinance lookup — an uncached symbol comes back "Unclassified" instead.
     """
     symbol = symbol.upper()
     asset_class = _ASSET_CLASS_OVERRIDE.get(symbol, "EQUITY")
@@ -114,6 +116,9 @@ def classify(symbol: str) -> dict:
     if symbol in _CLASSIFICATION_CACHE:
         cached = _CLASSIFICATION_CACHE[symbol]
         return {"symbol": symbol, "sector": cached["sector"], "cap": cached["cap"], "asset_class": asset_class}
+
+    if not network:
+        return {"symbol": symbol, "sector": "Unclassified", "cap": "—", "asset_class": asset_class}
 
     # Negative cache: a recent failed lookup means Yahoo is rate-limiting or the symbol
     # isn't resolvable. Don't re-hit Yahoo on every request — that's what made holdings

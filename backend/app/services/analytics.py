@@ -1296,7 +1296,7 @@ def compute_trade_analytics(trades: list[dict]) -> dict:
 
     def _sec(sym: str) -> str:
         if sym not in _sector_of:
-            _sector_of[sym] = classify(sym).get("sector", "Unclassified")
+            _sector_of[sym] = classify(sym, network=False).get("sector", "Unclassified")
         return _sector_of[sym]
 
     by_sector = defaultdict(lambda: {"win": 0, "loss": 0})
