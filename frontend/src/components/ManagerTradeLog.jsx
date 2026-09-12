@@ -128,7 +128,9 @@ export default function ManagerTradeLog({ managerId, reload }) {
               return (
                 <tr key={idx}>
                   <td style={{ color: 'var(--muted)', whiteSpace: 'nowrap' }}>{r.account}</td>
-                  <td style={{ fontWeight: 600 }}>{r.symbol}</td>
+                  <td style={{ fontWeight: 600 }}>{r.symbol}
+                    {r.cycles > 1 && <span className="sub" style={{ fontWeight: 400, color: 'var(--faint)', marginLeft: 6 }}>·{r.cycles} trades</span>}
+                  </td>
                   <td className="r tnum">{fmtNum(r.quantity)}</td>
                   <td className="r tnum">₹{fmtNum(r.buy_price)}</td>
                   <td className="r tnum">₹{fmtNum(r.sell_price)}</td>

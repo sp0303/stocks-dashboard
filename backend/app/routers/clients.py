@@ -217,37 +217,45 @@ async def manager_trade_log(manager_id: str):
         rts = await run_in_threadpool(compute_round_trips, trades)
         journal = await store.get_trade_journal(c["id"])
 
-        # Collapse FIFO lot-fragments: one sell matched across several buy lots produces a
-        # row per lot. Group them back to one line per (symbol, buy_date, sell_date) so the
-        # log reads like the manager's sheet — one row per buy->sell, not 26 one-share slivers.
-        groups: dict[tuple, dict] = {}
+        # Merge every closed cycle of a stock into ONE line per (account, symbol), like the
+        # Playbook — quantity-weighted average buy/sell, total P&L, average holding, and a
+        # cycle count. The reason attaches to the latest buy lot (edits persist there).
+        groups: dict[str, dict] = {}
         for rt in rts:
-            k = (rt["symbol"], rt.get("buy_date"), rt.get("sell_date"))
-            g = groups.get(k)
+            sym = rt["symbol"]
+            g = groups.get(sym)
             if g is None:
-                g = groups[k] = {"symbol": rt["symbol"], "buy_date": rt.get("buy_date"),
-                                 "sell_date": rt.get("sell_date"), "days": rt["days"],
-                                 "qty": 0.0, "buy_val": 0.0, "sell_val": 0.0, "pnl": 0.0,
-                                 "buy_fingerprint": rt.get("buy_fingerprint")}
+                g = groups[sym] = {"symbol": sym, "qty": 0.0, "buy_val": 0.0, "sell_val": 0.0,
+                                   "pnl": 0.0, "days_w": 0.0, "cycles": 0, "last_sell": "",
+                                   "last_buy": "", "rep_fp": None, "any_note": ""}
             q = rt["quantity"]
             g["qty"] += q
             g["buy_val"] += q * rt["buy_price"]
             g["sell_val"] += q * rt["sell_price"]
             g["pnl"] += rt["pnl"]
+            g["days_w"] += (rt["days"] or 0) * q
+            g["cycles"] += 1
+            g["last_sell"] = max(g["last_sell"], rt.get("sell_date") or "")
+            fp = rt.get("buy_fingerprint")
+            if (rt.get("buy_date") or "") >= g["last_buy"]:
+                g["last_buy"], g["rep_fp"] = rt.get("buy_date") or "", fp
+            note = (journal.get(fp) or {}).get("note", "")
+            if note and not g["any_note"]:
+                g["any_note"] = note
 
         for g in groups.values():
             q = g["qty"] or 1
             buy_price = g["buy_val"] / q
             sell_price = g["sell_val"] / q
-            note = (journal.get(g["buy_fingerprint"]) or {}).get("note", "")
+            rep_note = (journal.get(g["rep_fp"]) or {}).get("note", "")
             rows.append({
                 "account": c["name"], "client_id": c["id"], "symbol": g["symbol"],
                 "quantity": round(g["qty"], 2),
                 "buy_price": round(buy_price, 2), "sell_price": round(sell_price, 2),
-                "buy_date": g["buy_date"], "sell_date": g["sell_date"], "days": g["days"],
-                "pnl": round(g["pnl"], 2),
-                "pnl_pct": round((sell_price - buy_price) / buy_price * 100, 2) if buy_price else 0.0,
-                "reason": note, "buy_fingerprint": g["buy_fingerprint"],
+                "days": round(g["days_w"] / q), "cycles": g["cycles"],
+                "sell_date": g["last_sell"], "pnl": round(g["pnl"], 2),
+                "pnl_pct": round(g["pnl"] / g["buy_val"] * 100, 2) if g["buy_val"] else 0.0,
+                "reason": rep_note or g["any_note"], "buy_fingerprint": g["rep_fp"],
             })
     rows.sort(key=lambda r: r.get("sell_date") or "", reverse=True)
     return {"data": rows, "meta": {"total": len(rows), "clients": len(clients)}}
