@@ -711,6 +711,12 @@ function Playbook({ client, reload }) {
   // intraday (same-day) and within a week — each in the identical pattern.
   return (
     <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <a className="btn" href={api.playbookExportUrl(client.id)}
+          title="Download the full playbook (lots + by-stock + intraday + within-a-week) as an Excel workbook">
+          ⬇ Export to Excel
+        </a>
+      </div>
       <PlaybookByStockTable client={client} reload={reload}
         intro="Closed round trips, merged stock-wise — weighted-average buy/sell price and total P&L. Click a stock for its individual lots. Click a column to sort." />
       <h3 style={{ margin: '30px 0 4px' }}>Intraday</h3>

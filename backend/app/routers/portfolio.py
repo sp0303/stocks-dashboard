@@ -567,6 +567,89 @@ async def playbook_by_stock(client_id: str, min_days: int | None = None,
     return {"data": analytics.playbook_by_stock(trades, min_days, max_days)}
 
 
+@router.get("/{client_id}/playbook/export")
+async def playbook_export(client_id: str):
+    """The Playbook as a multi-sheet .xlsx — one sheet each for the lot-level round
+    trips and the three by-stock views the UI shows (all / intraday / within a week).
+    Reuses openpyxl (already a dependency for the Zerodha upload path)."""
+    store = get_store()
+    trades = await _trades_or_404(client_id)
+    journal = await store.get_trade_journal(client_id)
+    tags = await store.list_tags(client_id)
+    client = await store.get_client(client_id)
+
+    lot_rows = analytics.playbook(trades, journal, tags)          # already sorted
+    by_stock = analytics.playbook_by_stock(trades, None, None)
+    within_week = analytics.playbook_by_stock(trades, 1, 7)
+    _, intraday_recs = await _delivery_and_intraday(client_id)
+    intraday = analytics.intraday_by_stock(intraday_recs)
+
+    # column specs: (row key, header, excel number format or None)
+    MONEY, PRICE, PCT, INT = "#,##0.00", "#,##0.0000", "0.00", "#,##0"
+    lot_cols = [
+        ("symbol", "Stock", None), ("quantity", "Qty", INT),
+        ("buy_price", "Buy Price", PRICE), ("buy_date", "Buy Date", None),
+        ("sell_price", "Sell Price", PRICE), ("sell_date", "Sell Date", None),
+        ("days", "Days Held", INT), ("pnl", "P&L (Rs)", MONEY),
+        ("pnl_pct", "P&L %", PCT), ("reason", "Reason", None),
+    ]
+    stock_cols = [
+        ("symbol", "Stock", None), ("trades_count", "Trades", INT),
+        ("total_qty", "Total Qty", INT), ("avg_buy_price", "Avg Buy", PRICE),
+        ("avg_sell_price", "Avg Sell", PRICE), ("avg_days", "Avg Days", MONEY),
+        ("total_pnl", "P&L (Rs)", MONEY), ("pnl_pct", "P&L %", PCT),
+    ]
+
+    def _build() -> bytes:
+        import io
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+
+        head_font = Font(bold=True, color="FFFFFF")
+        head_fill = PatternFill("solid", fgColor="2F5597")
+        wb = Workbook()
+        wb.remove(wb.active)
+
+        def add_sheet(title: str, cols, rows):
+            ws = wb.create_sheet(title[:31])                       # Excel caps titles at 31
+            for ci, (_k, label, _fmt) in enumerate(cols, 1):
+                c = ws.cell(1, ci, label)
+                c.font, c.fill = head_font, head_fill
+                c.alignment = Alignment(horizontal="center")
+            for ri, row in enumerate(rows, 2):
+                for ci, (key, _label, fmt) in enumerate(cols, 1):
+                    v = row.get(key)
+                    c = ws.cell(ri, ci, v)
+                    if fmt and isinstance(v, (int, float)):
+                        c.number_format = fmt
+            ws.freeze_panes = "A2"
+            for ci, (_k, label, _fmt) in enumerate(cols, 1):
+                width = max(len(label) + 2, *(len(str(r.get(_k, ""))) + 2 for r in rows)) if rows else len(label) + 2
+                ws.column_dimensions[get_column_letter(ci)].width = min(width, 40)
+            if not rows:
+                ws.cell(2, 1, "No trades.")
+
+        add_sheet("Playbook (lots)", lot_cols, lot_rows)
+        add_sheet("By Stock", stock_cols, by_stock)
+        add_sheet("Intraday", stock_cols, intraday)
+        add_sheet("Within a Week", stock_cols, within_week)
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    data = await run_in_threadpool(_build)
+    name = (client or {}).get("name") or client_id
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(name))[:40]
+    fname = f"playbook_{safe}_{date.today().isoformat()}.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @router.get("/{client_id}/pnl-calendar")
 async def pnl_calendar(client_id: str):
     """P&L calendar: realised daily P&L from closed trades, grouped by sell_date.

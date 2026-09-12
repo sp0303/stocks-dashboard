@@ -185,6 +185,8 @@ export const api = {
     req(
       `/api/clients/${clientId}/playbook?sort=${sort}&order=${order}&page=${page}&page_size=${pageSize}${symbol ? `&symbol=${symbol}` : ''}`
     ).then((r) => r),
+  // Direct download URL for the multi-sheet .xlsx export (no auth header needed).
+  playbookExportUrl: (clientId) => `${BASE}/api/clients/${clientId}/playbook/export`,
   playbookByStock: (clientId, { minDays, maxDays, intraday } = {}) => {
     const p = new URLSearchParams()
     if (minDays != null) p.set('min_days', minDays)
