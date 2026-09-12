@@ -584,12 +584,13 @@ async def playbook_export(client_id: str):
     _, intraday_recs = await _delivery_and_intraday(client_id)
     intraday = analytics.intraday_by_stock(intraday_recs)
 
-    # column specs: (row key, header, excel number format or None)
-    MONEY, PRICE, PCT, INT = "#,##0.00", "#,##0.0000", "0.00", "#,##0"
+    # column specs: (row key, header, excel number format or None). DATE marks columns
+    # whose ISO string must be written as a real Excel date, not left as text.
+    MONEY, PRICE, PCT, INT, DATE = "#,##0.00", "#,##0.0000", "0.00", "#,##0", "yyyy-mm-dd"
     lot_cols = [
         ("symbol", "Stock", None), ("quantity", "Qty", INT),
-        ("buy_price", "Buy Price", PRICE), ("buy_date", "Buy Date", None),
-        ("sell_price", "Sell Price", PRICE), ("sell_date", "Sell Date", None),
+        ("buy_price", "Buy Price", PRICE), ("buy_date", "Buy Date", DATE),
+        ("sell_price", "Sell Price", PRICE), ("sell_date", "Sell Date", DATE),
         ("days", "Days Held", INT), ("pnl", "P&L (Rs)", MONEY),
         ("pnl_pct", "P&L %", PCT), ("reason", "Reason", None),
     ]
@@ -602,6 +603,7 @@ async def playbook_export(client_id: str):
 
     def _build() -> bytes:
         import io
+        from datetime import datetime
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.utils import get_column_letter
@@ -620,8 +622,15 @@ async def playbook_export(client_id: str):
             for ri, row in enumerate(rows, 2):
                 for ci, (key, _label, fmt) in enumerate(cols, 1):
                     v = row.get(key)
+                    if fmt == DATE and isinstance(v, str) and v:
+                        try:
+                            v = datetime.strptime(v[:10], "%Y-%m-%d").date()
+                        except ValueError:
+                            pass                                   # leave a bad string as-is
                     c = ws.cell(ri, ci, v)
-                    if fmt and isinstance(v, (int, float)):
+                    if fmt == DATE and hasattr(v, "year"):
+                        c.number_format = DATE
+                    elif fmt and fmt != DATE and isinstance(v, (int, float)):
                         c.number_format = fmt
             ws.freeze_panes = "A2"
             for ci, (_k, label, _fmt) in enumerate(cols, 1):
