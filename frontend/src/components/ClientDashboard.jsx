@@ -707,10 +707,30 @@ const PLAYBOOK_STOCK_COLUMNS = [
 const PLAYBOOK_PAGE_SIZE = 10
 
 function Playbook({ client, reload }) {
+  // The whole playbook, then the same by-stock view sliced by how long trades were held:
+  // intraday (same-day) and within a week — each in the identical pattern.
+  return (
+    <div>
+      <PlaybookByStockTable client={client} reload={reload}
+        intro="Closed round trips, merged stock-wise — weighted-average buy/sell price and total P&L. Click a stock for its individual lots. Click a column to sort." />
+      <h3 style={{ margin: '30px 0 4px' }}>Intraday</h3>
+      <PlaybookByStockTable client={client} reload={reload} minDays={0} maxDays={0}
+        intro="Stocks bought & sold the same day (0-day holds), merged stock-wise."
+        emptyMsg="No intraday (same-day) trades." />
+      <h3 style={{ margin: '30px 0 4px' }}>Within a week</h3>
+      <PlaybookByStockTable client={client} reload={reload} minDays={1} maxDays={7}
+        intro="Positions held 1–7 days, merged stock-wise."
+        emptyMsg="No trades held within a week." />
+    </div>
+  )
+}
+
+function PlaybookByStockTable({ client, reload, minDays, maxDays, intro, emptyMsg }) {
   const [sort, setSort] = useState({ key: 'total_pnl', dir: 'desc' })
   const [page, setPage] = useState(0)
   const [openSymbol, setOpenSymbol] = useState(null)
-  const pb = useAsync(() => api.playbookByStock(client.id), [client.id, reload])
+  const pb = useAsync(() => api.playbookByStock(client.id, { minDays, maxDays }),
+    [client.id, reload, minDays, maxDays])
   const rows = pb.data || []
 
   // back to the first page whenever the sort or the underlying data changes
@@ -732,11 +752,11 @@ function Playbook({ client, reload }) {
 
   return (
     <div>
-      <p className="sub">Closed round trips, merged stock-wise — weighted-average buy/sell price and total P&L. Click a stock for its individual lots. Click a column to sort.</p>
+      <p className="sub">{intro}</p>
       {pb.loading && <Loading what="playbook" />}
       {pb.error && <ErrorBox error={pb.error} />}
       {!pb.loading && !pb.error && !rows.length && (
-        <div className="empty">No closed trades yet.</div>
+        <div className="empty">{emptyMsg || 'No closed trades yet.'}</div>
       )}
       {!pb.loading && !pb.error && rows.length > 0 && (
         <div className="panel tbl-scroll">

@@ -551,12 +551,14 @@ async def playbook(
 
 
 @router.get("/{client_id}/playbook/by-stock")
-async def playbook_by_stock(client_id: str):
+async def playbook_by_stock(client_id: str, min_days: int | None = None,
+                            max_days: int | None = None):
     """Playbook collapsed one row per stock (weighted-avg buy/sell price, total P&L).
     Detail lots for a symbol are fetched via GET /playbook?symbol=... for the
-    click-through modal, so this endpoint carries no pagination of its own."""
+    click-through modal, so this endpoint carries no pagination of its own.
+    Optional min_days/max_days slice by holding period (intraday=0..0, week=1..7)."""
     trades = await _trades_or_404(client_id)
-    return {"data": analytics.playbook_by_stock(trades)}
+    return {"data": analytics.playbook_by_stock(trades, min_days, max_days)}
 
 
 @router.get("/{client_id}/pnl-calendar")

@@ -665,13 +665,22 @@ def playbook(
     return rows
 
 
-def playbook_by_stock(trades: list[dict]) -> list[dict]:
+def playbook_by_stock(trades: list[dict], min_days: int | None = None,
+                      max_days: int | None = None) -> list[dict]:
     """Playbook rows collapsed to one row per stock — total qty, weighted-average
     buy/sell price, aggregate P&L. Weighted (not simple) averages, since round-trip
     lots vary in size and a simple average would misrepresent the actual entry/exit
     cost. Detail rows for a given symbol are fetched separately (existing
-    GET /playbook?symbol=... already supports this) for the click-through modal."""
+    GET /playbook?symbol=... already supports this) for the click-through modal.
+
+    Optional min_days/max_days keep only round trips whose holding period falls in that
+    inclusive range — intraday is 0..0, "within a week" is 1..7 — so the same by-stock
+    view can be sliced by how long positions were actually held."""
     rows = compute_round_trips(trades)
+    if min_days is not None:
+        rows = [r for r in rows if (r.get("days") or 0) >= min_days]
+    if max_days is not None:
+        rows = [r for r in rows if (r.get("days") or 0) <= max_days]
     groups: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         groups[r["symbol"]].append(r)

@@ -185,7 +185,13 @@ export const api = {
     req(
       `/api/clients/${clientId}/playbook?sort=${sort}&order=${order}&page=${page}&page_size=${pageSize}${symbol ? `&symbol=${symbol}` : ''}`
     ).then((r) => r),
-  playbookByStock: (clientId) => req(`/api/clients/${clientId}/playbook/by-stock`).then((r) => r.data),
+  playbookByStock: (clientId, { minDays, maxDays } = {}) => {
+    const p = new URLSearchParams()
+    if (minDays != null) p.set('min_days', minDays)
+    if (maxDays != null) p.set('max_days', maxDays)
+    const qs = p.toString()
+    return req(`/api/clients/${clientId}/playbook/by-stock${qs ? `?${qs}` : ''}`).then((r) => r.data)
+  },
   pnlCalendar: (clientId) => req(`/api/clients/${clientId}/pnl-calendar`).then((r) => r.data),
   // corporate actions — splits/bonus/demerger/buyback/dividends from NSE
   corpActions: (symbol) => req(`/api/corporate-actions?symbol=${symbol}`).then((r) => r.data),
