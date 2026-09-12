@@ -196,6 +196,59 @@ async def concentration(client_id: str):
     return {"data": analytics.concentration(trades)}
 
 
+_perf_series_cache: dict[str, tuple[list[dict], float]] = {}
+_PERF_SERIES_TTL = 900   # 15 min; the curve only moves once a day + on a new trade
+
+
+def _perf_cache_key(client_id: str, trades: list[dict]) -> str:
+    """Invalidate when trades change: count + latest trade date is enough — an upload
+    always adds rows or moves the max date."""
+    last = max((t["trade_date"] for t in trades), default="")
+    return f"{client_id}:{len(trades)}:{last}"
+
+
+async def cached_performance_series(client_id: str, trades: list[dict],
+                                    actions: list[dict]) -> list[dict]:
+    """compute_performance_series is O(trades^2) (it re-derives positions for every
+    trade-day) and gets called for every client on every manager-page poll. The curve
+    changes at most once a day, so memoise it per client and let the poll storm hit the
+    cache instead of the CPU."""
+    import time as _t
+    key = _perf_cache_key(client_id, trades)
+    hit = _perf_series_cache.get(key)
+    if hit and _t.time() - hit[1] < _PERF_SERIES_TTL:
+        return hit[0]
+    series = await compute_performance_series(trades, actions)
+    _perf_series_cache[key] = (series, _t.time())
+    return series
+
+
+async def warm_performance_cache() -> None:
+    """Pre-compute every client's performance series into the cache at startup, off the
+    request path, so the first manager/client page load doesn't pay the O(trades^2) cold
+    cost. Never raises into startup."""
+    import logging
+    log = logging.getLogger("perf.warm")
+    try:
+        store = get_store()
+        clients = await store.list_clients()          # None manager_id = all clients
+    except Exception as exc:
+        log.warning("performance warm skipped: %s", exc)
+        return
+    done = 0
+    for c in clients:
+        try:
+            trades = await store.list_trades(c["id"])
+            if not trades:
+                continue
+            actions = await _actions_for(trades)
+            await cached_performance_series(c["id"], trades, actions)
+            done += 1
+        except Exception as exc:
+            log.warning("performance warm %s: %s", c.get("id"), exc)
+    log.info("performance cache warmed for %d clients", done)
+
+
 async def compute_performance_series(trades: list[dict], actions: list[dict]) -> list[dict]:
     """Portfolio value over time (marked to market with real historical prices, not just
     cost basis) plus, for each benchmark index, what the SAME buy/sell cash flows would be
@@ -246,7 +299,7 @@ async def compute_performance_series(trades: list[dict], actions: list[dict]) ->
 async def performance(client_id: str):
     trades = await _trades_or_404(client_id)
     actions = await _actions_for(trades)
-    series = await compute_performance_series(trades, actions)
+    series = await cached_performance_series(client_id, trades, actions)
     return {"data": series}
 
 

@@ -31,6 +31,10 @@ async def lifespan(app: FastAPI):
     # cold fetch. Runs off the request path; never blocks startup or serving.
     from app.routers.screener import warm_screener
     warm_task = asyncio.create_task(warm_screener())
+    # Pre-compute the manager/client performance series off the request path so the first
+    # page load doesn't pay the O(trades^2) cold cost (served from Mongo daily history now).
+    from app.routers.portfolio import warm_performance_cache
+    perf_warm_task = asyncio.create_task(warm_performance_cache())
     # The ORB engine runs on its own threads (the websocket SDK is thread-based and
     # every Angel call blocks), and never raises into startup: a misconfigured engine
     # must not stop the dashboard from serving. No-op unless ORB_ENABLED=true.
@@ -38,6 +42,7 @@ async def lifespan(app: FastAPI):
     yield
     stop_engine()
     warm_task.cancel()
+    perf_warm_task.cancel()
     alert_task.cancel()
     await store.close()
 

@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 import asyncio
 
 from app.models.schemas import ClientCreate, ClientUpdate
-from app.routers.portfolio import _actions_for, compute_performance_series
+from app.routers.portfolio import _actions_for, cached_performance_series
 from app.services import analytics, ingestion
 from app.store import get_store
 
@@ -64,7 +64,7 @@ async def manager_performance(manager_id: str):
         if not trades:
             return None, None
         actions = await _actions_for(trades)
-        series = await compute_performance_series(trades, actions)
+        series = await cached_performance_series(c["id"], trades, actions)
         pct_series = [
             {
                 "date": row["date"],
