@@ -7,9 +7,12 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 
 import asyncio
 
+from starlette.concurrency import run_in_threadpool
+
 from app.models.schemas import ClientCreate, ClientUpdate
 from app.routers.portfolio import _actions_for, cached_performance_series
 from app.services import analytics, ingestion
+from app.services.engine import compute_round_trips
 from app.store import get_store
 
 router = APIRouter(prefix="/api", tags=["clients"])
@@ -193,6 +196,45 @@ async def manager_holdings(manager_id: str, client_ids: str = None):
             "client_count": len(clients)
         }
     }
+
+
+@router.get("/managers/{manager_id}/trade-log")
+async def manager_trade_log(manager_id: str):
+    """Flat closed-trade log across every client — one row per FIFO round trip, with the
+    client as the 'account' and the buy-trade note as 'reason for buying'. This is the
+    spreadsheet-style journal view: Account | Stock | Qty | Buy | Sell | Days | PNL |
+    PNL% | Reason. Round trips are computed in-process (no external calls)."""
+    store = get_store()
+    if not await store.get_manager(manager_id):
+        raise HTTPException(404, "manager not found")
+    clients = await store.list_clients(manager_id)
+
+    rows: list[dict] = []
+    for c in clients:
+        trades = await store.list_trades(c["id"])
+        if not trades:
+            continue
+        rts = await run_in_threadpool(compute_round_trips, trades)
+        journal = await store.get_trade_journal(c["id"])
+        for rt in rts:
+            note = (journal.get(rt.get("buy_fingerprint")) or {}).get("note", "")
+            rows.append({
+                "account": c["name"],
+                "client_id": c["id"],
+                "symbol": rt["symbol"],
+                "quantity": rt["quantity"],
+                "buy_price": rt["buy_price"],
+                "sell_price": rt["sell_price"],
+                "buy_date": rt.get("buy_date"),
+                "sell_date": rt.get("sell_date"),
+                "days": rt["days"],
+                "pnl": rt["pnl"],
+                "pnl_pct": rt["pnl_pct"],
+                "reason": note,
+                "buy_fingerprint": rt.get("buy_fingerprint"),
+            })
+    rows.sort(key=lambda r: r.get("sell_date") or "", reverse=True)
+    return {"data": rows, "meta": {"total": len(rows), "clients": len(clients)}}
 
 
 @router.get("/clients")

@@ -3,6 +3,7 @@ import { api } from '../api.js'
 import { Loading, ErrorBox, useAsync } from './common.jsx'
 import ManagerMetrics from './ManagerMetrics.jsx'
 import ManagerHoldings from './ManagerHoldings.jsx'
+import ManagerTradeLog from './ManagerTradeLog.jsx'
 
 export default function ManagerView({ managers, manager, setManager, onOpenClient }) {
   const [reload, setReload] = useState(0)
@@ -64,6 +65,14 @@ export default function ManagerView({ managers, manager, setManager, onOpenClien
           {cs.data?.length > 0 && (
             <div style={{ marginTop: 32 }}>
               <ManagerHoldings managerId={manager.id} clients={cs.data} />
+            </div>
+          )}
+
+          {cs.data?.length > 0 && (
+            <div style={{ marginTop: 32 }}>
+              <h2>Trade log — all accounts</h2>
+              <p className="sub" style={{ margin: '0 0 12px' }}>Every closed trade across your clients — click a Reason cell to add why you bought.</p>
+              <ManagerTradeLog managerId={manager.id} reload={reload} />
             </div>
           )}
         </>
