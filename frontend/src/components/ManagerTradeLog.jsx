@@ -16,6 +16,14 @@ const COLS = [
   { key: 'reason', label: 'Reason for buying' },
 ]
 const PAGE = 50
+const STRING_KEYS = new Set(['account', 'symbol', 'reason'])
+const SORT_PRESETS = [
+  { id: 'recent', label: 'Most recent', key: 'sell_date', dir: 'desc' },
+  { id: 'account', label: 'Account (A–Z)', key: 'account', dir: 'asc' },
+  { id: 'stock', label: 'Stock (A–Z)', key: 'symbol', dir: 'asc' },
+  { id: 'pnl_hi', label: 'PNL (high → low)', key: 'pnl', dir: 'desc' },
+  { id: 'pnl_lo', label: 'PNL (low → high)', key: 'pnl', dir: 'asc' },
+]
 
 export default function ManagerTradeLog({ managerId, reload }) {
   const q = useAsync(() => api.managerTradeLog(managerId), [managerId, reload])
@@ -41,11 +49,13 @@ export default function ManagerTradeLog({ managerId, reload }) {
     if (fAccount) v = v.filter((r) => r.account === fAccount)
     if (fSymbol) v = v.filter((r) => r.symbol.toLowerCase().includes(fSymbol.toLowerCase()))
     const dir = sort.dir === 'asc' ? 1 : -1
+    const isStr = STRING_KEYS.has(sort.key)
     v = [...v].sort((a, b) => {
-      const x = a[sort.key], y = b[sort.key]
+      let x = a[sort.key], y = b[sort.key]
       if (x == null) return 1
       if (y == null) return -1
-      return (x > y ? 1 : x < y ? -1 : 0) * dir
+      if (isStr) return String(x).trim().localeCompare(String(y).trim(), 'en', { sensitivity: 'base' }) * dir
+      return (Number(x) - Number(y)) * dir
     })
     return v
   }, [data, fAccount, fSymbol, sort])
@@ -54,7 +64,12 @@ export default function ManagerTradeLog({ managerId, reload }) {
   if (q.error) return <ErrorBox error={q.error} />
   if (!data || !data.length) return <div className="empty">No closed trades yet across any client.</div>
 
-  const toggleSort = (key) => setSort((s) => ({ key, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }))
+  // New column: strings default A->Z (asc), numbers default high->low (desc). Same column: flip.
+  const toggleSort = (key) => setSort((s) => (
+    s.key === key
+      ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: STRING_KEYS.has(key) ? 'asc' : 'desc' }
+  ))
   const pages = Math.ceil(view.length / PAGE)
   const pageRows = view.slice(page * PAGE, page * PAGE + PAGE)
   const totalPnl = view.reduce((s, r) => s + (r.pnl || 0), 0)
@@ -80,6 +95,15 @@ export default function ManagerTradeLog({ managerId, reload }) {
         </select>
         <input className="scr-input" placeholder="Filter stock…" value={fSymbol}
           onChange={(e) => { setFSymbol(e.target.value); setPage(0) }} />
+        <label className="sub" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          Sort
+          <select className="scr-select"
+            value={(SORT_PRESETS.find((p) => p.key === sort.key && p.dir === sort.dir) || {}).id || ''}
+            onChange={(e) => { const p = SORT_PRESETS.find((x) => x.id === e.target.value); if (p) { setSort({ key: p.key, dir: p.dir }); setPage(0) } }}>
+            {!SORT_PRESETS.some((p) => p.key === sort.key && p.dir === sort.dir) && <option value="">Custom (column)</option>}
+            {SORT_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
+        </label>
         <span className="sub" style={{ marginLeft: 'auto' }}>
           {view.length} trades · net <span className={totalPnl >= 0 ? 'up' : 'down'} style={{ fontWeight: 600 }}>{money(totalPnl)}</span>
         </span>
