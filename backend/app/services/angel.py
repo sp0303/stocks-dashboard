@@ -109,6 +109,13 @@ def _call(fn, params, limiter: _RateLimiter, what: str, retries: int = 3):
         try:
             resp = fn(params)
         except Exception as exc:
+            # A blown hourly/minute quota comes back as a non-JSON body the SDK fails to
+            # parse — i.e. as an exception, not a status dict. Retrying in 1-2s cannot help
+            # (the budget is time-based), and sleeping here is exactly what stacked into the
+            # multi-second page hangs. Fast-fail so the caller falls back immediately.
+            if _rate_limited(str(exc)):
+                log.warning("angel %s rate-limited — falling back (no retry)", what)
+                return None
             if attempt == retries - 1:
                 raise
             log.warning("angel %s exception (retry %d): %s", what, attempt + 1, exc)
