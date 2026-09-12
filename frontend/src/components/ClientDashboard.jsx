@@ -31,7 +31,7 @@ function SubNav({ sections, sectionRefs, activeSection }) {
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
   return (
-    <div style={{ position: 'sticky', top: '3.5rem', background: 'var(--bg)', zIndex: 9, borderBottom: '1px solid var(--line)', overflowX: 'auto', padding: '0.5rem 1rem' }}>
+    <div style={{ background: 'var(--bg)', overflowX: 'auto', padding: '0 1.5rem 0.5rem' }}>
       <div style={{ display: 'flex', gap: '0.5rem', minWidth: 'min-content' }}>
         {sections.map((s) => (
           <button
@@ -110,19 +110,18 @@ export default function ClientDashboard({ client }) {
 
   return (
     <div>
-      {/* STICKY HEADER */}
-      <div style={{ position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 10, padding: '1rem', borderBottom: '1px solid var(--line)' }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: '1.5rem' }}>{client.name}</h1>
-          <p className="sub mono" style={{ margin: '0.25rem 0 0 0' }}>{client.client_code || 'no broker code'}</p>
+      {/* STICKY HEADER + SUB-NAV as one unit, so the tab bar never hides behind the
+          taller title (the old bug: title ~4.75rem tall but the nav stuck at top:3.5rem). */}
+      <div style={{ position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 10, borderBottom: '1px solid var(--line)' }}>
+        <div style={{ padding: '0.55rem 1.5rem 0.35rem' }}>
+          <h1 style={{ margin: 0, fontSize: '1.2rem', lineHeight: 1.2 }}>{client.name}</h1>
+          <p className="sub mono" style={{ margin: '0.1rem 0 0 0', fontSize: '0.78rem' }}>{client.client_code || 'no broker code'}</p>
         </div>
+        <SubNav sections={sections} sectionRefs={sectionRefs} activeSection={activeSection} />
       </div>
 
-      {/* STICKY SUB-NAVIGATION */}
-      <SubNav sections={sections} sectionRefs={sectionRefs} activeSection={activeSection} />
-
-      {/* UNIFIED SCROLLABLE DASHBOARD */}
-      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '1rem' }}>
+      {/* UNIFIED SCROLLABLE DASHBOARD — full width with modest side gutters */}
+      <div style={{ maxWidth: '1760px', margin: '0 auto', padding: '1rem 1.5rem' }}>
         <AISummaryCard client={client} reload={reload} />
 
         {/* ALL SECTIONS VISIBLE - NO TABS */}
