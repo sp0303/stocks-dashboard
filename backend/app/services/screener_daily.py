@@ -41,16 +41,44 @@ def _pct(a, b):
     return round((b - a) / a * 100, 2) if (a and b is not None) else None
 
 
-def _metrics(rows: list[dict]) -> dict:
+def score_for(w1, m1, rel, rsi) -> float:
+    """The ranking score, in one place so the live screen and the validation backtest
+    can never drift apart. Momentum is weighted toward the recent week, relative strength
+    rewards leading the sector, and RSI nudges toward healthy (not stretched) trends."""
+    score = 0.0
+    if w1 is not None:
+        score += 0.45 * w1
+    if m1 is not None:
+        score += 0.25 * m1
+    if rel is not None:
+        score += 0.30 * rel
+    if rsi is not None:
+        if 50 <= rsi <= 65:
+            score += 1.5
+        elif rsi > 75:
+            score -= 2.0
+        elif rsi < 40:
+            score -= 1.5
+    return score
+
+
+def _metrics(rows: list[dict], as_of: str | None = None) -> dict:
     """Momentum (1D/1W/1M/1Y), RSI(14), close-based levels, and a true ATR(14), from the
-    daily OHLCV rows (paise → ₹)."""
+    daily OHLCV rows (paise → ₹).
+
+    `as_of` (YYYY-MM-DD) makes this point-in-time: rows after that date are dropped and
+    every lookback window is anchored to it instead of the wall clock. That is what lets
+    the backtest replay history without leaking the future. Live callers omit it."""
     rows = [r for r in rows if r.get("c") is not None]
+    if as_of:
+        rows = [r for r in rows if r["date"] <= as_of]
     if not rows:
         return {}
     closes = [r["c"] / 100 for r in rows]
     dates = [r["date"] for r in rows]
     last = closes[-1]
-    now = datetime.now(timezone.utc)
+    now = (datetime.strptime(as_of, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+           if as_of else datetime.now(timezone.utc))
 
     def ago(days):
         return (now - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -153,20 +181,7 @@ def compute() -> dict:
         sec = k.get("industry", "Other")
         w1, m1, rsi = mtr.get("w1"), mtr.get("m1"), mtr.get("rsi")
         rel = (w1 - sector_w1_avg[sec]) if (w1 is not None and sec in sector_w1_avg) else None
-        score = 0.0
-        if w1 is not None:
-            score += 0.45 * w1
-        if m1 is not None:
-            score += 0.25 * m1
-        if rel is not None:
-            score += 0.30 * rel
-        if rsi is not None:
-            if 50 <= rsi <= 65:
-                score += 1.5
-            elif rsi > 75:
-                score -= 2.0
-            elif rsi < 40:
-                score -= 1.5
+        score = score_for(w1, m1, rel, rsi)
         stocks.append({
             "sector": sec, "ticker": tk, "name": k.get("name", tk),
             "price": mtr.get("price"), "d1": mtr.get("d1"), "w1": w1, "m1": m1,
