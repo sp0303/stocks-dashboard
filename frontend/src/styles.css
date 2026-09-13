@@ -214,7 +214,9 @@ h2{font-size:16px;margin:26px 0 12px;letter-spacing:-.01em}
 .scr-news-empty{color:var(--muted);font-size:13px;padding:4px 0}
 .scr-news-disc{font-size:11px;color:var(--faint);margin-top:10px;font-style:italic}
 /* watch briefing (facts consolidation) */
-.scr-brief{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:22px;padding:16px}
+/* white-space:normal resets the nowrap inherited from `.scr-tbl td` — without it every
+   sentence in the panel stayed on one line and overflowed (the original overlap bug). */
+.scr-brief{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:22px;padding:16px;white-space:normal}
 @media (max-width:760px){.scr-brief{grid-template-columns:1fr;gap:16px}}
 .scr-brief-col{min-width:0}
 .scr-brief-hd{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);
