@@ -49,6 +49,7 @@ from app.services.screener_daily import _load_kpis, _metrics, score_for  # noqa:
 
 DAILY_COLL = "orb_candles_1d"
 HORIZONS = [3, 5, 10, 20]
+FACTORS = ["w1", "m1", "rel", "rsi", "from_52w", "atr_pct"]
 WINDOW = 320          # trailing rows fed to _metrics — bounds work, keeps RSI/levels exact enough
 MIN_HISTORY = 60      # a symbol needs this many sessions before it can be scored
 
@@ -128,6 +129,8 @@ def run(every: int = 5, start: str | None = None, end: str | None = None, progre
     dec_acc = {h: defaultdict(list) for h in HORIZONS}
     uni_acc = {h: [] for h in HORIZONS}
     ic_acc = {h: [] for h in HORIZONS}
+    fic_acc = {f: {h: [] for h in HORIZONS} for f in FACTORS}
+    edge_acc = {h: [] for h in HORIZONS}      # per-date D10 minus universe, for a t-stat
 
     for di, as_of in enumerate(rebal):
         scored = []        # (score, sym, {h: fwd_ret})
@@ -156,10 +159,28 @@ def run(every: int = 5, start: str | None = None, end: str | None = None, progre
             continue
         sec_avg = {s: sum(x) / len(x) for s, x in w1_by_sector.items() if x}
 
+        factors = {k: [] for k in FACTORS}
         for sym, sec, m, fwd in staged:
             w1, m1, rsi = m.get("w1"), m.get("m1"), m.get("rsi")
             rel = (w1 - sec_avg[sec]) if (w1 is not None and sec in sec_avg) else None
             scored.append((score_for(w1, m1, rel, rsi), sym, fwd))
+            # every raw building block, so we can see which (if any) carries signal
+            factors["w1"].append(w1)
+            factors["m1"].append(m1)
+            factors["rel"].append(rel)
+            factors["rsi"].append(rsi)
+            factors["from_52w"].append(m.get("from_52w_high"))
+            factors["atr_pct"].append((m["atr"] / m["price"] * 100)
+                                      if (m.get("atr") and m.get("price")) else None)
+
+        # per-factor IC: rank the factor against the same forward returns
+        for fname, fvals in factors.items():
+            for h in HORIZONS:
+                pairs = [(fv, t[2][h]) for fv, t in zip(fvals, scored) if fv is not None]
+                if len(pairs) >= 50:
+                    fic = _spearman([p[0] for p in pairs], [p[1] for p in pairs])
+                    if fic is not None:
+                        fic_acc[fname][h].append(fic)
 
         scored.sort(key=lambda t: t[0])
         n = len(scored)
@@ -180,12 +201,14 @@ def run(every: int = 5, start: str | None = None, end: str | None = None, progre
                     dec_acc[h][d + 1].append(mean)
                     if d in (0, 9):
                         row[f"d{d+1}_{h}"] = round(mean, 3)
+                    if d == 9:
+                        edge_acc[h].append(mean - uni_mean)  # top decile's edge that date
         per_date.append(row)
         if progress and (di % 20 == 0 or di == len(rebal) - 1):
             print(f"  {as_of}  ({di+1}/{len(rebal)})  n={n}", file=sys.stderr)
 
     return {"per_date": per_date, "dec": dec_acc, "uni": uni_acc, "ic": ic_acc,
-            "dates": len(per_date)}
+            "fic": fic_acc, "edge": edge_acc, "dates": len(per_date)}
 
 
 def report(res):
@@ -217,6 +240,28 @@ def report(res):
         print(f"  +{h:>2}d  D10 {d10:+.3f}  D1 {d1:+.3f}  spread {d10-d1:+.3f}"
               f"   D10-vs-universe {d10-um:+.3f}"
               f"   IC {ic_mean:+.4f} (positive on {ic_pos:.0f}% of dates)")
+
+    # Is D10's edge over the universe real, or noise? t = mean / (sd / sqrt(n)).
+    print("\nIs the top decile's edge over the universe distinguishable from noise?")
+    for h in HORIZONS:
+        e = res["edge"][h]
+        if len(e) > 2:
+            mu, sd = statistics.mean(e), statistics.stdev(e)
+            t = mu / (sd / len(e) ** 0.5) if sd else 0.0
+            verdict = "significant" if abs(t) >= 2 else "NOT significant"
+            print(f"  +{h:>2}d  mean edge {mu:+.3f}pp   sd {sd:.3f}   t = {t:+.2f}   {verdict}")
+    print("  (overlapping windows inflate t — treat these as an upper bound on confidence)")
+
+    print("\nPer-factor rank IC (does each raw building block predict on its own?):")
+    hdr2 = f"{'factor':<10}" + "".join(f"{('+%dd' % h):>10}" for h in HORIZONS)
+    print(hdr2)
+    print("-" * len(hdr2))
+    for f in FACTORS:
+        cells = []
+        for h in HORIZONS:
+            v = res["fic"][f][h]
+            cells.append(f"{statistics.mean(v):+10.4f}" if v else "         —")
+        print(f"{f:<10}" + "".join(cells))
 
     print("\nVerdict guide: edge => deciles trend upward, D10 beats universe, IC > 0 and")
     print("stable. Flat deciles and IC ~ 0 => the ranking has no predictive power.")
