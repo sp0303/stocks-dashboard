@@ -8,7 +8,13 @@ import mongomock
 import pytest
 
 from app.services.orb import signals, store
-from app.services.orb.config import DEFAULT
+from app.services.orb.config import DEFAULT as _SHIPPED
+
+# These tests drive the whole session pipeline (screen -> decide -> manage -> journal)
+# on one synthetic instrument whose stop sits deliberately close to the trigger. The
+# E4/B6 quality floors added in orb-1.1.0 would reject that fixture, turning every test
+# here into a floor test; the floors have their own tests in test_orb_strategy.py.
+DEFAULT = _SHIPPED.with_overrides(min_risk_pct=0.0, min_atr_pct=0.0)
 from app.services.orb.feed import Tick
 from app.services.orb.recorder import Recorder
 from app.services.orb.session import ENTRY_FIRST, MARKET_OPEN, OR_END, SQUARE_OFF
@@ -153,13 +159,21 @@ def test_a_rejected_candidate_records_the_rule_that_stopped_it():
 
 
 def test_the_market_alignment_gate_blocks_a_long_into_a_falling_index():
+    """D6 still works, but ships OFF: the 2-year backtest found alignment ANTI-predictive
+    (trades agreeing with the index averaged -0.267R vs -0.136R for those against it), so
+    orb-1.1.0 defaults require_market_alignment=False. This pins the gate on to prove the
+    mechanism, and asserts the shipped default stays off so re-enabling is a deliberate act."""
+    assert _SHIPPED.require_market_alignment is False
+    assert _SHIPPED.require_sector_alignment is False
+
+    cfg = DEFAULT.with_overrides(require_market_alignment=True)
     d = run_session()
     d.index(-0.6)
     base = {SYM: baseline()}
-    signals.run_screen(DAY, d.rec, base, DEFAULT)
+    signals.run_screen(DAY, d.rec, base, cfg)
     breakout(d)
-    book = signals.PaperBook(DAY, DEFAULT)
-    assert signals.run_decide(DAY, ENTRY_FIRST, d.rec, base, [SYM], book, DEFAULT) == []
+    book = signals.PaperBook(DAY, cfg)
+    assert signals.run_decide(DAY, ENTRY_FIRST, d.rec, base, [SYM], book, cfg) == []
     assert not book.open
 
 

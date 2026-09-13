@@ -20,3 +20,4 @@ kiteconnect==5.2.1
 # explicitly so they actually install (otherwise: ModuleNotFoundError at import).
 logzero==1.7.0
 websocket-client==1.9.2
+mongomock==4.3.0

@@ -22,13 +22,20 @@ def session(or_high=10100, or_low=9900, after=None, vol=20000):
     return bars
 
 
+# The E4/B6 quality floors (min_risk_pct, min_atr_pct) are independent gates with their
+# own tests below. The rule-level tests here assert on stop selection, breakout logic and
+# so on, so they pin a config without those floors — otherwise a floor change silently
+# re-purposes every one of them into a floor test.
+CFG_NO_FLOORS = DEFAULT.with_overrides(min_risk_pct=0.0, min_atr_pct=0.0)
+
+
 def ctx_for(bars, minute, **kw):
     o = opening_range(bars)
     base = dict(
         symbol="TEST", date="2026-09-09", minute=minute, tick=5, bars=bars,
         vwap=vwap_series(bars), orange=o, prev_close=9910, pdh=10400, pdl=9700,
         atr14=400.0, median_or_vol=120000.0, median_cum_vol_now=200000.0,
-        median_turnover_cr=120.0, cfg=DEFAULT,
+        median_turnover_cr=120.0, cfg=CFG_NO_FLOORS,
     )
     base.update(kw)
     return SessionContext(**base)
@@ -72,6 +79,28 @@ def test_no_breakout_means_no_trade():
                           for i in range(5)])
     d = decide(ctx_for(bars, 575))
     assert not d.entered and d.reason == "no breakout"
+
+
+def test_a_stop_tighter_than_the_risk_floor_is_rejected():
+    """E4 — the loss analysis showed too-tight stops sit inside the noise and are the
+    worst cohort, so a stop under min_risk_pct of price is not tradeable."""
+    bars = session(after=breakout_bars(570, low=10150))
+    # stop 10145 on a 10200 trigger = 0.54% risk, under the 0.6% default floor
+    d = decide(ctx_for(bars, 575, cfg=DEFAULT))
+    assert not d.entered and d.reason == "failed E4"
+    # the same setup is fine once the floor is below the actual risk
+    loose = DEFAULT.with_overrides(min_risk_pct=0.5, min_atr_pct=0.0)
+    assert decide(ctx_for(bars, 575, cfg=loose)).entered
+
+
+def test_a_low_volatility_name_is_rejected_by_the_atr_floor():
+    """B6 — ATR14 must be at least min_atr_pct of price; a name that cannot travel
+    chops through the breakout."""
+    bars = session(after=breakout_bars(570, low=10150))
+    # atr14 100 on a 10200 close = 0.98%, under the 3.2% default floor
+    cfg = DEFAULT.with_overrides(min_risk_pct=0.0)
+    d = decide(ctx_for(bars, 575, cfg=cfg, atr14=100.0))
+    assert not d.entered and d.reason == "failed B6"
 
 
 def test_clean_long_breakout_enters_with_the_tightest_of_three_stops():
