@@ -132,8 +132,24 @@ raised and the setups tightened — principled changes, not curve-fitting:
 > which stands alone as objective arithmetic on chart facts. The labels ship as *context*
 > ("this looks like a breakout / pullback / extended"), never as a buy call, and the UI must
 > show the fragile, sub-period expectancy honestly rather than a single flattering number.
-> Next lever to try before calling it settled: gate setups by the Phase-1 composite rank
-> (which *did* pass IC) instead of raw geometry — tracked, not yet done.
+**Composite-gate lever (2026-09-15, `--composite-top 30`).** Tried the tracked lever — only
+take setups on names already in the top 30% of the Phase-1 composite. It *helps*:
+> | setup | n | expR | 1st-half | 2nd-half | verdict |
+> |---|---|---|---|---|---|
+> | Near breakout | 8,849 | +0.09 | +0.27 | −0.05 | still FRAGILE |
+> | **Pullback** | 1,562 | +0.09 | **+0.20** | **+0.03** | **PASS (robust both halves)** |
+> | Oversold reversal | 1,963 | +0.02 | +0.07 | −0.01 | ~flat |
+>
+> So the validated ranking rescues one setup: **composite-gated Pullback clears the strict
+> bar**. Breakout stays fragile even gated (its second half is the real momentum-crash
+> casualty). Net: ship **Pullback on top-composite names** as the one honest tradable book;
+> keep breakout/oversold as context labels. (Caveat: composite-gating shrinks n and the
+> `Extended` label goes non-inferior at small n — watch it.) This is the current
+> recommendation pending the factor additions in `RESEARCH_GAPS.md`.
+
+- [x] **Wired into the screener** — `screener_daily.compute()` attaches `setup` + a
+      capital-independent `plan` to every stock; `GET /api/screener/plan/{ticker}?capital=&risk_pct=`
+      returns the full user-sized plan.
 
 ## Phase 3 — Trade-planning calculator ✅ LANDED (branch `claude/screener-phase1`)
 Objective arithmetic on chart facts — not a recommendation. `app/services/screener_plan.py`
@@ -153,13 +169,20 @@ Objective arithmetic on chart facts — not a recommendation. `app/services/scre
 > label rides along as *context* and is stamped FRAGILE, never as a signal. Given Phase 2's
 > result, this workbench is the product's honest core.
 
-## Phase 4 — Portfolio-level risk
-- [ ] Max risk per trade and max total open risk.
-- [ ] Sector concentration and correlation limits.
-- [ ] Liquidity capacity (position vs median traded value); gap-risk awareness.
-- [ ] Event blackout — wire corporate-actions/results data in as an entry gate.
+## Phase 4 — Portfolio-level risk ✅ LANDED (branch `claude/screener-phase1`)
+`app/services/screener_portfolio.py` (`assess`), 7 unit tests. Greedy admission in priority
+order, each rejection stamped with the binding cap.
+- [x] Max risk per trade (Phase 3) and max total open risk (aggregate cap).
+- [x] Sector concentration cap; correlation limit (pairwise Pearson on supplied returns).
+- [x] Liquidity capacity via per-position notional cap (reuses the Phase 3 / OrbConfig cap).
+- [ ] Event blackout — **hook present** (`blackout` set rejects those names), but the
+      corporate-actions / earnings-calendar feed that would populate it is **not wired**
+      (data-acquisition task, same class as survivorship). Gap-risk awareness (overnight gap
+      distribution) also still TODO.
 
-> **GATE:** reuse ORB's sizing/caps rather than writing a second risk engine.
+> **GATE:** reuse ORB's sizing/caps rather than writing a second risk engine. ✅ Met —
+> per-trade risk/notional come from `screener_plan`/`OrbConfig`; Phase 4 only adds the
+> aggregate limits on top.
 
 ## Phase 5 — Forward-performance loop (permanent)
 - [ ] Snapshot every scan: date, symbol, setup label, score, factor values.

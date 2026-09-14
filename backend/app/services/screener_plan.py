@@ -55,6 +55,25 @@ class SwingPlan:
     notes: list[str]
 
 
+def plan_levels(rows: list[dict], label: str | None) -> dict | None:
+    """The capital-independent half of a plan — entry, ATR stop, R, targets, R:R to
+    resistance, expected hold, and the fragility flag. Safe to embed in the shared screener
+    snapshot; position size (which needs the user's capital) is a separate call."""
+    p = plan_swing_trade(rows, label)
+    if p is None:
+        return None
+    return {
+        "label": p.label, "entry": round(p.entry, 2), "stop": round(p.stop, 2),
+        "risk_per_share": round(p.risk_per_share, 2),
+        "t1": round(p.t1, 2), "t2": round(p.t2, 2), "t2_r": round(p.t2_r, 2),
+        "next_resistance": round(p.next_resistance, 2) if p.next_resistance else None,
+        "rr_to_resistance": round(p.rr_to_resistance, 2) if p.rr_to_resistance else None,
+        "expected_hold_days": p.expected_hold_days,
+        "setup_exp_r": p.setup_exp_r, "setup_fragile": p.setup_fragile,
+        "notes": p.notes,
+    }
+
+
 def _median_volume(rows: list[dict], days: int = 20) -> float | None:
     vols = sorted(r["v"] for r in rows[-days:] if r.get("v"))
     return vols[len(vols) // 2] if vols else None

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.services.market_data import _levels, _rsi  # reuse the validated helpers
+from app.services import screener_plan, screener_setups  # Phase 2/3: setup label + plan
 
 DAILY_COLL = "orb_candles_1d"
 _KPI_PATH = Path(__file__).parent.parent / "data" / "nifty500_kpis.json"
@@ -182,12 +183,18 @@ def compute() -> dict:
         w1, m1, rsi = mtr.get("w1"), mtr.get("m1"), mtr.get("rsi")
         rel = (w1 - sector_w1_avg[sec]) if (w1 is not None and sec in sector_w1_avg) else None
         score = score_for(w1, m1, rel, rsi)
+        rows_tk = daily.get(tk)
+        # Phase 2/3: a labelled setup + a capital-independent trade plan (levels only).
+        # Context, not a signal — the label carries its own fragility flag.
+        setup = screener_setups.classify(rows_tk) if rows_tk else screener_setups.NO_SETUP
+        plan = screener_plan.plan_levels(rows_tk, setup) if rows_tk else None
         stocks.append({
             "sector": sec, "ticker": tk, "name": k.get("name", tk),
             "price": mtr.get("price"), "d1": mtr.get("d1"), "w1": w1, "m1": m1,
             "y1": mtr.get("y1"), "from_52w_high": mtr.get("from_52w_high"),
             "rsi": rsi, "volume": mtr.get("volume"),
             "rel_strength": _round(rel), "score": _round(score),
+            "setup": setup, "plan": plan,
             "fundamentals": _fundamentals(k),
             "levels": {
                 "recent_high": mtr.get("recent_high"), "recent_low": mtr.get("recent_low"),

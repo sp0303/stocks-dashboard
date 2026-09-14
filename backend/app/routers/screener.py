@@ -164,3 +164,33 @@ async def stock_news(ticker: str):
     if not name:
         raise HTTPException(status_code=404, detail=f"Ticker '{ticker}' not in covered universe")
     return {"data": get_stock_news(name, ticker.upper())}
+
+
+@router.get("/plan/{ticker}")
+async def trade_plan(ticker: str, capital: float = 1_000_000.0, risk_pct: float = 0.75):
+    """Phase 3 — a factual, user-parameterised trade plan for one covered stock.
+
+    Objective arithmetic on chart facts (ATR stop, R-multiple targets, R:R to the nearest
+    overhead level, position size from the caller's `capital` and `risk_pct`), reusing the
+    ORB risk + cost model. NOT a recommendation: the setup label rides along as context and
+    is flagged when its historical edge is fragile. 404 if the ticker isn't covered or has
+    too little data to place a stop.
+    """
+    from dataclasses import asdict
+
+    from app.services import screener_daily, screener_plan, screener_setups
+
+    tk = ticker.upper()
+    if not _name_for_ticker(tk):
+        raise HTTPException(status_code=404, detail=f"Ticker '{tk}' not in covered universe")
+    db = screener_daily._mongo()
+    doc = db[screener_daily.DAILY_COLL].find_one({"_id": tk}, {"rows": 1})
+    rows = [r for r in (doc or {}).get("rows", []) if r.get("c") is not None]
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No daily data for '{tk}'")
+    label = screener_setups.classify(rows)
+    plan = screener_plan.plan_swing_trade(
+        rows, label, symbol=tk, capital=capital, risk_per_trade_pct=risk_pct)
+    if plan is None:
+        raise HTTPException(status_code=422, detail=f"Too little data to plan '{tk}'")
+    return {"data": asdict(plan)}
