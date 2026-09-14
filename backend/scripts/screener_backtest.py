@@ -87,14 +87,51 @@ def _spearman(xs: list[float], ys: list[float]) -> float | None:
     return num / (dx * dy) if dx and dy else None
 
 
+def _load_daily_from_file(path):
+    """Offline loader: read an exported orb_candles_1d dump instead of Mongo, so the
+    backtest can run anywhere the DB port is unreachable (e.g. a sandboxed CI/cloud box).
+
+    Accepts what `mongoexport` produces (JSONL: one {_id, rows} object per line), a JSON
+    array of those objects, or a plain {symbol: rows} dict. `rows` are the stored daily
+    docs: {date, o, h, l, c (paise), v}."""
+    import json as _json
+    from pathlib import Path as _Path
+    text = _Path(path).read_text()
+    docs = {}
+    stripped = text.lstrip()
+    if stripped.startswith("{") and "\n{" not in stripped.strip():
+        obj = _json.loads(text)
+        if isinstance(obj, dict) and "rows" not in obj:
+            docs = obj                                    # {sym: rows}
+        else:
+            docs = {obj["_id"]: obj.get("rows", [])}
+    elif stripped.startswith("["):
+        for d in _json.loads(text):
+            docs[d["_id"]] = d.get("rows", [])
+    else:
+        for line in text.splitlines():                    # JSONL from mongoexport
+            line = line.strip()
+            if line:
+                d = _json.loads(line)
+                docs[d["_id"]] = d.get("rows", [])
+    return docs
+
+
 def load_universe():
     """{sym: {'dates':[...], 'closes':[...], 'idx':{date:i}, 'sector':str}} for the
     screener's own universe."""
+    import os
     kpis = _load_kpis()
     want = [tk for tk, v in kpis.items() if not v.get("error") and tk != "DUMMYHEG"]
-    db = _mongo()
+    src = os.environ.get("ORB_DAILY_JSON")
+    if src:
+        raw = _load_daily_from_file(src)
+        docs = [{"_id": tk, "rows": raw.get(tk, [])} for tk in want if tk in raw]
+    else:
+        db = _mongo()
+        docs = db[DAILY_COLL].find({"_id": {"$in": want}}, {"rows": 1})
     out = {}
-    for doc in db[DAILY_COLL].find({"_id": {"$in": want}}, {"rows": 1}):
+    for doc in docs:
         rows = [r for r in (doc.get("rows") or []) if r.get("c") is not None]
         if len(rows) < MIN_HISTORY:
             continue
