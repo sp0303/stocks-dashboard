@@ -46,6 +46,17 @@ with positive IC — `from_52w`, `atr_pct` — are the two we don't score. So th
 > +1.13pp, t+5.6); D10 is the clear top decile at every horizon. `mom_6m`, `from_52w`,
 > `atr_pct` carry the signal; `atr_contraction` is ~0 IC (drop candidate).
 > **Caveat:** survivorship-optimistic — see below.
+>
+> **Phase 1.1 (2026-09-15) — Frog-in-the-Pan momentum quality added.** New `fip` factor =
+> information discreteness `sign(PRET)·(%neg−%pos)` over the 6m/skip-5 window (Da, Gurun &
+> Warachka 2014). Standalone IC positive at every horizon (+0.008/+0.004/+0.007/+0.009);
+> added to the composite at weight 0.13 (trimming near-zero `atr_contraction` to 0.05). The
+> composite **improved across the board**: @+10d IC +0.0199→**+0.0217**, net edge
+> +0.57→**+0.68pp**, t +4.13→**+4.91**; @+20d t +5.6→+6.3. Note: raw `fip` tested +IC here —
+> the *opposite* of the pure long-only FIP intuition, because ID is direction-symmetric and
+> the decliner side flips the cross-sectional sign; kept because the harness, not the
+> intuition, is the arbiter. Downstream: composite-gated Pullback rose to +0.11R (still
+> robust); breakout stayed fragile (its decay is the momentum-crash gap, not quality).
 Build a small factor library where each candidate is measured before it is combined.
 
 **Remove from the composite:** `w1`, `rel`, the RSI point-bonus (kept as *displayed

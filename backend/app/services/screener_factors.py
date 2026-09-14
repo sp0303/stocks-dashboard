@@ -40,17 +40,19 @@ DIRECTION = {
     "atr_pct": +1,
     "trend_persistence": +1,
     "atr_contraction": -1,   # lower ratio = tighter = better
+    "fip": +1,               # raw ID tested +IC on this universe → higher raw ranks higher
 }
 
 # Starting composite weights. Deliberately concentrated on what tested positive; every
 # weight is provisional until the IC gate on the harness confirms sign and stability.
 DEFAULT_WEIGHTS = {
-    "from_52w": 0.30,
+    "from_52w": 0.28,
     "mom_6m": 0.20,
-    "mom_3m": 0.15,
-    "trend_persistence": 0.15,
+    "mom_3m": 0.14,
+    "fip": 0.13,             # momentum-quality (Frog-in-the-Pan), added Phase 1.1
+    "trend_persistence": 0.10,
     "atr_pct": 0.10,
-    "atr_contraction": 0.10,
+    "atr_contraction": 0.05,  # near-zero IC; kept small pending removal
 }
 
 
@@ -72,6 +74,32 @@ def mom_skip(rows: list[dict], lookback: int, skip: int = 5) -> float | None:
     end = c[-1 - skip]
     start = c[-1 - skip - lookback]
     return (end - start) / start * 100 if start else None
+
+
+def fip(rows: list[dict], lookback: int = 126, skip: int = 5) -> float | None:
+    """Frog-in-the-Pan information discreteness (Da, Gurun & Warachka 2014) over the same
+    6-month, skip-5 window as `mom_6m`.
+
+        ID = sign(PRET) · (%neg − %pos)
+
+    where PRET is the window's cumulative return and %pos/%neg are the share of up/down
+    days in it. A stock that drifted up on many small up-days ('continuous', high-quality
+    momentum) scores LOW/negative; one that lurched up in a few discrete jumps scores HIGH.
+    The evidence: continuous momentum persists, discrete momentum reverses — so LOWER is
+    more bullish, and DIRECTION inverts it. Returned raw and signed here; the harness's
+    per-factor IC confirms the sign before it earns a weight."""
+    c = _closes(rows)
+    if len(c) < lookback + skip + 1:
+        return None
+    seg = c[-1 - skip - lookback: -skip] if skip else c[-1 - lookback:]
+    rets = [seg[i] - seg[i - 1] for i in range(1, len(seg))]
+    if not rets:
+        return None
+    pret = seg[-1] - seg[0]
+    pos = sum(1 for r in rets if r > 0) / len(rets)
+    neg = sum(1 for r in rets if r < 0) / len(rets)
+    sign = 1.0 if pret > 0 else (-1.0 if pret < 0 else 0.0)
+    return sign * (neg - pos)
 
 
 def dist_from_52w(rows: list[dict], window: int = 252) -> float | None:
@@ -152,6 +180,7 @@ def raw_factors(rows: list[dict]) -> dict:
         "atr_pct": atr_pct(rows),
         "atr_contraction": atr_contraction(rows),
         "trend_persistence": trend_persistence(rows),
+        "fip": fip(rows),
         "adv": adv_rupees(rows),
     }
 

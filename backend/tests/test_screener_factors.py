@@ -40,6 +40,22 @@ def test_mom_skip_needs_enough_history():
     assert F.mom_skip(series([100.0] * 30), lookback=63, skip=5) is None
 
 
+# ── Frog-in-the-Pan (information discreteness) ─────────────────────
+def test_fip_smooth_uptrend_scores_lower_than_choppy():
+    # Smooth: every day up → all positive days → ID = sign(+)·(0 − 1) = -1 (max quality).
+    smooth = [100.0 + i * 0.5 for i in range(140)]
+    # Choppy but net up: +2,-1 repeating → both signs present, ID near 0 (discrete).
+    choppy = [100.0]
+    for i in range(139):
+        choppy.append(choppy[-1] + (2.0 if i % 2 == 0 else -1.0))
+    assert F.fip(series(smooth)) == -1.0
+    assert F.fip(series(smooth)) < F.fip(series(choppy))     # continuous < discrete
+
+
+def test_fip_needs_enough_history():
+    assert F.fip(series([100.0] * 40)) is None
+
+
 # ── 52-week high ──────────────────────────────────────────────────
 def test_dist_from_52w_high_is_zero_at_the_high_and_negative_below():
     at_high = series([x for x in _ramp(100.0, 200.0, 260)])

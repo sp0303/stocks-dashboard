@@ -35,7 +35,7 @@ is the central problem, and the literature names it exactly.
 
 ## 3. The three factors we're missing (highest-value gaps)
 
-### (a) Frog-in-the-Pan — momentum *quality* — **cheap, price-only, do first**
+### (a) Frog-in-the-Pan — momentum *quality* — ✅ DONE (Phase 1.1, 2026-09-15)
 Da, Gurun & Warachka (2014) and the Alpha Architect / Wesley Gray *Quantitative Momentum*
 program show momentum's edge is almost entirely in **smooth, continuous** movers: stocks that
 rose via many small up-days ("high quality") keep going (+5.94%), while stocks that jumped in
@@ -95,10 +95,11 @@ quality score — same PIT caveat as value.
 | Minervini (VCP), Connors (RSI-2) | practitioner setups | already reflected in Phase 2 |
 
 ## 6. Recommended order of work (highest ROI first)
-1. **Frog-in-the-Pan momentum-quality factor** — price-only, no data blockers, aimed straight
-   at the fragility. Add to the composite behind the usual IC gate; re-run Phase 1 + the
-   composite-gated Phase 2.
-2. **Momentum crash protection** — replace/augment the binary breadth gate with continuous
+1. ~~**Frog-in-the-Pan momentum-quality factor**~~ ✅ DONE (Phase 1.1). `fip` added; composite
+   @+10d IC +0.0199→+0.0217, net edge +0.57→+0.68pp, t 4.1→4.9. Lifted Pullback to +0.11R.
+   Did **not** fix breakout — confirming its decay is the crash problem below, not quality.
+2. **Momentum crash protection** — NOW THE TOP LEVER. Replace/augment the binary breadth gate
+   with continuous
    volatility-scaling of exposure (Barroso–Santa-Clara). Re-validate.
 3. **Ship composite-gated Pullback** as the one honest tradable book today; breakout/oversold
    stay as context labels.

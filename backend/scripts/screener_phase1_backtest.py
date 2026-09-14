@@ -41,7 +41,8 @@ import screener_backtest as bt                                     # noqa: E402 
 from app.services import screener_factors as F                     # noqa: E402
 
 HORIZONS = bt.HORIZONS
-NEW_FACTORS = ["from_52w", "mom_3m", "mom_6m", "atr_pct", "atr_contraction", "trend_persistence"]
+NEW_FACTORS = ["from_52w", "mom_3m", "mom_6m", "atr_pct", "atr_contraction",
+               "trend_persistence", "fip"]
 
 
 def _dma(closes: list[float], n: int) -> float | None:
