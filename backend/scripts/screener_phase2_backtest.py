@@ -50,7 +50,24 @@ def first_touch(rows, i, entry, stop_price, target_price, horizon):
     return ("time", last - i, rows[last]["c"] / 100)             # neither: exit on close
 
 
-def run(every=5, start=None, end=None, cost_pct=0.30, min_adv=0.0, min_n=60, progress=True):
+def _breadth(uni, as_of):
+    """Share of the universe trading above its own 200-DMA on `as_of` — the same risk-on
+    gauge Phase 1 uses. Cheap: reads the cached close series, no row slicing."""
+    above = tot = 0
+    for v in uni.values():
+        i = v["idx"].get(as_of)
+        if i is None or i < 200:
+            continue
+        c = v["closes"]
+        dma200 = sum(c[i - 199: i + 1]) / 200
+        tot += 1
+        if c[i] > dma200:
+            above += 1
+    return (above / tot * 100) if tot else 0.0
+
+
+def run(every=5, start=None, end=None, cost_pct=0.30, min_adv=0.0, min_n=60,
+        regime_breadth=0.0, progress=True):
     uni = bt.load_universe()
     if not uni:
         raise SystemExit("no daily data — is the Mongo store populated?")
@@ -72,7 +89,14 @@ def run(every=5, start=None, end=None, cost_pct=0.30, min_adv=0.0, min_n=60, pro
     trades = {lbl: [] for lbl in S.ALL_LABELS if lbl != S.NO_SETUP}
     label_counts = defaultdict(int)
 
+    risk_off_dates = 0
     for di, as_of in enumerate(rebal):
+        # macro regime: sit out long setups when market breadth is risk-off (Phase 1's gate)
+        if regime_breadth and _breadth(uni, as_of) < regime_breadth:
+            risk_off_dates += 1
+            if progress and di % 40 == 0:
+                print(f"  {as_of} ({di + 1}/{len(rebal)}) risk-off — skipped")
+            continue
         for sym, v in uni.items():
             i = v["idx"].get(as_of)
             if i is None or i < bt.MIN_HISTORY:
@@ -116,7 +140,8 @@ def run(every=5, start=None, end=None, cost_pct=0.30, min_adv=0.0, min_n=60, pro
             print(f"  {as_of} ({di + 1}/{len(rebal)})")
 
     return {"trades": trades, "label_counts": dict(label_counts), "rebal": rebal,
-            "mid_date": mid_date, "cost_pct": cost_pct, "min_adv": min_adv, "min_n": min_n}
+            "mid_date": mid_date, "cost_pct": cost_pct, "min_adv": min_adv, "min_n": min_n,
+            "regime_breadth": regime_breadth, "risk_off_dates": risk_off_dates}
 
 
 def _stats(rs: list[float]):
@@ -135,6 +160,8 @@ def report(res):
     print("\n==========  PHASE 2 SETUP VALIDATION  ==========")
     print(f"rebalance dates: {len(res['rebal'])}   cost/round-trip: {res['cost_pct']}%   "
           f"ADV floor: ₹{res['min_adv']:,.0f}   gate min-n: {res['min_n']}")
+    rg = res.get("regime_breadth", 0)
+    print(f"regime breadth gate: {rg:g}%   risk-off dates skipped: {res.get('risk_off_dates', 0)}")
     print(f"sub-period split at {res['mid_date']}   point-in-time membership: NO (optimistic)\n")
 
     print("label distribution (share of all scored stock-dates):")
@@ -182,11 +209,23 @@ def report(res):
     for lbl in S.TRADABLE:
         n = len(trades[lbl])
         m = exp_by[lbl]
-        ok = n >= res["min_n"] and m is not None and m > 0
+        h0 = _stats([t["r"] for t in trades[lbl] if t["half"] == 0])[1]
+        h1 = _stats([t["r"] for t in trades[lbl] if t["half"] == 1])[1]
+        robust = h0 > 0 and h1 > 0
+        ok = n >= res["min_n"] and m is not None and m > 0 and robust
         any_pass = any_pass or ok
-        verdict = "PASS" if ok else ("thin sample" if n < res["min_n"] else "NO EDGE")
-        print(f"GATE {lbl:<26} n={n:<6} expR={m:+.2f} -> {verdict}"
-              if m is not None else f"GATE {lbl:<26} n={n:<6} (no trades)")
+        if m is None:
+            print(f"GATE {lbl:<26} n={n:<6} (no trades)")
+            continue
+        if n < res["min_n"]:
+            verdict = "thin sample"
+        elif m <= 0:
+            verdict = "NO EDGE"
+        elif not robust:
+            verdict = f"FRAGILE (halves {h0:+.2f}/{h1:+.2f})"
+        else:
+            verdict = "PASS (robust both halves)"
+        print(f"GATE {lbl:<26} n={n:<6} expR={m:+.2f} -> {verdict}")
     ext = exp_by.get(S.EXTENDED)
     if ext is not None and best_tradable is not None:
         conf = "confirmed inferior" if ext < best_tradable else "NOT inferior — investigate"
@@ -207,10 +246,13 @@ def main():
     ap.add_argument("--cost", type=float, default=0.30, help="round-trip cost %%")
     ap.add_argument("--min-adv", type=float, default=0.0, help="liquidity floor, ₹")
     ap.add_argument("--min-n", type=int, default=60, help="min trades for a setup gate")
+    ap.add_argument("--regime-breadth", type=float, default=0.0,
+                    help="skip long setups when %% of universe above 200-DMA is under this")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
     res = run(every=args.every, start=args.start, end=args.end, cost_pct=args.cost,
-              min_adv=args.min_adv, min_n=args.min_n, progress=not args.quiet)
+              min_adv=args.min_adv, min_n=args.min_n, regime_breadth=args.regime_breadth,
+              progress=not args.quiet)
     report(res)
 
 

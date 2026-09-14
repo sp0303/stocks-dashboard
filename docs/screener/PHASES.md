@@ -88,7 +88,7 @@ context* only).
 > top decile beats the equal-weight universe out of sample. If not — stop, do not build
 > Phase 2. This phase is the whole ballgame.
 
-## Phase 2 — Setup classification ✅ GATE PASSED (branch `claude/screener-phase1`)
+## Phase 2 — Setup classification ⚠️ FRAGILE (branch `claude/screener-phase1`)
 Replace one blended rank with labelled, independently-validated setups, each carrying its
 own historical expectancy.
 
@@ -105,31 +105,53 @@ own historical expectancy.
       trend-agnostic; fast target, short hold.
 - [x] Context labels: `Extended — avoid chasing`, `No setup`.
 
-> **GATE RESULT (live Mongo, 233 dates, `--cost 0.30 --min-adv 5e6 --min-n 60`):**
+**Firm-up (2026-09-15).** After the first pass showed second-half decay, the bar was
+raised and the setups tightened — principled changes, not curve-fitting:
+- classifier now requires genuine up-structure (**DMA50 > DMA200**, not just price above a
+  lagging DMA200) for breakout and pullback;
+- the harness gained Phase 1's **breadth regime gate** (`--regime-breadth 40`, skips long
+  setups on risk-off dates — 58 of 233 skipped);
+- the gate now demands **both sub-periods positive**, not just the full-sample mean.
+
+> **FIRMED-UP GATE RESULT (live Mongo, 233 dates, `--cost 0.30 --min-adv 5e6 --min-n 60
+> --regime-breadth 40`):**
 > | setup | n | win% | expR | 1st-half | 2nd-half | verdict |
 > |---|---|---|---|---|---|---|
-> | Near breakout | 13,655 | 42% | **+0.10** | +0.27 | −0.07 | PASS (fragile) |
-> | Pullback setup | 5,456 | 47% | **+0.04** | +0.18 | −0.06 | PASS (fragile) |
-> | Oversold reversal | 16,597 | 47% | −0.06 | +0.06 | −0.12 | **NO EDGE — dropped** |
-> | Extended (chase) | 627 | 44% | +0.07 | — | — | confirmed inferior |
+> | Near breakout | 12,610 | 42% | +0.09 | +0.26 | −0.06 | **FRAGILE** |
+> | Pullback setup | 4,724 | 48% | +0.05 | +0.17 | −0.05 | **FRAGILE** |
+> | Oversold reversal | 13,542 | 49% | −0.02 | +0.04 | −0.07 | **NO EDGE** |
+> | Extended (chase) | 451 | 43% | +0.07 | — | — | confirmed inferior |
 >
-> Two setups clear the bar on the full sample, but **both decay to slightly negative in
-> the second half** (2024-04 →), so treat them as regime-sensitive / provisional, not
-> settled. `Oversold reversal` fails as a stop/target trade net of cost — the raw +3d
-> decile effect does not survive execution realism, so it is dropped as a book (kept as a
-> *context* label only). Median R is negative for breakout (−1.05): most trades stop out,
-> profit rides a few big winners — the wide target is doing the work.
+> **Verdict: PHASE 2 NOT YET.** The regime gate did *not* rescue the second half — the
+> edge weakened in 2024-04 → 2026 on risk-on dates too, so the decay is real time-variation,
+> not just market beta. First-half edge is genuine (breakout +0.26R) but does not persist.
+> No setup clears the both-halves bar. Not overfitted to force a pass — recorded as-is.
+>
+> **Consequence (per "Honest downside" below):** the setups are *not* reliable
+> signal-generators, so the product leans on the **trade-planning workbench** (Phase 3),
+> which stands alone as objective arithmetic on chart facts. The labels ship as *context*
+> ("this looks like a breakout / pullback / extended"), never as a buy call, and the UI must
+> show the fragile, sub-period expectancy honestly rather than a single flattering number.
+> Next lever to try before calling it settled: gate setups by the Phase-1 composite rank
+> (which *did* pass IC) instead of raw geometry — tracked, not yet done.
 
-## Phase 3 — Trade-planning calculator
-Objective arithmetic on chart facts — not a recommendation.
-- [ ] ATR-based invalidation → stop; R:R to the next resistance.
-- [ ] Target 1/2 as multiples of the user's own R.
-- [ ] Expected holding period from the setup's measured distribution.
-- [ ] Position size from user risk-per-trade and the ATR stop.
-- [ ] **Reuse the ORB risk layer** — `plan_trade()`, ATR stop logic, full cost model.
+## Phase 3 — Trade-planning calculator ✅ LANDED (branch `claude/screener-phase1`)
+Objective arithmetic on chart facts — not a recommendation. `app/services/screener_plan.py`
+(`plan_swing_trade`), 11 unit tests, sanity-checked live against Mongo.
+- [x] ATR-based invalidation → stop; R:R to the next *prior* overhead level (≥0.5 ATR
+      above entry; None when at new highs, stated as such).
+- [x] Target 1/2 as multiples of the user's own R (T1 = 1R rung; T2 = the setup's measured
+      target in R).
+- [x] Expected holding period from the setup's measured distribution (`SETUP_STATS`).
+- [x] Position size from user risk-per-trade and the ATR stop, with notional and liquidity
+      caps; every binding cap is reported as a note.
+- [x] **Reuses the ORB risk layer** — the same sizing math as `plan_trade()` and the exact
+      `OrbConfig` statutory cost model (mirrored to avoid an app→scripts import).
 
 > **GATE:** factual levels + user-parameterised maths only. No buy/sell calls, no house
-> price targets.
+> price targets. ✅ Met — the plan returns levels, R-multiples, size and cost; the setup
+> label rides along as *context* and is stamped FRAGILE, never as a signal. Given Phase 2's
+> result, this workbench is the product's honest core.
 
 ## Phase 4 — Portfolio-level risk
 - [ ] Max risk per trade and max total open risk.

@@ -58,6 +58,17 @@ SETUP_GEOMETRY = {
     EXTENDED:          {"stop_atr": 1.5, "target_atr": 3.0,  "horizon": 10},  # scored as a chase
 }
 
+# Measured per-setup outcomes from the Phase 2 firmed-up harness run (2026-09-15: 233
+# rebalance dates, cost 0.30%, ADV ₹5e6, regime-breadth 40). Phase 3 reads `median_hold`
+# for "expected holding period". expR is FRAGILE — positive in the first sub-period,
+# negative in the second (see docs/screener/PHASES.md) — so it is context to display
+# honestly, never a promised edge. Refresh these when the harness is re-run.
+SETUP_STATS = {
+    NEAR_BREAKOUT:     {"median_hold": 9, "exp_r": +0.09, "win_pct": 42, "fragile": True},
+    PULLBACK:          {"median_hold": 7, "exp_r": +0.05, "win_pct": 48, "fragile": True},
+    OVERSOLD_REVERSAL: {"median_hold": 4, "exp_r": -0.02, "win_pct": 49, "fragile": True},
+}
+
 
 # ── geometry helpers (point-in-time; rows already sliced to <= as_of) ──
 def _dma(closes: list[float], n: int) -> float | None:
@@ -151,7 +162,7 @@ def classify(rows: list[dict]) -> str:
     if f.atr_pct is None or f.rsi2 is None or f.from_52w is None:
         return NO_SETUP
 
-    uptrend = f.close > f.dma200
+    uptrend = f.close > f.dma200 and f.dma50 > f.dma200   # price AND structure trending up
     stacked = f.dma20 > f.dma50            # short MA above long MA = up-structure
     tradable_vol = f.atr_pct >= ATR_FLOOR
 
