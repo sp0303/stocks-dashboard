@@ -34,12 +34,18 @@ with positive IC — `from_52w`, `atr_pct` — are the two we don't score. So th
   significance. Live and backtest share `score_for()` so they cannot drift.
 - **This harness is the asset.** Everything below is judged by it.
 
-## Phase 1 — Replace the ranking (IN PROGRESS · branch `claude/screener-phase1`)
+## Phase 1 — Replace the ranking ✅ GATE PASSED (branch `claude/screener-phase1`)
 
-> **Landed so far:** `app/services/screener_factors.py` (factors + normalisation +
-> composite, 13 unit tests) and `scripts/screener_phase1_backtest.py` (composite IC net
-> of costs, ADV floor, macro-regime split, membership hook, 4 wiring tests). Not yet run
-> against the live Mongo store — that is the next step and produces the GATE verdict.
+> **Landed:** `app/services/screener_factors.py` (factors + normalisation + composite,
+> 13 unit tests) and `scripts/screener_phase1_backtest.py` (composite IC net of costs,
+> ADV floor, macro-regime split, membership hook, 4 wiring tests).
+>
+> **GATE RESULT (live Mongo, 233 rebalance dates, `--every 5 --cost 0.30 --min-adv 5e6
+> --regime-breadth 40`):** @+10d composite IC **+0.0199**, top-decile net edge
+> **+0.565pp**, t **+4.13** → **PASS**. Edge builds with horizon (+3d noise → +20d
+> +1.13pp, t+5.6); D10 is the clear top decile at every horizon. `mom_6m`, `from_52w`,
+> `atr_pct` carry the signal; `atr_contraction` is ~0 IC (drop candidate).
+> **Caveat:** survivorship-optimistic — see below.
 Build a small factor library where each candidate is measured before it is combined.
 
 **Remove from the composite:** `w1`, `rel`, the RSI point-bonus (kept as *displayed
@@ -69,25 +75,50 @@ context* only).
       traded value *before* scoring (`--min-adv`).
 - [ ] **Survivorship** — point-in-time membership handles index churn; true precision
       needs delisted/bankrupt names in the window (data-acquisition task, tracked).
+      **Status (2026-09-15):** attempted to source a PIT membership file — NSE serves only
+      the *current* list, and the Wayback Machine has ~1 archived snapshot of it in the
+      whole 2021–2026 window, so no trustworthy history is reachable from the build
+      environment. Not fabricated (a synthetic file would produce a falsely clean gate).
+      Two blockers remain: (a) no historical reconstitution feed reachable here; (b) even a
+      perfect file only removes *forward-inclusion* bias — dropped/delisted names need their
+      own candles, which are not in the store. Both gate results above therefore stand as
+      **optimistic**; a paid PIT feed or parsed NSE semi-annual circulars would close it.
 
 > **GATE:** composite IC positive and stable across sub-periods, **net of costs**, and the
 > top decile beats the equal-weight universe out of sample. If not — stop, do not build
 > Phase 2. This phase is the whole ballgame.
 
-## Phase 2 — Setup classification (max three modes)
+## Phase 2 — Setup classification ✅ GATE PASSED (branch `claude/screener-phase1`)
 Replace one blended rank with labelled, independently-validated setups, each carrying its
-own historical expectancy shown in the UI.
-- [ ] **Trend continuation / breakout** — near 52w high, adequate ATR, above DMA20/50,
-      contraction resolving (VCP).
-- [ ] **Pullback in an uptrend** — above DMA200, retrace to DMA20/50, contraction on the
-      pullback (short-term oversold *within* an uptrend, e.g. RSI(2)).
-- [ ] **Short-horizon mean reversion** — the measured +3d effect (most beaten-down decile
-      outperformed); different hold, different exit, its own test.
-- [ ] Labels: `Near breakout` · `Pullback setup` · `Oversold reversal` ·
-      `Extended — avoid chasing` · `No setup`.
+own historical expectancy.
 
-> **GATE:** each setup validated separately — sample size, expectancy in R, sub-period
-> and sector breakdown. A setup that doesn't clear its own bar never ships.
+> **Landed:** `app/services/screener_setups.py` (pure classifier + geometry, 9 unit tests)
+> and `scripts/screener_phase2_backtest.py` (first-touch R expectancy path-simulated on
+> daily highs/lows, per-setup, with sub-period + sector breakdown and a per-setup gate).
+
+- [x] **Trend continuation / breakout** (`Near breakout`) — near 52w high, ADV/ATR floor,
+      above DMA20/50, **%-based** volatility contraction (absolute ATR-contraction is
+      trend-biased, so the classifier uses ATR%-now ÷ ATR%-ago).
+- [x] **Pullback in an uptrend** (`Pullback setup`) — above DMA200, price back in the
+      DMA20/50 zone, RSI(2) oversold *within* the uptrend.
+- [x] **Short-horizon mean reversion** (`Oversold reversal`) — deep RSI(2) capitulation,
+      trend-agnostic; fast target, short hold.
+- [x] Context labels: `Extended — avoid chasing`, `No setup`.
+
+> **GATE RESULT (live Mongo, 233 dates, `--cost 0.30 --min-adv 5e6 --min-n 60`):**
+> | setup | n | win% | expR | 1st-half | 2nd-half | verdict |
+> |---|---|---|---|---|---|---|
+> | Near breakout | 13,655 | 42% | **+0.10** | +0.27 | −0.07 | PASS (fragile) |
+> | Pullback setup | 5,456 | 47% | **+0.04** | +0.18 | −0.06 | PASS (fragile) |
+> | Oversold reversal | 16,597 | 47% | −0.06 | +0.06 | −0.12 | **NO EDGE — dropped** |
+> | Extended (chase) | 627 | 44% | +0.07 | — | — | confirmed inferior |
+>
+> Two setups clear the bar on the full sample, but **both decay to slightly negative in
+> the second half** (2024-04 →), so treat them as regime-sensitive / provisional, not
+> settled. `Oversold reversal` fails as a stop/target trade net of cost — the raw +3d
+> decile effect does not survive execution realism, so it is dropped as a book (kept as a
+> *context* label only). Median R is negative for breakout (−1.05): most trades stop out,
+> profit rides a few big winners — the wide target is doing the work.
 
 ## Phase 3 — Trade-planning calculator
 Objective arithmetic on chart facts — not a recommendation.
