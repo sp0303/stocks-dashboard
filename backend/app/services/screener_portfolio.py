@@ -65,17 +65,24 @@ def _pearson(a: list[float], b: list[float]) -> float | None:
 
 def assess(candidates: list[Candidate], cfg: PortfolioConfig | None = None, *,
            open_positions: list[Candidate] | None = None,
-           blackout: set[str] | None = None) -> Admission:
+           blackout: set[str] | None = None, exposure_scale: float = 1.0) -> Admission:
     """Admit `candidates` (already in priority order) on top of any `open_positions`, subject
     to the portfolio caps. Greedy: a higher-priority name takes the scarce risk budget first.
-    Returns which names were admitted, and for each rejection, the binding cap."""
+    Returns which names were admitted, and for each rejection, the binding cap.
+
+    `exposure_scale` (default 1.0) shrinks the gross-exposure budget when the market is
+    turbulent — pass `screener_regime.exposure_multiplier(...)` here to cut total risk and
+    per-position notional in high-vol regimes. This is prudent live drawdown control; note the
+    Phase 2 backtest found it does *not* by itself firm up the fragile breakout book (see
+    docs/screener/PHASES.md), so it is an optional risk lever, off by default (scale 1.0)."""
     cfg = cfg or PortfolioConfig()
     blackout = blackout or set()
     open_positions = open_positions or []
+    exposure_scale = max(0.0, exposure_scale)
 
-    max_total_risk = cfg.capital * cfg.max_total_open_risk_pct / 100
-    max_sector_risk = cfg.capital * cfg.max_sector_risk_pct / 100
-    max_notional = cfg.capital * cfg.max_position_notional_pct / 100
+    max_total_risk = cfg.capital * cfg.max_total_open_risk_pct / 100 * exposure_scale
+    max_sector_risk = cfg.capital * cfg.max_sector_risk_pct / 100 * exposure_scale
+    max_notional = cfg.capital * cfg.max_position_notional_pct / 100 * exposure_scale
 
     held: list[Candidate] = list(open_positions)
     total_risk = sum(p.risk_amount for p in held)

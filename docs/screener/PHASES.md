@@ -158,6 +158,20 @@ take setups on names already in the top 30% of the Phase-1 composite. It *helps*
 > `Extended` label goes non-inferior at small n — watch it.) This is the current
 > recommendation pending the factor additions in `RESEARCH_GAPS.md`.
 
+**Crash-protection experiment (2026-09-15) — vol-scaling, negative result.** Built the
+Barroso–Santa-Clara overlay (`app/services/screener_setups.py`'s sibling
+`app/services/screener_regime.py`; harness flag `--vol-scale`): scale exposure to
+`target / trailing_realized_vol`. Hypothesis was that breakout's decay is a classic
+momentum-crash (winners reverse in high-vol regimes) and inverse-vol scaling would stabilize
+it. **It did not.** Breakout halves went +0.39/−0.09 (63d) and +0.45/−0.15 (21d) — the second
+half got *worse*; the headline expR rise is only first-half leverage in the calm bull run, and
+for composite-gated Pullback it slightly *lowered* Sharpe (+0.112→+0.103). Cause: trailing
+realized vol **lags** the crash, and a long-only book cannot harvest the reversal the
+long-short WML of the paper does. Kept as an off-by-default **live** risk lever
+(`screener_portfolio.assess(..., exposure_scale=…)` fed by `regime.exposure_multiplier`), not
+as the breakout fix. Standing recommendation is now firmer: **ship composite-gated Pullback;
+breakout & oversold are context-only labels.**
+
 - [x] **Wired into the screener** — `screener_daily.compute()` attaches `setup` + a
       capital-independent `plan` to every stock; `GET /api/screener/plan/{ticker}?capital=&risk_pct=`
       returns the full user-sized plan.

@@ -98,9 +98,15 @@ quality score — same PIT caveat as value.
 1. ~~**Frog-in-the-Pan momentum-quality factor**~~ ✅ DONE (Phase 1.1). `fip` added; composite
    @+10d IC +0.0199→+0.0217, net edge +0.57→+0.68pp, t 4.1→4.9. Lifted Pullback to +0.11R.
    Did **not** fix breakout — confirming its decay is the crash problem below, not quality.
-2. **Momentum crash protection** — NOW THE TOP LEVER. Replace/augment the binary breadth gate
-   with continuous
-   volatility-scaling of exposure (Barroso–Santa-Clara). Re-validate.
+2. ~~**Momentum crash protection (vol-scaling)**~~ ⚠️ TESTED — did **not** fix breakout
+   (2026-09-15). Built the Barroso–Santa-Clara overlay (`screener_regime.py`, `--vol-scale`):
+   exposure = `target / trailing_realized_vol`. On this long-only Indian universe it **failed
+   to stabilize breakout** — halves +0.39/−0.09 (63d), +0.45/−0.15 (21d), i.e. *worse* second
+   half; the headline expR rise is only first-half leverage in the calm bull run. For
+   composite-gated Pullback it slightly *lowered* Sharpe (+0.112→+0.103). Diagnosis: trailing
+   realized vol **lags** the crash and a long-only book can't harvest the reversal the
+   long-short WML does. Kept as an off-by-default **live** risk lever
+   (`assess(..., exposure_scale=…)`); not the breakout fix.
 3. **Ship composite-gated Pullback** as the one honest tradable book today; breakout/oversold
    stay as context labels.
 4. **Value + Quality on the live screen** (display + optional live ranking), clearly marked
@@ -113,4 +119,12 @@ quality score — same PIT caveat as value.
 > Bottom line: the ranking works, the workbench is real, and the honest product *today* is a
 > research-grade swing workbench with one validated setup — not a fire-and-forget signal.
 > The clearest single experiment left is the Frog-in-the-Pan factor; the clearest single
-> upgrade is vol-scaled crash protection. Both are price-only and unblocked.
+> upgrade is vol-scaled crash protection.
+>
+> **Update 2026-09-15:** Frog-in-the-Pan is done and helped the ranking; vol-scaled crash
+> protection was built and tested but **did not fix breakout** (trailing vol lags; long-only).
+> Revised bottom line: **ship composite-gated Pullback as the one validated book; keep breakout
+> and oversold as context-only labels.** The next unblocked lever is value/quality on the live
+> screen (backtest-blocked on point-in-time fundamentals); the next structural upgrade is a
+> better crash signal than trailing realized vol (e.g. a forward vol forecast or a faster
+> drawdown/breadth trigger), or simply accepting breakout as non-tradable.

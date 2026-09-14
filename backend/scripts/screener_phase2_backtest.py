@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import screener_backtest as bt                                    # noqa: E402  reuse loader
 from app.services import screener_factors as F                    # noqa: E402
+from app.services import screener_regime as R                     # noqa: E402
 from app.services import screener_setups as S                     # noqa: E402
 
 
@@ -87,8 +88,44 @@ def _composite_top(uni, as_of, min_adv, keep_pct, comp):
     return {s for s, _ in ranked[:keep]}
 
 
+def _market_returns(uni):
+    """Equal-weight universe daily return per date: mean over symbols of close-to-close %.
+    The series whose trailing volatility drives the Barroso–Santa-Clara exposure scale."""
+    acc: dict[str, list[float]] = defaultdict(list)
+    for v in uni.items() if False else uni.values():
+        c, dates = v["closes"], v["dates"]
+        for i in range(1, len(c)):
+            if c[i - 1]:
+                acc[dates[i]].append((c[i] - c[i - 1]) / c[i - 1])
+    return {d: (sum(rs) / len(rs)) for d, rs in acc.items() if rs}
+
+
+def _vol_scales(uni, rebal, lookback, cap):
+    """Per-rebalance-date exposure scale from trailing realized vol of the market series.
+    Target is calibrated to the median trailing vol (a normalising constant → average
+    scale ≈ 1), so this redistributes exposure from turbulent to calm dates using only
+    past data at each point."""
+    mret = _market_returns(uni)
+    mdates = sorted(mret)
+    series = [mret[d] for d in mdates]
+    pos = {d: i for i, d in enumerate(mdates)}
+    rv_by = {}
+    for d in rebal:
+        i = pos.get(d)
+        if i is None:
+            continue
+        rv = R.realized_vol(series[: i + 1], lookback)   # only returns up to and incl. d
+        if rv:
+            rv_by[d] = rv
+    target = R.calibrate_target(list(rv_by.values()))
+    if not target:
+        return {d: 1.0 for d in rebal}, None
+    return {d: R.vol_scale(rv_by.get(d), target, cap) for d in rebal}, target
+
+
 def run(every=5, start=None, end=None, cost_pct=0.30, min_adv=0.0, min_n=60,
-        regime_breadth=0.0, composite_top_pct=0.0, progress=True):
+        regime_breadth=0.0, composite_top_pct=0.0, vol_scale=False, vol_lookback=63,
+        vol_cap=2.5, progress=True):
     uni = bt.load_universe()
     if not uni:
         raise SystemExit("no daily data — is the Mongo store populated?")
@@ -106,6 +143,8 @@ def run(every=5, start=None, end=None, cost_pct=0.30, min_adv=0.0, min_n=60,
         raise SystemExit("not enough history for the longest setup horizon")
 
     mid_date = rebal[len(rebal) // 2]                            # sub-period split point
+    scales, vol_target = ((_vol_scales(uni, rebal, vol_lookback, vol_cap))
+                          if vol_scale else ({d: 1.0 for d in rebal}, None))
 
     # per label: list of trade records {r, win, hold, ret, sector, half}
     trades = {lbl: [] for lbl in S.ALL_LABELS if lbl != S.NO_SETUP}
@@ -160,6 +199,7 @@ def run(every=5, start=None, end=None, cost_pct=0.30, min_adv=0.0, min_n=60,
                 "r": r_mult, "win": r_mult > 0, "hold": hold, "ret": ret,
                 "sector": v.get("sector", "Other"),
                 "half": 0 if as_of < mid_date else 1,
+                "scale": scales.get(as_of, 1.0),      # Barroso–Santa-Clara exposure scale
             })
 
         if progress and di % 40 == 0:
@@ -168,7 +208,8 @@ def run(every=5, start=None, end=None, cost_pct=0.30, min_adv=0.0, min_n=60,
     return {"trades": trades, "label_counts": dict(label_counts), "rebal": rebal,
             "mid_date": mid_date, "cost_pct": cost_pct, "min_adv": min_adv, "min_n": min_n,
             "regime_breadth": regime_breadth, "risk_off_dates": risk_off_dates,
-            "composite_top_pct": composite_top_pct}
+            "composite_top_pct": composite_top_pct, "vol_scale": vol_scale,
+            "vol_lookback": vol_lookback, "vol_cap": vol_cap, "vol_target": vol_target}
 
 
 def _stats(rs: list[float]):
@@ -191,6 +232,11 @@ def report(res):
     ct = res.get("composite_top_pct", 0)
     print(f"regime breadth gate: {rg:g}%   risk-off dates skipped: {res.get('risk_off_dates', 0)}"
           f"   composite top-gate: {('top ' + format(ct, 'g') + '%') if ct else 'off'}")
+    vs = res.get("vol_scale")
+    if vs:
+        print(f"vol-scaling: ON (Barroso–Santa-Clara)  lookback {res['vol_lookback']}d  "
+              f"cap {res['vol_cap']:g}x  target(daily vol) {res['vol_target']:.4f}  "
+              f"→ expR/Sharpe below are exposure-scaled")
     print(f"sub-period split at {res['mid_date']}   point-in-time membership: NO (optimistic)\n")
 
     print("label distribution (share of all scored stock-dates):")
@@ -199,30 +245,35 @@ def report(res):
         print(f"  {lbl:<26} {c:>7,}  {c / total * 100:>5.1f}%" if total else f"  {lbl}")
     print()
 
-    print(f"{'setup':<26}{'n':>7}{'win%':>7}{'expR':>8}{'medR':>8}{'t':>7}"
-          f"{'hold':>6}{'ret%':>8}")
+    def eff(t):
+        return t["r"] * t.get("scale", 1.0) if vs else t["r"]
+
+    def sharpe(rs):
+        return (statistics.mean(rs) / statistics.stdev(rs)) if len(rs) > 1 and statistics.stdev(rs) else 0.0
+
+    print(f"{'setup':<26}{'n':>7}{'win%':>7}{'expR':>8}{'medR':>8}{'Shrp':>7}{'t':>7}"
+          f"{'hold':>6}")
     print("-" * 78)
     exp_by = {}
     for lbl in (*S.TRADABLE, S.EXTENDED):
-        rs = [t["r"] for t in trades[lbl]]
+        rs = [eff(t) for t in trades[lbl]]
         n, m, med, t = _stats(rs)
         exp_by[lbl] = m if n else None
         win = sum(x["win"] for x in trades[lbl]) / n * 100 if n else 0
         hold = statistics.mean(x["hold"] for x in trades[lbl]) if n else 0
-        ret = statistics.mean(x["ret"] for x in trades[lbl]) if n else 0
-        print(f"{lbl:<26}{n:>7,}{win:>6.0f}%{m:>+8.2f}{med:>+8.2f}{t:>+7.1f}"
-              f"{hold:>6.1f}{ret:>+8.2f}")
+        print(f"{lbl:<26}{n:>7,}{win:>6.0f}%{m:>+8.2f}{med:>+8.2f}{sharpe(rs):>+7.3f}{t:>+7.1f}"
+              f"{hold:>6.1f}")
     print("-" * 78)
 
     # sub-period stability + top sectors, per tradable setup
     for lbl in S.TRADABLE:
         if not trades[lbl]:
             continue
-        h0 = [t["r"] for t in trades[lbl] if t["half"] == 0]
-        h1 = [t["r"] for t in trades[lbl] if t["half"] == 1]
+        h0 = [eff(t) for t in trades[lbl] if t["half"] == 0]
+        h1 = [eff(t) for t in trades[lbl] if t["half"] == 1]
         by_sec = defaultdict(list)
         for t in trades[lbl]:
-            by_sec[t["sector"]].append(t["r"])
+            by_sec[t["sector"]].append(eff(t))
         top = sorted(by_sec.items(), key=lambda kv: -len(kv[1]))[:4]
         print(f"\n{lbl}:")
         print(f"    sub-period expR   1st half {_stats(h0)[1]:+.2f} (n={len(h0)})   "
@@ -238,8 +289,8 @@ def report(res):
     for lbl in S.TRADABLE:
         n = len(trades[lbl])
         m = exp_by[lbl]
-        h0 = _stats([t["r"] for t in trades[lbl] if t["half"] == 0])[1]
-        h1 = _stats([t["r"] for t in trades[lbl] if t["half"] == 1])[1]
+        h0 = _stats([eff(t) for t in trades[lbl] if t["half"] == 0])[1]
+        h1 = _stats([eff(t) for t in trades[lbl] if t["half"] == 1])[1]
         robust = h0 > 0 and h1 > 0
         ok = n >= res["min_n"] and m is not None and m > 0 and robust
         any_pass = any_pass or ok
@@ -279,11 +330,16 @@ def main():
                     help="skip long setups when %% of universe above 200-DMA is under this")
     ap.add_argument("--composite-top", type=float, default=0.0,
                     help="only take setups on names in the top N%% of the Phase-1 composite")
+    ap.add_argument("--vol-scale", action="store_true",
+                    help="Barroso–Santa-Clara: scale exposure inversely to trailing market vol")
+    ap.add_argument("--vol-lookback", type=int, default=63, help="trailing days for realized vol")
+    ap.add_argument("--vol-cap", type=float, default=2.5, help="max exposure multiplier")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
     res = run(every=args.every, start=args.start, end=args.end, cost_pct=args.cost,
               min_adv=args.min_adv, min_n=args.min_n, regime_breadth=args.regime_breadth,
-              composite_top_pct=args.composite_top, progress=not args.quiet)
+              composite_top_pct=args.composite_top, vol_scale=args.vol_scale,
+              vol_lookback=args.vol_lookback, vol_cap=args.vol_cap, progress=not args.quiet)
     report(res)
 
 
