@@ -50,6 +50,38 @@ const fmtCr = (v) => {
 }
 const growthCls = (v) => (v == null ? '' : v > 0 ? 'up' : v < 0 ? 'down' : '')
 
+// Phase 2 setup label → a short, colour-coded badge. Context, never a buy call.
+const SETUP_BADGE = {
+  'Near breakout': { t: 'Breakout', cls: 'brk' },
+  'Pullback setup': { t: 'Pullback', cls: 'pb' },
+  'Oversold reversal': { t: 'Oversold', cls: 'os' },
+  'Extended — avoid chasing': { t: 'Extended', cls: 'ext' },
+  'No setup': { t: '—', cls: 'none' },
+}
+const setupBadge = (label) => SETUP_BADGE[label] || SETUP_BADGE['No setup']
+
+// Phase 3 trade plan: factual levels + user-parameterised maths. Not a recommendation.
+function TradePlan({ plan }) {
+  if (!plan) return null
+  return (
+    <>
+      <div className="scr-brief-hd" style={{ marginTop: 16 }}>Trade plan — arithmetic, not advice</div>
+      <div className="scr-fund">
+        <div><span className="k">ATR stop</span><span className="v">₹{plan.stop} <em>(₹{plan.risk_per_share}/sh = 1R)</em></span></div>
+        <div><span className="k">Target 1 / 2</span><span className="v">₹{plan.t1} / ₹{plan.t2} <em>({plan.t2_r}R)</em></span></div>
+        {plan.rr_to_resistance != null
+          ? <div><span className="k">R:R to resistance</span><span className="v">{plan.rr_to_resistance} <em>(₹{plan.next_resistance})</em></span></div>
+          : <div><span className="k">Overhead</span><span className="v">clear — at/near highs</span></div>}
+        {plan.expected_hold_days && <div><span className="k">Typical hold</span><span className="v">~{plan.expected_hold_days} sessions</span></div>}
+      </div>
+      <div className="scr-brief-note">
+        Levels are the chart’s facts sized to a fixed risk — <b>what you do with them is your decision</b>.
+        {plan.setup_fragile && <> This setup’s historical edge is <b>fragile</b> (it weakened in 2024–26), so treat the label as context, not a signal.</>}
+      </div>
+    </>
+  )
+}
+
 // Build a list of plain factual signals from data the screener already has. These are
 // observations ("at 52w high", "RSI elevated"), NOT recommendations or entry calls.
 function buildSignals(s, news) {
@@ -145,8 +177,15 @@ function BriefPanel({ s, news }) {
             {f.quality_value != null && <div><span className="k">{f.quality_label}</span><span className="v">{typeof f.quality_value === 'number' ? `${f.quality_value}%` : f.quality_value}</span></div>}
           </div>
         ) : <div className="scr-brief-none">Quarterly KPIs not researched for this name yet.</div>}
+        {(s.value_score != null || s.quality_score != null) && (
+          <div className="scr-fund" style={{ marginTop: 8 }}>
+            <div><span className="k">Value / Quality (z)</span>
+              <span className="v">{s.value_score ?? '—'} / {s.quality_score ?? '—'} <em>(live, not backtested)</em></span></div>
+          </div>
+        )}
         {f.note && <div className="scr-brief-note">{f.note}</div>}
 
+        <TradePlan plan={s.plan} />
         <TechLevels s={s} />
       </div>
 
@@ -192,6 +231,12 @@ function Row({ s, expanded, news, onToggle }) {
         <td>{fmtVol(s.volume)}</td>
         <td className="scr-score">{s.score == null ? '—' : s.score.toFixed(1)}</td>
         <td>
+          {(() => { const b = setupBadge(s.setup); return (
+            <span className={`scr-setup ${b.cls} ${s.plan?.setup_fragile ? 'fragile' : ''}`}
+              title={s.plan?.setup_fragile ? `${s.setup} — historical edge fragile` : (s.setup || '')}>{b.t}</span>
+          ) })()}
+        </td>
+        <td>
           <button className={`scr-newsbtn ${expanded ? 'open' : ''}`} onClick={() => onToggle(s.ticker)}>
             {expanded ? 'Hide' : 'Watch ▾'}
           </button>
@@ -199,7 +244,7 @@ function Row({ s, expanded, news, onToggle }) {
       </tr>
       {expanded && (
         <tr>
-          <td className="scr-news-cell" colSpan={13}><BriefPanel s={s} news={news} /></td>
+          <td className="scr-news-cell" colSpan={14}><BriefPanel s={s} news={news} /></td>
         </tr>
       )}
     </>
@@ -224,6 +269,7 @@ function Table({ stocks, expanded, newsCache, onToggle }) {
             <th>52w High</th>
             <th>Volume</th>
             <th>Score</th>
+            <th>Setup</th>
             <th>Watch</th>
           </tr>
         </thead>

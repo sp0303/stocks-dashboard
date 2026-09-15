@@ -189,6 +189,16 @@ h2{font-size:16px;margin:26px 0 12px;letter-spacing:-.01em}
 .scr-rsi.good{background:var(--accent-wash);color:var(--accent-ink)}
 .scr-rsi.weak{background:color-mix(in srgb,var(--down) 12%,transparent);color:var(--down)}
 .scr-rsi.mid{color:var(--muted)}
+/* Phase 2 setup badge */
+.scr-setup{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;
+  font-weight:600;letter-spacing:.02em;white-space:nowrap}
+.scr-setup.brk{background:var(--accent-wash);color:var(--accent-ink)}
+.scr-setup.pb{background:color-mix(in srgb,var(--up) 16%,transparent);color:var(--up)}
+.scr-setup.os{background:color-mix(in srgb,#e6a100 20%,transparent);color:#a67600}
+.scr-setup.ext{background:color-mix(in srgb,var(--down) 14%,transparent);color:var(--down)}
+.scr-setup.none{color:var(--muted)}
+.scr-setup.fragile{opacity:.65;font-style:italic}
+.scr-fund .v em{font-style:normal;color:var(--muted);font-size:11px}
 .scr-sector-h{font-family:Fraunces,Georgia,serif;font-size:18px;font-weight:600;margin:26px 0 10px;
   display:flex;align-items:baseline;gap:12px}
 .scr-sector-h .avg{font-family:var(--sans);font-size:12px;color:var(--muted);font-weight:400}

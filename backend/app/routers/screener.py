@@ -115,6 +115,22 @@ async def _ensure_snapshot_fresh() -> None:
         data = await asyncio.to_thread(_compute_screener)
         _SNAPSHOT["data"] = data
         _SNAPSHOT["computed_at"] = time.time()
+        # Phase 5: persist a daily snapshot for the forward-performance loop. Best-effort and
+        # off the event loop; idempotent (upsert by date), so many refreshes/day = one doc.
+        await asyncio.to_thread(_save_forward_snapshot, data)
+
+
+def _save_forward_snapshot(data: dict) -> None:
+    """Store today's scan for Phase 5. Never raises into the refresh path."""
+    try:
+        from datetime import datetime, timezone
+
+        from app.services import screener_daily, screener_forward
+        as_of = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        db = screener_daily._mongo()
+        screener_forward.save_snapshot(db, screener_forward.snapshot_from_compute(data, as_of))
+    except Exception:
+        log.exception("Phase 5 snapshot save failed (non-fatal)")
 
 
 async def warm_screener() -> None:
