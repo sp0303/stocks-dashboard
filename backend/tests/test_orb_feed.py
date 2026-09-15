@@ -4,10 +4,11 @@ websocket connections. No sockets, no Angel."""
 from app.services.orb import feed as FE
 
 
-def test_slice_covers_whole_nse_across_three_connections():
-    toks = [str(i) for i in range(2676)]
+def test_slice_covers_whole_nse_balanced_across_three_connections():
+    toks = [str(i) for i in range(2678)]
     chunks = FE.slice_tokens(toks, per_conn=1000, max_conn=3)
-    assert [len(c) for c in chunks] == [1000, 1000, 676]
+    assert [len(c) for c in chunks] == [893, 893, 892]      # balanced, all under the 1000 cap
+    assert max(len(c) for c in chunks) < 1000               # headroom on every connection
     # every token placed exactly once, order preserved
     assert [t for c in chunks for t in c] == toks
 

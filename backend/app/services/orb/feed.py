@@ -241,17 +241,28 @@ class Feed:
 # ── multi-connection feed (whole-NSE coverage) ────────────────────
 def slice_tokens(tokens: list[str], per_conn: int = MAX_TOKENS_PER_SESSION,
                  max_conn: int = MAX_CONNECTIONS) -> list[list[str]]:
-    """Split a token list into per-connection chunks of at most `per_conn`, capped at
-    `max_conn` connections. The whole NSE cash book (~2,676 EQ) needs 3 connections; a
-    list longer than per_conn*max_conn is truncated (with the caller warned) rather than
-    silently overflowing a socket's 1,000-token limit. Pure — unit-tested."""
+    """Split a token list across the fewest connections needed, **balanced evenly** rather
+    than filling each to the `per_conn` cap. The whole NSE cash book (~2,678 EQ) becomes
+    ~893/893/892 across 3 connections instead of 1000/1000/678 — every socket keeps headroom
+    under the 1,000-token limit (room for the separate snap-quote subscription, and slack if
+    the universe grows). A list longer than per_conn*max_conn is truncated (caller warned)
+    rather than overflowing a socket. Pure — unit-tested."""
     toks = [str(t) for t in tokens]
     cap = per_conn * max_conn
     if len(toks) > cap:
         log.warning("truncating %d tokens to %d (%d conns x %d)", len(toks), cap,
                     max_conn, per_conn)
         toks = toks[:cap]
-    return [toks[i:i + per_conn] for i in range(0, len(toks), per_conn)] or [[]]
+    if not toks:
+        return [[]]
+    n_conn = min(max_conn, -(-len(toks) // per_conn))       # ceil(len/per_conn)
+    base, rem = divmod(len(toks), n_conn)
+    chunks, i = [], 0
+    for k in range(n_conn):
+        size = base + (1 if k < rem else 0)                 # spread the remainder over the first few
+        chunks.append(toks[i:i + size])
+        i += size
+    return chunks
 
 
 class _AggStatus:
