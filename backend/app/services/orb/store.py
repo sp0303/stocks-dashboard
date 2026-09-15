@@ -175,6 +175,17 @@ def daily_symbols() -> list[str]:
     return [d["_id"] for d in get_db()[CANDLES_1D].find({}, {"_id": 1})]
 
 
+def latest_daily_dates() -> dict[str, str]:
+    """{symbol: most-recent stored daily date} in one query — lets an incremental backfill
+    skip symbols already current, so a rate-limited daily run only fetches what's behind."""
+    out: dict[str, str] = {}
+    for doc in get_db()[CANDLES_1D].aggregate(
+            [{"$project": {"last": {"$arrayElemAt": ["$rows.date", -1]}}}]):
+        if doc.get("last"):
+            out[doc["_id"]] = doc["last"]
+    return out
+
+
 # ── generic keyed documents ───────────────────────────────────────
 def put(collection: str, doc: dict) -> None:
     get_db()[collection].replace_one({"_id": doc["_id"]}, doc, upsert=True)

@@ -44,11 +44,28 @@ def _hms(seconds: float) -> str:
     return f"{h}h{m:02d}m" if h else f"{m}m{s:02d}s"
 
 
+def _recent_weekday(d: date) -> date:
+    while d.weekday() >= 5:      # Sat/Sun → step back to Friday
+        d -= timedelta(days=1)
+    return d
+
+
 def cmd_daily(args) -> None:
-    """Daily candles for the whole EQ pool. One request per symbol covers years."""
+    """Daily candles for the whole EQ pool. One request per symbol covers years.
+
+    --only-stale skips symbols already at the latest expected trading day, so a run that is
+    rate-limited (Angel throttles historical calls hard) picks up only what is behind. Run
+    hourly across the after-close window and the universe converges under the hourly cap
+    without supervision."""
     insts = universe.equity_candidates()
     start = date.today() - timedelta(days=365 * args.daily_years)
     end = date.today()
+    if args.only_stale:
+        from app.services.orb import store
+        target = _recent_weekday(date.today()).isoformat()
+        latest = store.latest_daily_dates()
+        insts = [i for i in insts if latest.get(i.symbol, "") < target]
+        log.info("only-stale: %d symbols behind %s (of the full EQ pool)", len(insts), target)
     log.info("daily candles for %d EQ symbols, %s..%s", len(insts), start, end)
     t0, ok, empty, failed = time.time(), 0, 0, 0
     for i, inst in enumerate(insts, 1):
@@ -170,6 +187,8 @@ def main() -> None:
                                      "report", "all"])
     p.add_argument("--years", type=float, default=2, help="minute-history depth")
     p.add_argument("--daily-years", type=float, default=5, help="daily-history depth")
+    p.add_argument("--only-stale", action="store_true",
+                   help="daily: skip symbols already at the latest trading day (incremental)")
     p.add_argument("--size", type=int, default=0, help="working-set size (default 200)")
     args = p.parse_args()
 
