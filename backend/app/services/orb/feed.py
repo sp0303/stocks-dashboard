@@ -33,6 +33,7 @@ MODE_LTP, MODE_QUOTE, MODE_SNAP_QUOTE = 1, 2, 3
 EXCH_NSE_CM = 1
 
 MAX_TOKENS_PER_SESSION = 1000
+MAX_CONNECTIONS = 3        # Angel allows 3 websocket connections per client code
 SILENCE_LIMIT_S = 90        # no tick from ANY symbol for this long during market hours
 RECONNECT_BACKOFF = (2, 5, 10, 20, 30, 60)
 
@@ -235,3 +236,88 @@ class Feed:
         if not self.status.last_tick_ts:
             return self.status.connected
         return (time.time() - self.status.last_tick_ts) > limit_s
+
+
+# ── multi-connection feed (whole-NSE coverage) ────────────────────
+def slice_tokens(tokens: list[str], per_conn: int = MAX_TOKENS_PER_SESSION,
+                 max_conn: int = MAX_CONNECTIONS) -> list[list[str]]:
+    """Split a token list into per-connection chunks of at most `per_conn`, capped at
+    `max_conn` connections. The whole NSE cash book (~2,676 EQ) needs 3 connections; a
+    list longer than per_conn*max_conn is truncated (with the caller warned) rather than
+    silently overflowing a socket's 1,000-token limit. Pure — unit-tested."""
+    toks = [str(t) for t in tokens]
+    cap = per_conn * max_conn
+    if len(toks) > cap:
+        log.warning("truncating %d tokens to %d (%d conns x %d)", len(toks), cap,
+                    max_conn, per_conn)
+        toks = toks[:cap]
+    return [toks[i:i + per_conn] for i in range(0, len(toks), per_conn)] or [[]]
+
+
+class _AggStatus:
+    """Reads the child feeds live so `.as_dict()` always reflects the current fan-out."""
+
+    def __init__(self, mf: "MultiFeed"):
+        self.mf = mf
+
+    def as_dict(self) -> dict:
+        ss = [f.status for f in self.mf.feeds]
+        if not ss:
+            return {"connected": False, "connections": 0, "connections_up": 0,
+                    "subscribed": 0, "ticks": 0, "seconds_since_last_tick": None,
+                    "reconnects": 0, "last_error": "", "uptime_s": 0}
+        last_tick = max((s.last_tick_ts for s in ss), default=0.0)
+        age = (time.time() - last_tick) if last_tick else None
+        return {
+            "connected": any(s.connected for s in ss),
+            "connections": len(ss),
+            "connections_up": sum(1 for s in ss if s.connected),
+            "subscribed": sum(s.subscribed for s in ss),
+            "ticks": sum(s.ticks for s in ss),
+            "seconds_since_last_tick": round(age, 1) if age else None,
+            "reconnects": sum(s.reconnects for s in ss),
+            "last_error": next((s.last_error for s in ss if s.last_error), ""),
+            "uptime_s": round(time.time() - min(s.started_at for s in ss)),
+        }
+
+
+class MultiFeed:
+    """Fans one token set across up to `max_conn` `Feed` connections so the book can exceed
+    a single socket's 1,000-token cap — the whole NSE cash universe on 3 sockets. Presents
+    the same interface the engine used for a single Feed (start/stop/upgrade/status), so it
+    is a drop-in replacement. Each child Feed keeps its own reconnect loop and status; this
+    only splits the tokens and aggregates."""
+
+    def __init__(self, on_tick: Callable[[Tick], None], mode: int = MODE_QUOTE,
+                 per_conn: int = MAX_TOKENS_PER_SESSION, max_conn: int = MAX_CONNECTIONS):
+        self.on_tick = on_tick
+        self.mode = mode
+        self.per_conn = per_conn
+        self.max_conn = max_conn
+        self.feeds: list[Feed] = []
+        self.status = _AggStatus(self)
+
+    def start(self, tokens: list[str]) -> None:
+        chunks = slice_tokens(tokens, self.per_conn, self.max_conn)
+        self.stop()
+        self.feeds = [Feed(self.on_tick, self.mode) for _ in chunks]
+        for f, ch in zip(self.feeds, chunks):
+            if ch:
+                f.start(ch)
+        log.info("multi-feed: %d tokens across %d connection(s)",
+                 sum(len(c) for c in chunks), len([c for c in chunks if c]))
+
+    def stop(self) -> None:
+        for f in self.feeds:
+            f.stop()
+
+    def upgrade_to_snap_quote(self, tokens: list[str]) -> None:
+        want = {str(t) for t in tokens}
+        for f in self.feeds:
+            owned = [t for t in f._tokens if t in want]
+            if owned:
+                f.upgrade_to_snap_quote(owned)
+
+    def is_silent(self, limit_s: int = SILENCE_LIMIT_S) -> bool:
+        live = [f for f in self.feeds if f._tokens]
+        return bool(live) and all(f.is_silent(limit_s) for f in live)

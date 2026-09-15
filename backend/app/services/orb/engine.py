@@ -17,7 +17,7 @@ from app.config import settings
 from app.services.orb import calendar as orb_calendar
 from app.services.orb import recon, signals, store
 from app.services.orb.config import DEFAULT, OrbConfig
-from app.services.orb.feed import Feed
+from app.services.orb.feed import MultiFeed
 from app.services.orb.recorder import Recorder
 from app.services.orb.scheduler import Job, Scheduler, heartbeat
 from app.services.orb.session import (IST, MARKET_CLOSE, MARKET_OPEN, OR_END, SQUARE_OFF,
@@ -40,7 +40,7 @@ class Engine:
                                  if strategy_enabled is None else strategy_enabled)
         self.day = today_ist().isoformat()
         self.recorder = Recorder()
-        self.feed = Feed(self.recorder.on_tick)
+        self.feed = MultiFeed(self.recorder.on_tick)
         self.baselines: dict[str, signals.Baseline] = {}
         self.shortlist: list[str] = []
         self.book = signals.PaperBook(self.day, cfg)
@@ -85,15 +85,24 @@ class Engine:
         self.members = rows[0]["members"]
         self.baselines = signals.prepare_day(day, self.members)
 
-        for m in self.members:
-            self.recorder.register(m["sym"], m["token"])
+        # Recording set. The strategy universe (self.members) drives baselines/screening,
+        # but when ORB_RECORD_ALL_NSE is on we RECORD the whole NSE cash book — every EQ
+        # symbol — fanned across the 3 websocket connections MultiFeed manages. Strategy
+        # stays scoped; the tick store gets everything.
+        if settings.orb_record_all_nse:
+            rec = [(i.symbol, i.token) for i in equity_candidates()]
+        else:
+            rec = [(m["sym"], m["token"]) for m in self.members]
+
+        for sym, token in rec:
+            self.recorder.register(sym, token)
         for name, token in INDEX_TOKENS.items():
             self.recorder.register(name, token)          # indices for D5/D6, and the VIX
 
-        tokens = [m["token"] for m in self.members] + list(INDEX_TOKENS.values())
+        tokens = [token for _, token in rec] + list(INDEX_TOKENS.values())
         self.feed.stop()
         self.feed.start(tokens)
-        return f"{len(self.members)} symbols + {len(INDEX_TOKENS)} indices subscribed"
+        return f"{len(rec)} symbols + {len(INDEX_TOKENS)} indices subscribed"
 
     # ── 09:16 ─────────────────────────────────────────────────────
     def job_probe(self, day: str) -> str:

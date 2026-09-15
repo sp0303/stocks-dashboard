@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     # engine places an order in either mode — signals are paper only.
     orb_enabled: bool = False
     orb_strategy_enabled: bool = False
+    # Record 1-minute tick data for the WHOLE NSE cash book (~2,676 EQ) across 3 websocket
+    # connections, instead of only the strategy's ranked universe. Recording only — the
+    # strategy still trades its scoped universe. Off by default; enable in .env on the box.
+    orb_record_all_nse: bool = False
 
     # CORS — the React dev server / GitHub Pages origin
     cors_origins: str = "*"
