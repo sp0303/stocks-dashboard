@@ -30,6 +30,21 @@ def test_vol_scale_is_clamped_and_safe():
     assert R.vol_scale(0.0, 0.01, cap=2.0) == 2.0        # zero vol → cap
 
 
+def test_ewma_vol_reacts_faster_than_flat_window():
+    # a calm history then a fresh vol burst: EWMA (recent-weighted) should read higher than
+    # the flat trailing mean over a long window.
+    rets = [0.001, -0.001] * 60 + [0.05, -0.05, 0.05, -0.05]
+    assert R.ewma_vol(rets, span=10) > R.realized_vol(rets, lookback=120)
+
+
+def test_drawdown_from_peak_and_scale():
+    assert R.drawdown_from_peak([100, 110, 99]) == (99 - 110) / 110      # ~-10%
+    assert R.drawdown_from_peak([100, 110, 110]) == 0.0                  # at the high
+    assert R.drawdown_scale(0.0) == 1.0                                  # no drawdown → full
+    assert R.drawdown_scale(-0.10, knee=-0.10, floor=0.0) == 0.0         # at knee → floor
+    assert 0.0 < R.drawdown_scale(-0.05, knee=-0.10, floor=0.0) < 1.0    # partial
+
+
 def test_calibrate_target_is_the_median():
     assert R.calibrate_target([0.01, 0.02, 0.03]) == 0.02
     assert R.calibrate_target([]) is None

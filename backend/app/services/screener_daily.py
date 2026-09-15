@@ -16,6 +16,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.services.market_data import _levels, _rsi  # reuse the validated helpers
+from app.services import screener_fundamentals  # value/quality (live-only, not backtested)
 from app.services import screener_plan, screener_setups  # Phase 2/3: setup label + plan
 
 DAILY_COLL = "orb_candles_1d"
@@ -204,6 +205,13 @@ def compute() -> dict:
             },
         })
 
+    # value + quality on the live screen (FY26 snapshot; NOT fed to the validated composite —
+    # point-in-time-fundamentals bias would make it look-ahead in a backtest). Context only.
+    vq = screener_fundamentals.score_universe({tk: kpis[tk] for tk in metrics_by_tk})
+    for s in stocks:
+        s["value_score"] = vq.get(s["ticker"], {}).get("value_score")
+        s["quality_score"] = vq.get(s["ticker"], {}).get("quality_score")
+
     stocks.sort(key=lambda s: (s["score"] is not None, s["score"] if s["score"] is not None else 0),
                 reverse=True)
     for i, s in enumerate(stocks, 1):
@@ -215,4 +223,5 @@ def compute() -> dict:
         "universe": len(universe),
         "stocks": stocks,
         "sectors": {s: _round(v) for s, v in sector_w1_avg.items()},
+        "fundamentals_basis": "value/quality from FY26 snapshot — live context, not backtested",
     }

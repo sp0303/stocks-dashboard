@@ -100,31 +100,45 @@ def _market_returns(uni):
     return {d: (sum(rs) / len(rs)) for d, rs in acc.items() if rs}
 
 
-def _vol_scales(uni, rebal, lookback, cap):
-    """Per-rebalance-date exposure scale from trailing realized vol of the market series.
-    Target is calibrated to the median trailing vol (a normalising constant → average
-    scale ≈ 1), so this redistributes exposure from turbulent to calm dates using only
-    past data at each point."""
+def _crash_scales(uni, rebal, signal, lookback, cap):
+    """Per-rebalance-date exposure scale from a crash signal, using only past data at each
+    date. `signal`: 'sma' (trailing realized vol, the laggy baseline), 'ewma' (faster-reacting
+    vol), or 'drawdown' (market index below its trailing peak — price-based, more leading).
+    Vol signals calibrate their target to the series median so average exposure ≈ 1; drawdown
+    needs no target. Returns (scales_by_date, info_string)."""
     mret = _market_returns(uni)
     mdates = sorted(mret)
     series = [mret[d] for d in mdates]
     pos = {d: i for i, d in enumerate(mdates)}
+
+    if signal == "drawdown":
+        idx, cum = [], 1.0                              # cumulative equal-weight market index
+        for r in series:
+            cum *= (1 + r)
+            idx.append(cum)
+        scales = {}
+        for d in rebal:
+            i = pos.get(d)
+            scales[d] = 1.0 if i is None else R.drawdown_scale(R.drawdown_from_peak(idx[: i + 1]))
+        return scales, "drawdown knee -10%"
+
+    vol_fn = R.ewma_vol if signal == "ewma" else R.realized_vol
     rv_by = {}
     for d in rebal:
         i = pos.get(d)
         if i is None:
             continue
-        rv = R.realized_vol(series[: i + 1], lookback)   # only returns up to and incl. d
+        rv = vol_fn(series[: i + 1], lookback)
         if rv:
             rv_by[d] = rv
     target = R.calibrate_target(list(rv_by.values()))
     if not target:
         return {d: 1.0 for d in rebal}, None
-    return {d: R.vol_scale(rv_by.get(d), target, cap) for d in rebal}, target
+    return {d: R.vol_scale(rv_by.get(d), target, cap) for d in rebal}, f"{signal} target {target:.4f}"
 
 
 def run(every=5, start=None, end=None, cost_pct=0.30, min_adv=0.0, min_n=60,
-        regime_breadth=0.0, composite_top_pct=0.0, vol_scale=False, vol_lookback=63,
+        regime_breadth=0.0, composite_top_pct=0.0, crash_signal="none", vol_lookback=63,
         vol_cap=2.5, progress=True):
     uni = bt.load_universe()
     if not uni:
@@ -143,7 +157,8 @@ def run(every=5, start=None, end=None, cost_pct=0.30, min_adv=0.0, min_n=60,
         raise SystemExit("not enough history for the longest setup horizon")
 
     mid_date = rebal[len(rebal) // 2]                            # sub-period split point
-    scales, vol_target = ((_vol_scales(uni, rebal, vol_lookback, vol_cap))
+    vol_scale = crash_signal not in (None, "none")
+    scales, vol_target = ((_crash_scales(uni, rebal, crash_signal, vol_lookback, vol_cap))
                           if vol_scale else ({d: 1.0 for d in rebal}, None))
 
     # per label: list of trade records {r, win, hold, ret, sector, half}
@@ -209,7 +224,8 @@ def run(every=5, start=None, end=None, cost_pct=0.30, min_adv=0.0, min_n=60,
             "mid_date": mid_date, "cost_pct": cost_pct, "min_adv": min_adv, "min_n": min_n,
             "regime_breadth": regime_breadth, "risk_off_dates": risk_off_dates,
             "composite_top_pct": composite_top_pct, "vol_scale": vol_scale,
-            "vol_lookback": vol_lookback, "vol_cap": vol_cap, "vol_target": vol_target}
+            "crash_signal": crash_signal, "vol_lookback": vol_lookback, "vol_cap": vol_cap,
+            "vol_info": vol_target}
 
 
 def _stats(rs: list[float]):
@@ -234,8 +250,8 @@ def report(res):
           f"   composite top-gate: {('top ' + format(ct, 'g') + '%') if ct else 'off'}")
     vs = res.get("vol_scale")
     if vs:
-        print(f"vol-scaling: ON (Barroso–Santa-Clara)  lookback {res['vol_lookback']}d  "
-              f"cap {res['vol_cap']:g}x  target(daily vol) {res['vol_target']:.4f}  "
+        print(f"crash signal: {res['crash_signal'].upper()}  ({res.get('vol_info')})  "
+              f"lookback {res['vol_lookback']}d  cap {res['vol_cap']:g}x  "
               f"→ expR/Sharpe below are exposure-scaled")
     print(f"sub-period split at {res['mid_date']}   point-in-time membership: NO (optimistic)\n")
 
@@ -330,15 +346,17 @@ def main():
                     help="skip long setups when %% of universe above 200-DMA is under this")
     ap.add_argument("--composite-top", type=float, default=0.0,
                     help="only take setups on names in the top N%% of the Phase-1 composite")
-    ap.add_argument("--vol-scale", action="store_true",
-                    help="Barroso–Santa-Clara: scale exposure inversely to trailing market vol")
+    ap.add_argument("--crash", choices=["none", "sma", "ewma", "drawdown"], default="none",
+                    help="crash-protection signal: sma/ewma vol scaling or market-drawdown gate")
+    ap.add_argument("--vol-scale", action="store_true", help="alias for --crash sma")
     ap.add_argument("--vol-lookback", type=int, default=63, help="trailing days for realized vol")
     ap.add_argument("--vol-cap", type=float, default=2.5, help="max exposure multiplier")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
+    crash = "sma" if (args.vol_scale and args.crash == "none") else args.crash
     res = run(every=args.every, start=args.start, end=args.end, cost_pct=args.cost,
               min_adv=args.min_adv, min_n=args.min_n, regime_breadth=args.regime_breadth,
-              composite_top_pct=args.composite_top, vol_scale=args.vol_scale,
+              composite_top_pct=args.composite_top, crash_signal=crash,
               vol_lookback=args.vol_lookback, vol_cap=args.vol_cap, progress=not args.quiet)
     report(res)
 

@@ -107,10 +107,19 @@ quality score — same PIT caveat as value.
    realized vol **lags** the crash and a long-only book can't harvest the reversal the
    long-short WML does. Kept as an off-by-default **live** risk lever
    (`assess(..., exposure_scale=…)`); not the breakout fix.
+2b. **Better crash signals — also tested, also negative (2026-09-15).** Because SMA vol lags,
+   we tried a faster signal (**EWMA**, `--crash ewma`) and a *leading* price signal (**market
+   drawdown gate**, `--crash drawdown`). Neither firms up breakout: 2nd-half stays −0.09 (ewma)
+   / −0.08 (drawdown). Three different signals (laggy, fast, leading) failing equally
+   **triangulates** the conclusion — breakout's decay is not a timing problem exposure-scaling
+   can fix; the setup's edge genuinely decayed in 2024-26. Breakout is confirmed context-only.
 3. **Ship composite-gated Pullback** as the one honest tradable book today; breakout/oversold
    stay as context labels.
-4. **Value + Quality on the live screen** (display + optional live ranking), clearly marked
-   "not historically validated" until PIT fundamentals exist.
+4. ✅ **Value + Quality on the live screen** — DONE (2026-09-15). `screener_fundamentals.py`
+   adds winsorized-z value (earnings yield) + quality (opm/pat_yoy/rev_yoy, bank margin carve-
+   out); `compute()` attaches `value_score`/`quality_score` to every stock with a
+   `fundamentals_basis` caveat. **Display/live-ranking only — NOT in the composite or any
+   gate** (point-in-time-fundamentals bias). Validation waits on a PIT fundamentals feed.
 5. **Phase 5 monitoring loop** — snapshot every scan, record realised outcomes, watch IC/
    expectancy decay in real time. Non-optional given point 2.4 on factor decay.
 6. **Data acquisition** (unblocks the rest): PIT index membership, PIT fundamentals, an

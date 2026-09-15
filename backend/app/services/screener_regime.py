@@ -31,6 +31,41 @@ def realized_vol(returns: list[float], lookback: int = 63) -> float | None:
     return pstdev(window) if len(window) >= 2 else None
 
 
+def ewma_vol(returns: list[float], span: int = 20) -> float | None:
+    """Exponentially-weighted volatility — reacts to a vol spike faster than a flat trailing
+    window, because recent squared returns dominate. The direct answer to 'trailing realized
+    vol lags the crash': a shorter effective memory. Assumes ~zero mean (daily returns)."""
+    if len(returns) < 5:
+        return None
+    alpha = 2.0 / (span + 1)
+    var = None
+    for r in returns:
+        var = r * r if var is None else alpha * r * r + (1 - alpha) * var
+    return var ** 0.5 if var is not None else None
+
+
+def drawdown_from_peak(prices: list[float]) -> float | None:
+    """Current drawdown of a cumulative index from its trailing peak, as a value <= 0
+    (0 = at a high, -0.12 = 12% below). Price-based, so it registers a crash the moment the
+    market falls — a more *leading* de-risk trigger than realized vol, which only rises after
+    the damage."""
+    if not prices:
+        return None
+    peak = max(prices)
+    return (prices[-1] - peak) / peak if peak else None
+
+
+def drawdown_scale(dd: float | None, knee: float = -0.10, floor: float = 0.0) -> float:
+    """Exposure from drawdown: 1.0 while at/near highs, falling linearly to `floor` by the
+    time the market is `knee` (e.g. -10%) below its peak. De-risk into weakness, re-risk on
+    recovery."""
+    if dd is None or dd >= 0:
+        return 1.0
+    if dd <= knee:
+        return floor
+    return 1.0 + (dd / knee) * (floor - 1.0)
+
+
 def vol_scale(rv: float | None, target: float, cap: float = 2.5, floor: float = 0.0) -> float:
     """Exposure multiplier `target / rv`, clamped to [floor, cap]. rv is trailing realized
     vol; target is the constant vol we aim to hold. High trailing vol → scale < 1 (de-risk);
