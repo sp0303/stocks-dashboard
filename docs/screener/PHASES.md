@@ -209,11 +209,24 @@ order, each rejection stamped with the binding cap.
 > per-trade risk/notional come from `screener_plan`/`OrbConfig`; Phase 4 only adds the
 > aggregate limits on top.
 
-## Phase 5 — Forward-performance loop (permanent)
-- [ ] Snapshot every scan: date, symbol, setup label, score, factor values.
-- [ ] Record outcome: MFE/MAE, return at +3/+5/+10/+20, stop-vs-target-first, net of costs.
-- [ ] Report rolling realised IC and setup expectancy — a decaying factor shows up here
-      before it costs money.
+## Phase 5 — Forward-performance loop ✅ LANDED (branch `claude/screener-phase1`)
+`app/services/screener_forward.py` (pure outcome maths + realized report + thin Mongo
+persistence) and `scripts/screener_phase5_report.py` (backfill + realized read). 7 unit tests.
+- [x] Snapshot every scan: `snapshot_from_compute()` freezes ticker, setup, score,
+      value/quality and plan levels; `save_snapshot()` upserts by date (idempotent). Wire it
+      into the daily scan/scheduler to persist automatically (collection `screener_snapshots`).
+- [x] Record outcome: `record_outcomes()` fills return at +3/+5/+10/+20, MFE/MAE, and
+      first-touch stop-vs-target with hold + net R — only once the forward window has matured.
+- [x] Report rolling realized rank-IC + per-setup realized expectancy (`realized_report()`);
+      the script backfills recent history for an immediate read.
+
+> **First realized read (backfill, last 40 rebalance dates Oct-2025→Aug-2026, raw setups):**
+> composite realized IC still positive (+0.023/+0.027/+0.043 @5/10/20d) — the *ranking* holds
+> in the recent regime — **but raw setup expectancy is negative** (@10d Pullback −0.09,
+> Oversold −0.12), and rolling weekly IC swings −0.23…+0.21. Exactly the decay/regime signal
+> this loop exists to surface: watch it against the composite-gated live book. (Backfill
+> replays history, so it mirrors the backtest; genuinely forward snapshots will diverge and
+> that divergence is the alarm.)
 
 ---
 
