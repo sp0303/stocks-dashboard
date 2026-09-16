@@ -85,7 +85,7 @@
   margin-bottom: 30px;
 }
 
-.card {
+.summary-cards .card {
   background: white;
   padding: 20px;
   border-radius: 8px;
@@ -93,7 +93,7 @@
   border-left: 4px solid #667eea;
 }
 
-.card-label {
+.summary-cards .card-label {
   font-size: 12px;
   color: #999;
   text-transform: uppercase;
@@ -101,31 +101,31 @@
   margin-bottom: 8px;
 }
 
-.card-value {
+.summary-cards .card-value {
   font-size: 24px;
   font-weight: 700;
   color: #333;
   margin-bottom: 6px;
 }
 
-.card-value.gain {
+.summary-cards .card-value.gain {
   color: #10b981;
 }
 
-.card-value.loss {
+.summary-cards .card-value.loss {
   color: #ef4444;
 }
 
-.card-meta {
+.summary-cards .card-meta {
   font-size: 13px;
   color: #666;
 }
 
-.card-meta.gain {
+.summary-cards .card-meta.gain {
   color: #10b981;
 }
 
-.card-meta.loss {
+.summary-cards .card-meta.loss {
   color: #ef4444;
 }
 
