@@ -43,3 +43,18 @@ def test_agg_status_sums_across_connections():
 def test_agg_status_empty_before_start():
     d = FE.MultiFeed(lambda t: None).status.as_dict()
     assert d["connections"] == 0 and d["connected"] is False and d["subscribed"] == 0
+
+
+def test_feed_routes_to_the_recorder_prep_rebuilds():
+    """Regression: job_prep replaces self.recorder every morning. The feed must dispatch to
+    the CURRENT recorder, not the one bound at construction — else every tick is dropped."""
+    from app.services.orb.engine import Engine
+    from app.services.orb.recorder import Recorder
+
+    eng = Engine()
+    eng.recorder = Recorder()                 # what job_prep does at 08:45
+    eng.recorder.register("TESTSYM", "999")
+    eng.feed.on_tick(FE.Tick(token="999", ltp=10000, cum_volume=100, avg_price=None,
+                             prev_close=None, exchange_ts_ms=0))
+    assert eng.recorder.by_token["999"].ticks == 1     # reached the rebuilt recorder
+    assert eng.recorder.dropped_unknown_token == 0

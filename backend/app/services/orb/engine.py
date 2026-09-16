@@ -40,7 +40,10 @@ class Engine:
                                  if strategy_enabled is None else strategy_enabled)
         self.day = today_ist().isoformat()
         self.recorder = Recorder()
-        self.feed = MultiFeed(self.recorder.on_tick)
+        # Dispatch to the CURRENT recorder: job_prep rebuilds self.recorder every morning, so
+        # binding the feed to a specific recorder instance would orphan every tick to a stale
+        # object (empty token map → all ticks dropped). The closure re-reads self.recorder.
+        self.feed = MultiFeed(lambda tick: self.recorder.on_tick(tick))
         self.baselines: dict[str, signals.Baseline] = {}
         self.shortlist: list[str] = []
         self.book = signals.PaperBook(self.day, cfg)
