@@ -1,9 +1,23 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { api, setToken, setAuth } from '../api.js'
 
-// Basic password gate (Google auth planned later). Super Admin logs in with a password;
-// a manager logs in with email + password and is scoped to their own clients only.
+// Theme toggle mirrors the rest of the app: same 'theme' key + data-theme attribute, so the
+// choice made on the login screen carries into the dashboard.
+function useTheme() {
+  const [theme, setTheme] = useState(() => { try { return localStorage.getItem('theme') } catch { return null } })
+  useEffect(() => {
+    if (theme) document.documentElement.setAttribute('data-theme', theme)
+    else document.documentElement.removeAttribute('data-theme')
+    try { theme ? localStorage.setItem('theme', theme) : localStorage.removeItem('theme') } catch { /* ignore */ }
+  }, [theme])
+  const isDark = theme ? theme === 'dark' : window.matchMedia?.('(prefers-color-scheme: dark)').matches
+  return [isDark, () => setTheme(isDark ? 'light' : 'dark')]
+}
+
+// Basic password gate (Google auth planned later). Manager (email + password, scoped to their
+// own clients) is the default; Super Admin logs in with a password.
 export default function Login({ onLoggedIn }) {
+  const [isDark, toggleTheme] = useTheme()
   const [role, setRole] = useState('manager')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -27,7 +41,14 @@ export default function Login({ onLoggedIn }) {
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'var(--bg, #f4f4f2)' }}>
+    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'var(--bg, #f4f4f2)', position: 'relative' }}>
+      <button type="button" onClick={toggleTheme}
+        title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+        style={{
+          position: 'absolute', top: 16, right: 16, width: 38, height: 38, borderRadius: 10,
+          border: '1px solid var(--border, #ddd)', background: 'var(--surface, #fff)',
+          color: 'var(--ink, #222)', cursor: 'pointer', fontSize: 16,
+        }}>{isDark ? '☀' : '☾'}</button>
       <form onSubmit={submit} style={{
         width: 360, maxWidth: '92vw', background: 'var(--surface, #fff)', padding: 28,
         borderRadius: 14, boxShadow: '0 8px 40px rgba(0,0,0,.08)', display: 'flex', flexDirection: 'column', gap: 14,
