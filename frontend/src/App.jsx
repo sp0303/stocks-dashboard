@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, lazy, Suspense } from 'react'
 import { api } from './api.js'
 import { Loading, ErrorBox, useAsync } from './components/common.jsx'
-import SuperAdmin from './components/SuperAdmin.jsx'
-import ManagerView from './components/ManagerView.jsx'
-import ClientDashboard from './components/ClientDashboard.jsx'
-import Watchlist from './components/Watchlist.jsx'
-import SectorResearch from './components/SectorResearch.jsx'
+// Persona screens load on demand so the initial dashboard chunk stays small.
+const SuperAdmin = lazy(() => import('./components/SuperAdmin.jsx'))
+const ManagerView = lazy(() => import('./components/ManagerView.jsx'))
+const ClientDashboard = lazy(() => import('./components/ClientDashboard.jsx'))
+const Watchlist = lazy(() => import('./components/Watchlist.jsx'))
+const SectorResearch = lazy(() => import('./components/SectorResearch.jsx'))
 
 // Small pill showing the live market-data source. Angel One when connected, otherwise
 // the app is running on the Yahoo fallback. Polls every 60s.
@@ -90,7 +91,11 @@ export default function App() {
   const [managerPage, setManagerPage] = useState('clients') // 'clients' | 'watchlist' | 'rnd' — manager persona only
   const [restoring, setRestoring] = useState(!!(initial.managerId || initial.clientId))
 
-  const managers = useAsync(() => api.managers(), [])
+  // Managers list is refetched on demand (mgReload) — a manager created in the Super Admin
+  // tab must appear in the Manager tab's dropdown, else selection/add-client breaks.
+  const [mgReload, setMgReload] = useState(0)
+  const refreshManagers = () => setMgReload((n) => n + 1)
+  const managers = useAsync(() => api.managers(), [mgReload])
 
   // Restore manager/client selection from the URL once managers have loaded. Runs once.
   const restoredRef = React.useRef(false)
@@ -125,6 +130,7 @@ export default function App() {
     setPersona(p)
     setClient(null)
     setManagerPage('clients')
+    if (p === 'manager') refreshManagers()   // pick up managers just created in Super Admin
   }
 
   return (
@@ -156,22 +162,24 @@ export default function App() {
         />
 
         {managers.loading || restoring ? <Loading what="workspace" /> : managers.error ? <ErrorBox error={managers.error} /> : (
-          client ? (
-            <ClientDashboard client={client} />
-          ) : persona === 'admin' ? (
-            <SuperAdmin onOpenManager={(m) => { setManager(m); setPersona('manager') }} />
-          ) : managerPage === 'watchlist' && manager ? (
-            <Watchlist scope="managers" id={manager.id} title="Manager watchlist" />
-          ) : managerPage === 'rnd' && manager ? (
-            <SectorResearch />
-          ) : (
-            <ManagerView
-              managers={managers.data}
-              manager={manager}
-              setManager={setManager}
-              onOpenClient={(c) => setClient(c)}
-            />
-          )
+          <Suspense fallback={<Loading what="page" />}>
+            {client ? (
+              <ClientDashboard client={client} />
+            ) : persona === 'admin' ? (
+              <SuperAdmin onOpenManager={(m) => { setManager(m); setPersona('manager'); refreshManagers() }} />
+            ) : managerPage === 'watchlist' && manager ? (
+              <Watchlist scope="managers" id={manager.id} title="Manager watchlist" />
+            ) : managerPage === 'rnd' && manager ? (
+              <SectorResearch />
+            ) : (
+              <ManagerView
+                managers={managers.data}
+                manager={manager}
+                setManager={setManager}
+                onOpenClient={(c) => setClient(c)}
+              />
+            )}
+          </Suspense>
         )}
       </div>
     </div>

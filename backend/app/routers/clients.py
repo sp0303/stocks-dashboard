@@ -38,9 +38,11 @@ async def manager_metrics(manager_id: str):
     if not await store.get_manager(manager_id):
         raise HTTPException(404, "manager not found")
     clients = await store.list_clients(manager_id)
-    payload = []
-    for c in clients:
-        payload.append({"id": c["id"], "name": c["name"], "trades": await store.list_trades(c["id"])})
+    # Read every client's trades concurrently — a serial await-per-client loop made this
+    # O(clients) round-trips and was a big part of the manager page's load time.
+    trades_lists = await asyncio.gather(*(store.list_trades(c["id"]) for c in clients))
+    payload = [{"id": c["id"], "name": c["name"], "trades": t}
+               for c, t in zip(clients, trades_lists)]
     return {"data": analytics.manager_metrics(payload)}
 
 
