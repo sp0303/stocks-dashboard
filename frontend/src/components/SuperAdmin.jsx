@@ -16,9 +16,11 @@ export default function SuperAdmin({ onOpenManager }) {
 
   async function addManager(e) {
     e.preventDefault()
-    if (!form.name) return
+    if (!form.name || !form.email) return
+    setErr(null)
     setBusy(true)
     try { await api.createManager(form); setForm({ name: '', firm: '', email: '' }); bump() }
+    catch (e2) { setErr(e2.message) }        // e.g. "email is required" / "email already exists"
     finally { setBusy(false) }
   }
 
@@ -28,7 +30,9 @@ export default function SuperAdmin({ onOpenManager }) {
     setErr(null)
   }
   async function saveEdit(id) {
-    await api.updateManager(id, editForm); setEditing(null); bump()
+    setErr(null)
+    try { await api.updateManager(id, editForm); setEditing(null); bump() }
+    catch (e) { setErr(e.message) }
   }
   async function toggleStatus(m) {
     await api.updateManager(m.id, { status: m.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' }); bump()
@@ -103,12 +107,16 @@ export default function SuperAdmin({ onOpenManager }) {
       )}
 
       <h2>Add a manager</h2>
+      {err && <div className="err" style={{ margin: '8px 0', color: 'var(--down)' }}>⚠ {err}</div>}
       <form className="row" onSubmit={addManager}>
         <input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         <input placeholder="Firm" value={form.firm} onChange={(e) => setForm({ ...form, firm: e.target.value })} />
-        <input placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-        <button className="btn" disabled={busy || !form.name}>Add manager</button>
+        <input type="email" placeholder="Email (required — they log in with this)" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+        <button className="btn" disabled={busy || !form.name || !form.email}>Add manager</button>
       </form>
+      <p className="sub" style={{ margin: '8px 0 0', fontSize: 12 }}>
+        New managers log in with their email and the default password <b>changeme123</b> — share it and ask them to change it.
+      </p>
     </div>
   )
 }
