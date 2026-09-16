@@ -2,8 +2,30 @@
 // For GitHub Pages, set VITE_API_BASE to the deployed backend (Cloudflare tunnel) URL.
 const BASE = import.meta.env.VITE_API_BASE || ''
 
+// ── auth token (basic password gate) ──────────────────────────────
+const TOKEN_KEY = 'pi_auth_token'
+export function getToken() { try { return localStorage.getItem(TOKEN_KEY) } catch { return null } }
+export function setToken(t) {
+  try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ }
+}
+export function getAuth() {
+  try { return JSON.parse(localStorage.getItem('pi_auth') || 'null') } catch { return null }
+}
+export function setAuth(a) {
+  try { a ? localStorage.setItem('pi_auth', JSON.stringify(a)) : localStorage.removeItem('pi_auth') } catch { /* ignore */ }
+}
+export function logout() { setToken(null); setAuth(null); window.location.reload() }
+
 async function req(path, opts = {}) {
-  const res = await fetch(`${BASE}${path}`, opts)
+  const token = getToken()
+  const headers = { ...(opts.headers || {}) }
+  if (token) headers.Authorization = `Bearer ${token}`
+  const res = await fetch(`${BASE}${path}`, { ...opts, headers })
+  if (res.status === 401 && !path.startsWith('/api/auth/login')) {
+    setToken(null); setAuth(null)
+    window.location.reload()                       // session gone → back to the login gate
+    throw new Error('Session expired — please log in again')
+  }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
     try { msg = (await res.json()).detail || msg } catch { /* ignore */ }
@@ -12,6 +34,9 @@ async function req(path, opts = {}) {
   return res.json()
 }
 
+const _postJson = (path, body) =>
+  req(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+
 // Base path for a watchlist's entries: a specific named list when wlId is given
 // (managers), otherwise the owner's single default list (clients / legacy).
 const _wlEntries = (scope, id, wlId) =>
@@ -19,6 +44,11 @@ const _wlEntries = (scope, id, wlId) =>
 
 export const api = {
   health: () => req('/api/health'),
+
+  // ── auth ──
+  login: (body) => _postJson('/api/auth/login', body).then((r) => r.data),
+  me: () => req('/api/auth/me').then((r) => r.data),
+  changePassword: (body) => _postJson('/api/auth/change-password', body).then((r) => r.data),
 
   // ── ORB engine (read-only; the engine is paper-only and places no orders) ──
   orbStatus: () => req('/api/orb/status').then((r) => r.data),

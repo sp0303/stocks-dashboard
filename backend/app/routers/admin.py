@@ -3,12 +3,15 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.config import settings
 from app.models.schemas import ManagerCreate, ManagerUpdate
+from app.services import auth
 from app.store import get_store
 
-router = APIRouter(prefix="/api/admin", tags=["admin"])
+# Every Super Admin route requires the admin session.
+router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(auth.require_admin)])
 
 
 def _now() -> str:
@@ -22,16 +25,25 @@ async def list_managers():
     for m in managers:
         clients = await store.list_clients(m["id"])
         m["client_count"] = len(clients)
+        m.pop("password_hash", None)          # never expose the hash to the client
     return {"data": managers}
 
 
 @router.post("/managers")
 async def create_manager(body: ManagerCreate):
     store = get_store()
+    if not (body.email or "").strip():
+        raise HTTPException(400, "email is required — managers log in with email + password")
+    email = body.email.strip().lower()
+    if any((m.get("email") or "").strip().lower() == email for m in await store.list_managers()):
+        raise HTTPException(409, "a manager with this email already exists")
     doc = {
         **body.model_dump(),
+        "email": body.email.strip(),
         "status": "ACTIVE",
         "created_at": _now(),
+        # Default password (settings.default_manager_password); the manager changes it later.
+        "password_hash": auth.hash_password(settings.default_manager_password),
     }
     return {"data": await store.create_manager(doc)}
 

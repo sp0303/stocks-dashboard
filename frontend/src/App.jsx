@@ -1,6 +1,7 @@
 import React, { useEffect, useState, lazy, Suspense } from 'react'
-import { api } from './api.js'
+import { api, getToken, getAuth, logout } from './api.js'
 import { Loading, ErrorBox, useAsync } from './components/common.jsx'
+import Login from './components/Login.jsx'
 // Persona screens load on demand so the initial dashboard chunk stays small.
 const SuperAdmin = lazy(() => import('./components/SuperAdmin.jsx'))
 const ManagerView = lazy(() => import('./components/ManagerView.jsx'))
@@ -83,10 +84,18 @@ function ThemeToggle() {
   )
 }
 
+// Login gate: no valid token → show Login; otherwise the dashboard, scoped to the role.
 export default function App() {
+  const [auth, setAuthState] = useState(() => (getToken() ? getAuth() : null))
+  if (!auth) return <Login onLoggedIn={setAuthState} />
+  return <Dashboard auth={auth} />
+}
+
+function Dashboard({ auth }) {
+  const isAdmin = auth.role === 'admin'
   const initial = readUrlState()
-  const [persona, setPersona] = useState(initial.persona) // 'admin' | 'manager'
-  const [manager, setManager] = useState(null)             // selected manager (manager persona)
+  const [persona, setPersona] = useState(isAdmin ? initial.persona : 'manager') // managers are locked to 'manager'
+  const [manager, setManager] = useState(isAdmin ? null : (auth.manager || null))
   const [client, setClient] = useState(null)                // selected client (drilled in)
   const [managerPage, setManagerPage] = useState('clients') // 'clients' | 'watchlist' | 'rnd' — manager persona only
   const [restoring, setRestoring] = useState(!!(initial.managerId || initial.clientId))
@@ -95,7 +104,10 @@ export default function App() {
   // tab must appear in the Manager tab's dropdown, else selection/add-client breaks.
   const [mgReload, setMgReload] = useState(0)
   const refreshManagers = () => setMgReload((n) => n + 1)
-  const managers = useAsync(() => api.managers(), [mgReload])
+  // Admin lists all managers; a manager only ever sees (and is scoped to) themselves.
+  const managers = useAsync(
+    () => (isAdmin ? api.managers() : Promise.resolve([auth.manager].filter(Boolean))),
+    [mgReload])
 
   // Restore manager/client selection from the URL once managers have loaded. Runs once.
   const restoredRef = React.useRef(false)
@@ -137,10 +149,12 @@ export default function App() {
     <div>
       <div className="topbar">
         <div className="brand">Portfolio<span>·</span>Intelligence</div>
-        <div className="persona">
-          <button className={persona === 'admin' ? 'on' : ''} onClick={() => switchPersona('admin')}>Super Admin</button>
-          <button className={persona === 'manager' ? 'on' : ''} onClick={() => switchPersona('manager')}>Manager</button>
-        </div>
+        {isAdmin && (
+          <div className="persona">
+            <button className={persona === 'admin' ? 'on' : ''} onClick={() => switchPersona('admin')}>Super Admin</button>
+            <button className={persona === 'manager' ? 'on' : ''} onClick={() => switchPersona('manager')}>Manager</button>
+          </div>
+        )}
         {persona === 'manager' && manager && !client && (
           <div className="persona">
             <button className={managerPage === 'clients' ? 'on' : ''} onClick={() => setManagerPage('clients')}>Overview</button>
@@ -149,6 +163,13 @@ export default function App() {
           </div>
         )}
         <BrokerPill />
+        <span style={{ fontSize: 12, color: 'var(--muted)', marginLeft: 8 }}>
+          {isAdmin ? 'Super Admin' : (auth.manager?.name || 'Manager')}
+        </span>
+        <button onClick={logout} title="Sign out" style={{
+          background: 'none', border: '1px solid var(--border, #ddd)', borderRadius: 8,
+          padding: '4px 10px', cursor: 'pointer', fontSize: 12, marginLeft: 8,
+        }}>Sign out</button>
         <ThemeToggle />
       </div>
 
@@ -176,6 +197,7 @@ export default function App() {
                 managers={managers.data}
                 manager={manager}
                 setManager={setManager}
+                canSwitch={isAdmin}
                 onOpenClient={(c) => setClient(c)}
               />
             )}

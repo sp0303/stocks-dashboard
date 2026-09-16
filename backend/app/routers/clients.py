@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 import asyncio
 
@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.models.schemas import ClientCreate, ClientUpdate
 from app.routers.portfolio import _actions_for, cached_performance_series
-from app.services import analytics, ingestion
+from app.services import analytics, auth, ingestion
 from app.services.engine import compute_round_trips
 from app.store import get_store
 
@@ -23,7 +23,7 @@ def _now() -> str:
 
 
 @router.get("/managers/{manager_id}/clients")
-async def list_clients(manager_id: str):
+async def list_clients(manager_id: str, _: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     clients = await store.list_clients(manager_id)
     for c in clients:
@@ -32,7 +32,7 @@ async def list_clients(manager_id: str):
 
 
 @router.get("/managers/{manager_id}/metrics")
-async def manager_metrics(manager_id: str):
+async def manager_metrics(manager_id: str, _: auth.Identity = Depends(auth.require_manager_scope)):
     """Book-wide metrics aggregated across all of a manager's clients."""
     store = get_store()
     if not await store.get_manager(manager_id):
@@ -47,7 +47,7 @@ async def manager_metrics(manager_id: str):
 
 
 @router.get("/managers/{manager_id}/performance")
-async def manager_performance(manager_id: str):
+async def manager_performance(manager_id: str, _: auth.Identity = Depends(auth.require_manager_scope)):
     """Manager-level performance, in two parts:
     - "book": the whole book's value summed across every client's own real,
       mark-to-market performance curve, compared against the same 4 benchmark indices
@@ -89,7 +89,7 @@ async def manager_performance(manager_id: str):
 
 
 @router.get("/managers/{manager_id}/holdings")
-async def manager_holdings(manager_id: str, client_ids: str = None):
+async def manager_holdings(manager_id: str, client_ids: str = None, _: auth.Identity = Depends(auth.require_manager_scope)):
     """Aggregated holdings across selected clients for a manager.
     Returns holdings grouped by symbol with client names, quantities, and holding %.
 
@@ -201,7 +201,7 @@ async def manager_holdings(manager_id: str, client_ids: str = None):
 
 
 @router.get("/managers/{manager_id}/trade-log")
-async def manager_trade_log(manager_id: str):
+async def manager_trade_log(manager_id: str, _: auth.Identity = Depends(auth.require_manager_scope)):
     """Flat closed-trade log across every client — one row per FIFO round trip, with the
     client as the 'account' and the buy-trade note as 'reason for buying'. This is the
     spreadsheet-style journal view: Account | Stock | Qty | Buy | Sell | Days | PNL |
@@ -264,17 +264,20 @@ async def manager_trade_log(manager_id: str):
 
 
 @router.get("/clients")
-async def list_all_clients():
+async def list_all_clients(ident: auth.Identity = Depends(auth.get_identity)):
     store = get_store()
-    clients = await store.list_clients()
+    # Admin sees the whole book; a manager sees only their own clients.
+    clients = await store.list_clients(None if ident.role == "admin" else ident.manager_id)
     for c in clients:
         c["trade_count"] = await store.count_trades(c["id"])
     return {"data": clients}
 
 
 @router.post("/clients")
-async def create_client(body: ClientCreate):
+async def create_client(body: ClientCreate, ident: auth.Identity = Depends(auth.get_identity)):
     store = get_store()
+    if ident.role != "admin" and ident.manager_id != body.portfolio_manager_id:
+        raise HTTPException(403, "you can only add clients under your own account")
     if not await store.get_manager(body.portfolio_manager_id):
         raise HTTPException(404, "portfolio manager not found")
     doc = {
@@ -287,7 +290,7 @@ async def create_client(body: ClientCreate):
 
 
 @router.get("/clients/{client_id}")
-async def get_client(client_id: str):
+async def get_client(client_id: str, _: auth.Identity = Depends(auth.require_client_access)):
     store = get_store()
     c = await store.get_client(client_id)
     if not c:
@@ -297,7 +300,7 @@ async def get_client(client_id: str):
 
 
 @router.patch("/clients/{client_id}")
-async def update_client(client_id: str, body: ClientUpdate):
+async def update_client(client_id: str, body: ClientUpdate, _: auth.Identity = Depends(auth.require_client_access)):
     store = get_store()
     patch = {k: v for k, v in body.model_dump().items() if v is not None}
     updated = await store.update_client(client_id, patch)
@@ -307,7 +310,7 @@ async def update_client(client_id: str, body: ClientUpdate):
 
 
 @router.delete("/clients/{client_id}")
-async def delete_client(client_id: str):
+async def delete_client(client_id: str, _: auth.Identity = Depends(auth.require_client_access)):
     store = get_store()
     if not await store.get_client(client_id):
         raise HTTPException(404, "client not found")
@@ -317,7 +320,7 @@ async def delete_client(client_id: str):
 
 
 @router.post("/clients/{client_id}/tradebooks")
-async def upload_tradebook(client_id: str, file: UploadFile = File(...)):
+async def upload_tradebook(client_id: str, file: UploadFile = File(...), _: auth.Identity = Depends(auth.require_client_access)):
     store = get_store()
     client = await store.get_client(client_id)
     if not client:
@@ -375,6 +378,6 @@ async def upload_tradebook(client_id: str, file: UploadFile = File(...)):
 
 
 @router.get("/clients/{client_id}/tradebooks")
-async def list_uploads(client_id: str):
+async def list_uploads(client_id: str, _: auth.Identity = Depends(auth.require_client_access)):
     store = get_store()
     return {"data": await store.list_uploads(client_id)}

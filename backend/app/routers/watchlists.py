@@ -10,7 +10,7 @@ import asyncio
 from datetime import date
 from enum import Enum
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.config import settings
@@ -19,6 +19,8 @@ from app.services.mailer import MailNotConfigured, send_email
 from app.services.market_data import get_history, get_quote_details
 from app.services.securities import classify
 from app.store import get_store
+
+from app.services import auth
 
 router = APIRouter(prefix="/api", tags=["watchlists"])
 
@@ -168,7 +170,7 @@ def _priced(entries: list[dict]) -> list[dict]:
 
 # ── Manager watchlist ──────────────────────────────────────────────
 @router.get("/managers/{manager_id}/watchlist")
-async def get_manager_watchlist(manager_id: str):
+async def get_manager_watchlist(manager_id: str, _ws: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     if not await store.get_manager(manager_id):
         raise HTTPException(404, "manager not found")
@@ -177,7 +179,7 @@ async def get_manager_watchlist(manager_id: str):
 
 
 @router.post("/managers/{manager_id}/watchlist")
-async def add_manager_symbol(manager_id: str, body: WatchlistAdd):
+async def add_manager_symbol(manager_id: str, body: WatchlistAdd, _ws: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     if not await store.get_manager(manager_id):
         raise HTTPException(404, "manager not found")
@@ -193,7 +195,7 @@ async def add_manager_symbol(manager_id: str, body: WatchlistAdd):
 
 
 @router.patch("/managers/{manager_id}/watchlist/{symbol}")
-async def update_manager_symbol(manager_id: str, symbol: str, body: WatchlistEntryUpdate):
+async def update_manager_symbol(manager_id: str, symbol: str, body: WatchlistEntryUpdate, _ws: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     if not await store.get_manager(manager_id):
         raise HTTPException(404, "manager not found")
@@ -204,7 +206,7 @@ async def update_manager_symbol(manager_id: str, symbol: str, body: WatchlistEnt
 
 
 @router.delete("/managers/{manager_id}/watchlist/{symbol}")
-async def remove_manager_symbol(manager_id: str, symbol: str):
+async def remove_manager_symbol(manager_id: str, symbol: str, _ws: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     entries = await store.remove_watchlist_symbol("MANAGER", manager_id, symbol)
     return {"data": _priced(entries)}
@@ -214,7 +216,7 @@ async def remove_manager_symbol(manager_id: str, symbol: str):
 # A manager can keep up to MAX_WATCHLISTS named lists. The endpoints above operate on
 # the owner's default (first) list; these let the UI manage and address a specific one.
 @router.get("/managers/{manager_id}/watchlists")
-async def list_manager_watchlists(manager_id: str):
+async def list_manager_watchlists(manager_id: str, _ws: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     if not await store.get_manager(manager_id):
         raise HTTPException(404, "manager not found")
@@ -222,7 +224,7 @@ async def list_manager_watchlists(manager_id: str):
 
 
 @router.post("/managers/{manager_id}/watchlists")
-async def create_manager_watchlist(manager_id: str, body: WatchlistMeta):
+async def create_manager_watchlist(manager_id: str, body: WatchlistMeta, _ws: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     if not await store.get_manager(manager_id):
         raise HTTPException(404, "manager not found")
@@ -234,7 +236,7 @@ async def create_manager_watchlist(manager_id: str, body: WatchlistMeta):
 
 
 @router.patch("/managers/{manager_id}/watchlists/{watchlist_id}")
-async def rename_manager_watchlist(manager_id: str, watchlist_id: str, body: WatchlistMeta):
+async def rename_manager_watchlist(manager_id: str, watchlist_id: str, body: WatchlistMeta, _ws: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     name = body.name.strip()
     if not name:
@@ -246,7 +248,7 @@ async def rename_manager_watchlist(manager_id: str, watchlist_id: str, body: Wat
 
 
 @router.delete("/managers/{manager_id}/watchlists/{watchlist_id}")
-async def delete_manager_watchlist(manager_id: str, watchlist_id: str):
+async def delete_manager_watchlist(manager_id: str, watchlist_id: str, _ws: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     if len(await store.list_watchlists("MANAGER", manager_id)) <= 1:
         raise HTTPException(400, "Cannot delete the last watchlist")
@@ -256,7 +258,7 @@ async def delete_manager_watchlist(manager_id: str, watchlist_id: str):
 
 
 @router.get("/managers/{manager_id}/watchlists/{watchlist_id}/entries")
-async def get_manager_watchlist_entries(manager_id: str, watchlist_id: str):
+async def get_manager_watchlist_entries(manager_id: str, watchlist_id: str, _ws: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     if not await store.get_manager(manager_id):
         raise HTTPException(404, "manager not found")
@@ -268,7 +270,7 @@ async def get_manager_watchlist_entries(manager_id: str, watchlist_id: str):
 
 
 @router.post("/managers/{manager_id}/watchlists/{watchlist_id}/entries")
-async def add_manager_watchlist_symbol(manager_id: str, watchlist_id: str, body: WatchlistAdd):
+async def add_manager_watchlist_symbol(manager_id: str, watchlist_id: str, body: WatchlistAdd, _ws: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     if not await store.get_manager(manager_id):
         raise HTTPException(404, "manager not found")
@@ -284,7 +286,7 @@ async def add_manager_watchlist_symbol(manager_id: str, watchlist_id: str, body:
 
 
 @router.patch("/managers/{manager_id}/watchlists/{watchlist_id}/entries/{symbol}")
-async def update_manager_watchlist_symbol(manager_id: str, watchlist_id: str, symbol: str, body: WatchlistEntryUpdate):
+async def update_manager_watchlist_symbol(manager_id: str, watchlist_id: str, symbol: str, body: WatchlistEntryUpdate, _ws: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     if not await store.get_manager(manager_id):
         raise HTTPException(404, "manager not found")
@@ -295,7 +297,7 @@ async def update_manager_watchlist_symbol(manager_id: str, watchlist_id: str, sy
 
 
 @router.delete("/managers/{manager_id}/watchlists/{watchlist_id}/entries/{symbol}")
-async def remove_manager_watchlist_symbol(manager_id: str, watchlist_id: str, symbol: str):
+async def remove_manager_watchlist_symbol(manager_id: str, watchlist_id: str, symbol: str, _ws: auth.Identity = Depends(auth.require_manager_scope)):
     store = get_store()
     entries = await store.remove_watchlist_symbol("MANAGER", manager_id, symbol, watchlist_id=watchlist_id)
     return {"data": _priced(entries)}

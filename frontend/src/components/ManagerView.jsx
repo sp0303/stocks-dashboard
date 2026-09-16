@@ -5,7 +5,7 @@ import ManagerMetrics from './ManagerMetrics.jsx'
 import ManagerHoldings from './ManagerHoldings.jsx'
 import ManagerTradeLog from './ManagerTradeLog.jsx'
 
-export default function ManagerView({ managers, manager, setManager, onOpenClient }) {
+export default function ManagerView({ managers, manager, setManager, onOpenClient, canSwitch = true }) {
   const [reload, setReload] = useState(0)
   const bump = () => setReload((n) => n + 1)
   const cs = useAsync(() => (manager ? api.clients(manager.id) : Promise.resolve([])), [manager, reload])
@@ -42,12 +42,14 @@ export default function ManagerView({ managers, manager, setManager, onOpenClien
           <h1>{manager ? manager.name : 'Manager workspace'}</h1>
           <p className="sub">{manager ? `${manager.firm || ''} — your clients` : 'Choose a manager to view their clients.'}</p>
         </div>
-        <div>
-          <label>Acting as manager</label>
-          <select value={manager?.id || ''} onChange={(e) => setManager(managers.find((m) => m.id === e.target.value))}>
-            {managers.map((m) => <option key={m.id} value={m.id}>{m.name} — {m.firm}</option>)}
-          </select>
-        </div>
+        {canSwitch && (
+          <div>
+            <label>Acting as manager</label>
+            <select value={manager?.id || ''} onChange={(e) => setManager(managers.find((m) => m.id === e.target.value))}>
+              {managers.map((m) => <option key={m.id} value={m.id}>{m.name} — {m.firm}</option>)}
+            </select>
+          </div>
+        )}
       </div>
 
       {manager && (

@@ -76,6 +76,16 @@ class Settings(BaseSettings):
     # strategy still trades its scoped universe. Off by default; enable in .env on the box.
     orb_record_all_nse: bool = False
 
+    # ── basic auth (Phase 1 password gate; Google auth planned later) ──
+    # Super Admin password — set ADMIN_PASSWORD in .env; default is a placeholder to change.
+    admin_password: str = "admin"
+    # Default password stamped on every manager (login: email + password). Managers should
+    # change it. Set DEFAULT_MANAGER_PASSWORD in .env to override.
+    default_manager_password: str = "changeme123"
+    # HMAC secret that signs session tokens. MUST be set in .env in production; the default
+    # is insecure and only for local dev.
+    auth_secret: str = "dev-insecure-change-me"
+
     # CORS — the React dev server / GitHub Pages origin
     cors_origins: str = "*"
 

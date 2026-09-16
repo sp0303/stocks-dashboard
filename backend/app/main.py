@@ -12,8 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import (
-    admin, broker, clients, corporate_actions, market, orb, portfolio, screener, sectors,
-    watchlists,
+    admin, auth, broker, clients, corporate_actions, market, orb, portfolio, screener,
+    sectors, watchlists,
 )
 from app.seed import seed_if_empty
 from app.services.alerts import run_alert_loop
@@ -21,11 +21,32 @@ from app.services.orb.engine import start_engine, stop_engine
 from app.store import init_store
 
 
+async def _backfill_manager_passwords(store) -> None:
+    """Stamp the default password on any manager that has none yet, so existing managers can
+    log in (with their email + the default password) once auth is enabled. Idempotent."""
+    try:
+        from app.services import auth
+        managers = await store.list_managers()
+        stamped = 0
+        for m in managers:
+            if not m.get("password_hash"):
+                await store.update_manager(
+                    m["id"], {"password_hash": auth.hash_password(settings.default_manager_password)})
+                stamped += 1
+        if stamped:
+            import logging
+            logging.getLogger("main").info("auth: stamped default password on %d manager(s)", stamped)
+    except Exception:
+        import logging
+        logging.getLogger("main").exception("manager password backfill failed (non-fatal)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store = await init_store()
     # await seed_if_empty(store)  # Disabled: don't overwrite production data
     app.state.store_backend = "mongo" if settings.use_mongo else "json-file"
+    await _backfill_manager_passwords(store)
     alert_task = asyncio.create_task(run_alert_loop(store))
     # Pre-warm the screener snapshot in the background so the first user doesn't pay the
     # cold fetch. Runs off the request path; never blocks startup or serving.
@@ -67,6 +88,7 @@ app.include_router(screener.router)
 app.include_router(broker.router)
 app.include_router(corporate_actions.router)
 app.include_router(orb.router)
+app.include_router(auth.router)
 
 
 @app.get("/api/health")

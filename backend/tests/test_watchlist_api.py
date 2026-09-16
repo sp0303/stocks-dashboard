@@ -21,18 +21,29 @@ def client(tmp_path, monkeypatch):
     # isolate persistence (use JsonStore, no remote Mongo)
     monkeypatch.setattr(settings, "mongodb_url", "")
     monkeypatch.setattr(settings, "data_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "admin_password", "testpass")
     # no network: the entry endpoints resolve prices/history through these
     import app.routers.watchlists as wl
     monkeypatch.setattr(wl, "get_quote_details", lambda symbols, exchanges=None: {})
     monkeypatch.setattr(wl, "get_history", lambda *a, **k: {"points": []})
     from app.main import app
     with TestClient(app) as c:
+        # Auth is enabled now — drive the API as the Super Admin (admin token satisfies the
+        # admin, manager-scope and client-access guards for these router tests).
+        r = c.post("/api/auth/login", json={"role": "admin", "password": "testpass"})
+        assert r.status_code == 200, r.text
+        c.headers.update({"Authorization": f"Bearer {r.json()['data']['token']}"})
         yield c
 
 
+_mgr_seq = 0
+
+
 def _new_manager(client) -> str:
-    r = client.post("/api/admin/managers", json={"name": "Alice"})
-    assert r.status_code == 200
+    global _mgr_seq
+    _mgr_seq += 1
+    r = client.post("/api/admin/managers", json={"name": f"Alice{_mgr_seq}", "email": f"alice{_mgr_seq}@t.co"})
+    assert r.status_code == 200, r.text
     return r.json()["data"]["id"]
 
 

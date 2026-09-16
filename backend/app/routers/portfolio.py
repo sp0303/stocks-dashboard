@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from starlette.concurrency import run_in_threadpool
 
 import asyncio
@@ -17,9 +17,12 @@ from app.services import analytics
 from app.services.engine import compute_positions, split_intraday
 from app.services.llm import fallback_narrate, narrate
 from app.services.market_data import get_dividend_history
+from app.services.auth import require_client_access
 from app.store import get_store
 
-router = APIRouter(prefix="/api/clients", tags=["portfolio"])
+# Every route here is /{client_id}/… — one gate ensures a manager only touches their clients.
+router = APIRouter(prefix="/api/clients", tags=["portfolio"],
+                   dependencies=[Depends(require_client_access)])
 
 BENCHMARK_SYMBOL = "^NSEI"
 
