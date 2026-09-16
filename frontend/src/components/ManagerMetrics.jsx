@@ -12,7 +12,45 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
   const d = m.data
   const t = d.totals
   if (!t.clients || t.unique_stocks === 0) {
-    return <div className="empty">No client trades yet — upload tradebooks to see book-wide metrics.</div>
+    // No trades yet across the book — but still list the clients so a brand-new client can be
+    // OPENED to upload its first tradebook. (Previously this early-return hid the client list,
+    // leaving no way to reach a client's upload screen until it already had trades.)
+    return (
+      <div>
+        <div className="empty">No client trades yet — click a client below to open them and upload their tradebook.</div>
+        {d.by_client?.length > 0 && (
+          <div className="panel tbl-scroll" style={{ marginTop: 12 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Client</th>
+                  <th className="mono" style={{ fontSize: 11 }}>Code</th>
+                  <th className="r">Trades</th>
+                  <th style={{ textAlign: 'center' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.by_client.map((c) => (
+                  <tr key={c.id}>
+                    <td style={{ fontWeight: 600, cursor: 'pointer', color: 'var(--accent-ink)' }} onClick={() => onOpenClient && onOpenClient(c)}>{c.name}</td>
+                    <td className="mono">{c.client_code || '—'}</td>
+                    <td className="r tnum">{c.trade_count || 0}</td>
+                    <td style={{ textAlign: 'center', display: 'flex', gap: 12, justifyContent: 'center', alignItems: 'center' }}>
+                      {onEditClient && (
+                        <button onClick={() => onEditClient(c)} style={{ background: 'none', border: 'none', color: 'var(--ink)', cursor: 'pointer', fontSize: 18, padding: 4, lineHeight: 1 }} title="Edit">✎</button>
+                      )}
+                      {onDeleteClient && (
+                        <button onClick={() => onDeleteClient(c)} style={{ background: 'none', border: 'none', color: 'var(--down)', cursor: 'pointer', fontSize: 18, padding: 4, lineHeight: 1 }} title="Delete">🗑</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    )
   }
   return (
     <div>
