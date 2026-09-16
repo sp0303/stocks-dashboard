@@ -1,9 +1,11 @@
 name: Deploy to VPS
 
+# DISABLED 2026-09-16: the app was migrated to the OCI box (140.245.194.172),
+# served by nginx + pm2. This workflow deployed to the OLD box and was failing
+# (also has a `node-size` typo). Kept for reference; runs only if triggered
+# manually from the Actions tab, never on push.
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
   deploy:
