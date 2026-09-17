@@ -238,12 +238,15 @@ export default function MyBoard({ managerId }) {
           >
             {watchingItems.map((item) => {
               if (item._fromWatchlist) {
-                // Watchlist entry: read-only, draggable to Exit
+                // Watchlist entry: draggable to Exit, with editable notes
                 return (
                   <WatchlistCard
                     key={`wl-${item.symbol}`}
                     item={item}
                     onDragStart={(e) => onDragStartWatching(e, item)}
+                    onAddNotes={(symbol, notes) => run(async () => {
+                      await api.boardAdd(managerId, { symbol, why: notes, source: 'watchlist' })
+                    })}
                   />
                 )
               }
@@ -275,7 +278,9 @@ export default function MyBoard({ managerId }) {
             {holdings.loading ? <Loading what="holdings" /> : holdings.error ? <ErrorBox error={holdings.error} /> : (
               <>
                 {holdingRows.map((row) => (
-                  <HoldingCard key={row.symbol} row={row} onDragStart={(e) => onDragStartHolding(e, row)} />
+                  <HoldingCard key={row.symbol} row={row} onDragStart={(e) => onDragStartHolding(e, row)} onAddNotes={(symbol, notes) => run(async () => {
+                    await api.boardAdd(managerId, { symbol, why: notes, source: 'holding' })
+                  })} />
                 ))}
                 {holdingRows.length === 0 && (
                   <div className="myboard-empty">{displaySelectedClients.length === 0 ? 'Select at least one client' : 'No open positions'}</div>
@@ -348,9 +353,17 @@ function AddCard({ onSave, onCancel }) {
   )
 }
 
-// A real, live position — read-only except for dragging it to Exit.
-function HoldingCard({ row, onDragStart }) {
+// A real, live position — draggable to Exit, with editable notes.
+function HoldingCard({ row, onDragStart, onAddNotes }) {
   const [showClients, setShowClients] = useState(false)
+  const [editingNotes, setEditingNotes] = useState(false)
+  const [notes, setNotes] = useState(row.notes || '')
+
+  function saveNotes() {
+    if (onAddNotes) onAddNotes(row.symbol, notes)
+    setEditingNotes(false)
+  }
+
   return (
     <div className="myboard-card myboard-card-holding" draggable onDragStart={onDragStart}>
       <div className="myboard-card-top">
@@ -367,6 +380,17 @@ function HoldingCard({ row, onDragStart }) {
           {row.clients?.map((c, i) => <div key={i}>{c.name} — {c.qty}</div>)}
         </div>
       )}
+      {editingNotes ? (
+        <div style={{ marginTop: '8px', display: 'flex', gap: '4px' }}>
+          <textarea placeholder="Your notes" value={notes} onChange={(e) => setNotes(e.target.value)} style={{ flex: 1, fontSize: '12px', padding: '4px', borderRadius: '4px', border: '1px solid var(--line)', background: 'var(--surface-2)' }} rows={2} />
+          <button onClick={saveNotes} style={{ padding: '4px 8px', fontSize: '12px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>✓</button>
+        </div>
+      ) : (
+        <button onClick={() => setEditingNotes(true)} style={{ marginTop: '8px', fontSize: '11px', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--line)', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer', width: '100%' }}>
+          {notes ? '✏ Edit notes' : '+ Add notes'}
+        </button>
+      )}
+      {notes && !editingNotes && <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px', fontStyle: 'italic' }}>{notes}</div>}
       <div className="myboard-drag-hint">drag to Exit to plan a sell</div>
     </div>
   )
@@ -446,8 +470,16 @@ function PlanCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove, footer }
   )
 }
 
-// Watchlist entry: read-only card showing stock from a watchlist, draggable to Exit.
-function WatchlistCard({ item, onDragStart }) {
+// Watchlist entry: card from a watchlist, draggable to Exit, with editable notes.
+function WatchlistCard({ item, onDragStart, onAddNotes }) {
+  const [editingNotes, setEditingNotes] = useState(false)
+  const [notes, setNotes] = useState(item.notes || '')
+
+  function saveNotes() {
+    if (onAddNotes) onAddNotes(item.symbol, notes)
+    setEditingNotes(false)
+  }
+
   return (
     <div className="myboard-card" draggable onDragStart={onDragStart}>
       <div className="myboard-card-top">
@@ -456,6 +488,17 @@ function WatchlistCard({ item, onDragStart }) {
       </div>
       <div className="myboard-plan">{inr(item.added_price || '—')} on {item.added_date}</div>
       {item.why && <div className="myboard-why" style={{ marginTop: '6px', cursor: 'default', marginBottom: 0, padding: 0, border: 'none', background: 'transparent', fontSize: '12px', color: 'var(--muted)' }}>{item.why}</div>}
+      {editingNotes ? (
+        <div style={{ marginTop: '8px', display: 'flex', gap: '4px' }}>
+          <textarea placeholder="Your notes" value={notes} onChange={(e) => setNotes(e.target.value)} style={{ flex: 1, fontSize: '12px', padding: '4px', borderRadius: '4px', border: '1px solid var(--line)', background: 'var(--surface-2)' }} rows={2} />
+          <button onClick={saveNotes} style={{ padding: '4px 8px', fontSize: '12px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>✓</button>
+        </div>
+      ) : (
+        <button onClick={() => setEditingNotes(true)} style={{ marginTop: '8px', fontSize: '11px', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--line)', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer' }}>
+          {notes ? '✏ Edit notes' : '+ Add notes'}
+        </button>
+      )}
+      {notes && !editingNotes && <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px', fontStyle: 'italic' }}>{notes}</div>}
       <div className="myboard-drag-hint">from watchlist • drag to Exit to plan a sale</div>
     </div>
   )

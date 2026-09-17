@@ -53,7 +53,7 @@ function readUrlState() {
     persona: p.get('persona') === 'manager' ? 'manager' : 'admin',
     managerId: p.get('managerId') || null,
     clientId: p.get('clientId') || null,
-    page: MANAGER_PAGES.includes(page) ? page : 'clients',
+    page: MANAGER_PAGES.includes(page) ? page : 'board',
   }
 }
 
