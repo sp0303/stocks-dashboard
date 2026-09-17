@@ -99,7 +99,33 @@ export default function MyBoard({ managerId }) {
   }))
   const watchingItems = [...manualWatchingItems, ...watchlistWatchingItems]
   const exitItems = (board.data || []).filter((i) => i.status === 'exit').sort((a, b) => (a.order || 0) - (b.order || 0))
-  const holdingRows = holdings.data?.holdings || []
+
+  // Holding cards are real tradebook data with no backend order field, so we keep a
+  // per-manager custom ordering (list of symbols) in localStorage and sort by it.
+  const holdingOrderKey = `myboard-holding-order-${managerId}`
+  const [holdingOrder, setHoldingOrder] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(holdingOrderKey)) || [] } catch { return [] }
+  })
+  const rawHoldings = holdings.data?.holdings || []
+  const holdingRows = [...rawHoldings].sort((a, b) => {
+    const ia = holdingOrder.indexOf(a.symbol)
+    const ib = holdingOrder.indexOf(b.symbol)
+    if (ia === -1 && ib === -1) return 0
+    if (ia === -1) return 1
+    if (ib === -1) return -1
+    return ia - ib
+  })
+
+  function moveHolding(symbol, dir) {
+    // Build a full symbol list in current display order, then swap with the neighbour.
+    const order = holdingRows.map((r) => r.symbol)
+    const i = order.indexOf(symbol)
+    const j = dir === 'up' ? i - 1 : i + 1
+    if (i === -1 || j < 0 || j >= order.length) return
+    ;[order[i], order[j]] = [order[j], order[i]]
+    setHoldingOrder(order)
+    try { localStorage.setItem(holdingOrderKey, JSON.stringify(order)) } catch { /* private mode */ }
+  }
 
   async function swapOrder(item1Id, item2Id) {
     const allItems = board.data || []
@@ -299,8 +325,11 @@ export default function MyBoard({ managerId }) {
           <div className="myboard-col-body">
             {holdings.loading ? <Loading what="holdings" /> : holdings.error ? <ErrorBox error={holdings.error} /> : (
               <>
-                {holdingRows.map((row) => (
-                  <HoldingCard key={row.symbol} row={row} onDragStart={(e) => onDragStartHolding(e, row)} onAddNotes={(symbol, notes) => run(async () => {
+                {holdingRows.map((row, idx) => (
+                  <HoldingCard key={row.symbol} row={row}
+                    canUp={idx > 0} canDown={idx < holdingRows.length - 1}
+                    onMoveUp={() => moveHolding(row.symbol, 'up')} onMoveDown={() => moveHolding(row.symbol, 'down')}
+                    onDragStart={(e) => onDragStartHolding(e, row)} onAddNotes={(symbol, notes) => run(async () => {
                     await api.boardAdd(managerId, { symbol, why: notes, source: 'holding' })
                   })} />
                 ))}
@@ -376,7 +405,7 @@ function AddCard({ onSave, onCancel }) {
 }
 
 // A real, live position — draggable to Exit, with editable notes.
-function HoldingCard({ row, onDragStart, onAddNotes }) {
+function HoldingCard({ row, onDragStart, onAddNotes, canUp, canDown, onMoveUp, onMoveDown }) {
   const [showClients, setShowClients] = useState(false)
   const [editingNotes, setEditingNotes] = useState(false)
   const [notes, setNotes] = useState(row.notes || '')
@@ -390,6 +419,10 @@ function HoldingCard({ row, onDragStart, onAddNotes }) {
     <div className="myboard-card myboard-card-holding" draggable onDragStart={onDragStart}>
       <div className="myboard-card-top">
         <span className="myboard-symbol">{row.symbol}</span>
+        <span className="myboard-reorder">
+          <button title="Move up" disabled={!canUp} onClick={onMoveUp}>▲</button>
+          <button title="Move down" disabled={!canDown} onClick={onMoveDown}>▼</button>
+        </span>
         <span className="myboard-price">{row.ltp != null ? inr(row.ltp) : '—'}</span>
       </div>
       <div className={`myboard-pnl ${row.pnl >= 0 ? 'up' : 'down'}`}>{pctPlain(row.pnl_pct)} · {inrFull(row.pnl)}</div>

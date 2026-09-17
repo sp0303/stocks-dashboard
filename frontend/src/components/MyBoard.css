@@ -188,6 +188,25 @@
   color: var(--muted);
 }
 
+.myboard-reorder {
+  display: inline-flex;
+  flex-direction: column;
+  line-height: 1;
+}
+
+.myboard-reorder button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 9px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1.1;
+}
+
+.myboard-reorder button:hover:not(:disabled) { color: var(--accent) }
+.myboard-reorder button:disabled { opacity: 0.25; cursor: default }
+
 .myboard-remove {
   background: none;
   border: none;
