@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { api, inr, inrFull, pct, pctPlain } from '../api.js'
 import { Loading, ErrorBox, useAsync } from './common.jsx'
 import './MyBoard.css'
@@ -54,7 +54,68 @@ export default function MyBoard({ managerId }) {
   const [adding, setAdding] = useState(false)
   const [dragOverExit, setDragOverExit] = useState(false)
   const [dragOverWatching, setDragOverWatching] = useState(false)
-  const [dragSourceId, setDragSourceId] = useState(null) // for reordering within column
+  const [drag, setDrag] = useState(null) // { key, column } — active within-column reorder
+
+  // Notion-style ordering + colors persist per-manager in localStorage. Cards come from
+  // mixed sources (real holdings, watchlist entries, manual board items) that don't all
+  // have a backend id, so a symbol/id key list per column is the simplest uniform store.
+  const orderKey = (col) => `myboard-order-${col}-${managerId}`
+  const colorsKey = `myboard-colors-${managerId}`
+  const [orders, setOrders] = useState({})   // { watching: [key,…], holding: […], exit: […] }
+  const [colors, setColors] = useState({})   // { cardKey: cssColor }
+
+  useEffect(() => {
+    const load = (k) => { try { return JSON.parse(localStorage.getItem(k)) } catch { return null } }
+    setOrders({
+      watching: load(orderKey('watching')) || [],
+      holding: load(orderKey('holding')) || [],
+      exit: load(orderKey('exit')) || [],
+    })
+    setColors(load(colorsKey) || {})
+  }, [managerId])
+
+  function keyOf(col, item) {
+    if (col === 'holding') return `h:${item.symbol}`
+    if (item._fromWatchlist) return `wl:${item.symbol}`
+    return `b:${item.id}`
+  }
+
+  function applyOrder(list, col) {
+    const ord = orders[col] || []
+    return [...list].sort((a, b) => {
+      const ia = ord.indexOf(keyOf(col, a)), ib = ord.indexOf(keyOf(col, b))
+      if (ia === -1 && ib === -1) return 0
+      if (ia === -1) return 1
+      if (ib === -1) return -1
+      return ia - ib
+    })
+  }
+
+  // Full insert reorder (not a swap): pull the dragged key out and splice it in
+  // before/after the drop target, then persist the whole column order.
+  function reorder(col, displayList, dragKey, targetKey, before) {
+    if (dragKey === targetKey) return
+    const keys = displayList.map((x) => keyOf(col, x))
+    const from = keys.indexOf(dragKey)
+    if (from === -1) return
+    keys.splice(from, 1)
+    let to = keys.indexOf(targetKey)
+    if (to === -1) to = keys.length
+    else if (!before) to += 1
+    keys.splice(to, 0, dragKey)
+    setOrders((o) => ({ ...o, [col]: keys }))
+    setDrag(null)
+    try { localStorage.setItem(orderKey(col), JSON.stringify(keys)) } catch { /* private mode */ }
+  }
+
+  function setColor(cardKey, color) {
+    setColors((c) => {
+      const next = { ...c }
+      if (color) next[cardKey] = color; else delete next[cardKey]
+      try { localStorage.setItem(colorsKey, JSON.stringify(next)) } catch { /* private mode */ }
+      return next
+    })
+  }
 
   function refresh() { setReload((n) => n + 1) }
   async function run(fn) {
@@ -89,61 +150,23 @@ export default function MyBoard({ managerId }) {
     })
   }
 
-  // Combine manual board ideas + watchlist entries for Watching lane.
-  // Manual ideas have an id, watchlist entries don't, so tag them with wlSource.
-  const manualWatchingItems = (board.data || []).filter((i) => i.status === 'watching').sort((a, b) => (a.order || 0) - (b.order || 0))
+  // Combine manual board ideas + watchlist entries for Watching lane, then apply the
+  // saved custom order. Manual ideas have an id, watchlist entries don't.
+  const manualWatchingItems = (board.data || []).filter((i) => i.status === 'watching')
   const watchlistWatchingItems = (watchlistEntries.data || []).map((e) => ({
     ...e,
     _fromWatchlist: true,
     _wlSource: true,
   }))
-  const watchingItems = [...manualWatchingItems, ...watchlistWatchingItems]
-  const exitItems = (board.data || []).filter((i) => i.status === 'exit').sort((a, b) => (a.order || 0) - (b.order || 0))
+  const watchingItems = applyOrder([...manualWatchingItems, ...watchlistWatchingItems], 'watching')
+  const exitItems = applyOrder((board.data || []).filter((i) => i.status === 'exit'), 'exit')
+  const holdingRows = applyOrder(holdings.data?.holdings || [], 'holding')
 
-  // Holding cards are real tradebook data with no backend order field, so we keep a
-  // per-manager custom ordering (list of symbols) in localStorage and sort by it.
-  const holdingOrderKey = `myboard-holding-order-${managerId}`
-  const [holdingOrder, setHoldingOrder] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(holdingOrderKey)) || [] } catch { return [] }
-  })
-  const rawHoldings = holdings.data?.holdings || []
-  const holdingRows = [...rawHoldings].sort((a, b) => {
-    const ia = holdingOrder.indexOf(a.symbol)
-    const ib = holdingOrder.indexOf(b.symbol)
-    if (ia === -1 && ib === -1) return 0
-    if (ia === -1) return 1
-    if (ib === -1) return -1
-    return ia - ib
-  })
-
-  function moveHolding(symbol, dir) {
-    // Build a full symbol list in current display order, then swap with the neighbour.
-    const order = holdingRows.map((r) => r.symbol)
-    const i = order.indexOf(symbol)
-    const j = dir === 'up' ? i - 1 : i + 1
-    if (i === -1 || j < 0 || j >= order.length) return
-    ;[order[i], order[j]] = [order[j], order[i]]
-    setHoldingOrder(order)
-    try { localStorage.setItem(holdingOrderKey, JSON.stringify(order)) } catch { /* private mode */ }
-  }
-
-  async function swapOrder(item1Id, item2Id) {
-    const allItems = board.data || []
-    const item1 = allItems.find(i => i.id === item1Id)
-    const item2 = allItems.find(i => i.id === item2Id)
-    if (!item1 || !item2) return
-    const temp = item1.order ?? 0
-    await Promise.all([
-      api.boardUpdate(managerId, item1Id, { entryPrice: item1.entry_price, exitPrice: item1.exit_price, order: item2.order ?? 0 }),
-      api.boardUpdate(managerId, item2Id, { entryPrice: item2.entry_price, exitPrice: item2.exit_price, order: temp }),
-    ])
-    refresh()
-  }
-
-  // Drag payload is JSON: {origin: 'watching'|'watching-wl'|'exit'|'holding', ...}
+  // Drag payload is JSON: {origin: 'watching'|'watching-wl'|'exit'|'holding', ...}.
+  // `drag` state carries the within-column reorder key so slots know what is moving.
   function onDragStartWatching(e, item) {
     const isWatchlist = item._fromWatchlist
-    setDragSourceId(!isWatchlist ? item.id : null) // for reordering (only manual items)
+    setDrag({ key: keyOf('watching', item), column: 'watching' })
     e.dataTransfer.setData('application/json', JSON.stringify({
       origin: isWatchlist ? 'watching-wl' : 'watching',
       itemId: item.id,
@@ -155,10 +178,11 @@ export default function MyBoard({ managerId }) {
     e.dataTransfer.effectAllowed = 'move'
   }
   function onDragStartExit(e, item) {
-    setDragSourceId(item.id) // for reordering
+    setDrag({ key: keyOf('exit', item), column: 'exit' })
     e.dataTransfer.setData('application/json', JSON.stringify({ origin: 'exit', itemId: item.id }))
   }
   function onDragStartHolding(e, row) {
+    setDrag({ key: keyOf('holding', row), column: 'holding' })
     e.dataTransfer.setData('application/json', JSON.stringify({
       origin: 'holding', symbol: row.symbol, buyAvg: row.buy_avg,
     }))
@@ -171,7 +195,7 @@ export default function MyBoard({ managerId }) {
   async function onDropExit(e) {
     e.preventDefault()
     setDragOverExit(false)
-    setDragSourceId(null)
+    setDrag(null)
     const p = readPayload(e)
     if (!p) return
     if (p.origin === 'watching') {
@@ -209,7 +233,7 @@ export default function MyBoard({ managerId }) {
       // Move from Exit back to Watching
       await run(() => api.boardUpdate(managerId, p.itemId, { status: 'watching' }))
     }
-    setDragSourceId(null)
+    setDrag(null)
   }
 
   if (board.loading || clients.loading || watchlists.loading) return <Loading what="board" />
@@ -285,31 +309,36 @@ export default function MyBoard({ managerId }) {
             onDrop={onDropWatching}
           >
             {watchingItems.map((item) => {
+              const k = keyOf('watching', item)
+              const slot = { column: 'watching', itemKey: k, drag,
+                onReorder: (from, to, before) => reorder('watching', watchingItems, from, to, before) }
               if (item._fromWatchlist) {
-                // Watchlist entry: draggable to Exit, with editable notes
                 return (
-                  <WatchlistCard
-                    key={`wl-${item.symbol}`}
-                    item={item}
-                    onDragStart={(e) => onDragStartWatching(e, item)}
-                    onAddNotes={(symbol, notes) => run(async () => {
-                      await api.boardAdd(managerId, { symbol, why: notes, source: 'watchlist' })
-                    })}
-                  />
+                  <ReorderSlot key={`wl-${item.symbol}`} {...slot}>
+                    <WatchlistCard
+                      item={item}
+                      color={colors[k]} onColor={(c) => setColor(k, c)}
+                      onDragStart={(e) => onDragStartWatching(e, item)}
+                      onAddNotes={(symbol, notes) => run(async () => {
+                        await api.boardAdd(managerId, { symbol, why: notes, source: 'watchlist' })
+                      })}
+                    />
+                  </ReorderSlot>
                 )
               }
-              // Manual board item: editable, removable
               return (
-                <WatchingCard
-                  key={item.id}
-                  item={item}
-                  onDragStart={(e) => onDragStartWatching(e, item)}
-                  onEditWhy={(why) => run(() => api.boardUpdate(managerId, item.id, { why }))}
-                  onEditPlan={(patch) => run(() => api.boardUpdate(managerId, item.id, patch))}
-                  onRemove={() => {
-                    if (window.confirm(`Remove ${item.symbol} from Watching?`)) run(() => api.boardRemove(managerId, item.id))
-                  }}
-                />
+                <ReorderSlot key={item.id} {...slot}>
+                  <WatchingCard
+                    item={item}
+                    color={colors[k]} onColor={(c) => setColor(k, c)}
+                    onDragStart={(e) => onDragStartWatching(e, item)}
+                    onEditWhy={(why) => run(() => api.boardUpdate(managerId, item.id, { why }))}
+                    onEditPlan={(patch) => run(() => api.boardUpdate(managerId, item.id, patch))}
+                    onRemove={() => {
+                      if (window.confirm(`Remove ${item.symbol} from Watching?`)) run(() => api.boardRemove(managerId, item.id))
+                    }}
+                  />
+                </ReorderSlot>
               )
             })}
             {watchingItems.length === 0 && <div className="myboard-empty">Nothing here</div>}
@@ -325,14 +354,19 @@ export default function MyBoard({ managerId }) {
           <div className="myboard-col-body">
             {holdings.loading ? <Loading what="holdings" /> : holdings.error ? <ErrorBox error={holdings.error} /> : (
               <>
-                {holdingRows.map((row, idx) => (
-                  <HoldingCard key={row.symbol} row={row}
-                    canUp={idx > 0} canDown={idx < holdingRows.length - 1}
-                    onMoveUp={() => moveHolding(row.symbol, 'up')} onMoveDown={() => moveHolding(row.symbol, 'down')}
-                    onDragStart={(e) => onDragStartHolding(e, row)} onAddNotes={(symbol, notes) => run(async () => {
-                    await api.boardAdd(managerId, { symbol, why: notes, source: 'holding' })
-                  })} />
-                ))}
+                {holdingRows.map((row) => {
+                  const k = keyOf('holding', row)
+                  return (
+                    <ReorderSlot key={row.symbol} column="holding" itemKey={k} drag={drag}
+                      onReorder={(from, to, before) => reorder('holding', holdingRows, from, to, before)}>
+                      <HoldingCard row={row}
+                        color={colors[k]} onColor={(c) => setColor(k, c)}
+                        onDragStart={(e) => onDragStartHolding(e, row)} onAddNotes={(symbol, notes) => run(async () => {
+                        await api.boardAdd(managerId, { symbol, why: notes, source: 'holding' })
+                      })} />
+                    </ReorderSlot>
+                  )
+                })}
                 {holdingRows.length === 0 && (
                   <div className="myboard-empty">{displaySelectedClients.length === 0 ? 'Select at least one client' : 'No open positions'}</div>
                 )}
@@ -353,22 +387,101 @@ export default function MyBoard({ managerId }) {
             onDragLeave={() => setDragOverExit(false)}
             onDrop={onDropExit}
           >
-            {exitItems.map((item) => (
-              <ExitCard
-                key={item.id}
-                item={item}
-                onDragStart={(e) => onDragStartExit(e, item)}
-                onEditWhy={(why) => run(() => api.boardUpdate(managerId, item.id, { why }))}
-                onEditPlan={(patch) => run(() => api.boardUpdate(managerId, item.id, patch))}
-                onRemove={() => {
-                  if (window.confirm(`Remove ${item.symbol} from Exit?`)) run(() => api.boardRemove(managerId, item.id))
-                }}
-              />
-            ))}
+            {exitItems.map((item) => {
+              const k = keyOf('exit', item)
+              return (
+                <ReorderSlot key={item.id} column="exit" itemKey={k} drag={drag}
+                  onReorder={(from, to, before) => reorder('exit', exitItems, from, to, before)}>
+                  <ExitCard
+                    item={item}
+                    color={colors[k]} onColor={(c) => setColor(k, c)}
+                    onDragStart={(e) => onDragStartExit(e, item)}
+                    onEditWhy={(why) => run(() => api.boardUpdate(managerId, item.id, { why }))}
+                    onEditPlan={(patch) => run(() => api.boardUpdate(managerId, item.id, patch))}
+                    onRemove={() => {
+                      if (window.confirm(`Remove ${item.symbol} from Exit?`)) run(() => api.boardRemove(managerId, item.id))
+                    }}
+                  />
+                </ReorderSlot>
+              )
+            })}
             {exitItems.length === 0 && <div className="myboard-empty">Drop a card here</div>}
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// Notion-style palette. Translucent so the tint reads in both light and dark themes.
+const CARD_COLORS = [
+  { name: 'None', value: null },
+  { name: 'Red', value: 'rgba(224,49,49,0.16)' },
+  { name: 'Orange', value: 'rgba(232,126,4,0.18)' },
+  { name: 'Yellow', value: 'rgba(240,200,8,0.20)' },
+  { name: 'Green', value: 'rgba(15,122,90,0.18)' },
+  { name: 'Blue', value: 'rgba(34,113,177,0.18)' },
+  { name: 'Purple', value: 'rgba(140,90,200,0.18)' },
+  { name: 'Gray', value: 'rgba(120,120,120,0.18)' },
+]
+
+function ColorPicker({ color, onColor }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <span className="myboard-colorpick">
+      <button
+        className="myboard-colorpick-btn"
+        title="Card colour"
+        style={{ background: color || 'transparent' }}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o) }}
+      >{color ? '' : '○'}</button>
+      {open && (
+        <span className="myboard-colorpick-pop" onClick={(e) => e.stopPropagation()}>
+          {CARD_COLORS.map((c) => (
+            <button
+              key={c.name}
+              title={c.name}
+              className={`myboard-swatch${!c.value ? ' myboard-swatch-none' : ''}`}
+              style={c.value ? { background: c.value } : undefined}
+              onClick={() => { onColor(c.value); setOpen(false) }}
+            >{c.value ? '' : '⦸'}</button>
+          ))}
+        </span>
+      )}
+    </span>
+  )
+}
+
+// Wraps a draggable card and turns a drop from the same column into a full insert
+// reorder (before/after the target depending on where the pointer lands). Drops from a
+// different column are ignored here so they bubble to the column body (status change).
+function ReorderSlot({ column, itemKey, drag, onReorder, children }) {
+  const [pos, setPos] = useState(null) // 'before' | 'after' | null
+  const active = drag && drag.column === column && drag.key !== itemKey
+
+  function onDragOver(e) {
+    if (!active) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const r = e.currentTarget.getBoundingClientRect()
+    setPos(e.clientY < r.top + r.height / 2 ? 'before' : 'after')
+  }
+  function onDrop(e) {
+    if (!active) return
+    e.preventDefault()
+    e.stopPropagation()
+    onReorder(drag.key, itemKey, pos !== 'after')
+    setPos(null)
+  }
+
+  return (
+    <div
+      className={`myboard-slot${pos ? ' ins-' + pos : ''}`}
+      onDragOver={onDragOver}
+      onDragLeave={() => setPos(null)}
+      onDrop={onDrop}
+    >
+      {children}
     </div>
   )
 }
@@ -405,7 +518,7 @@ function AddCard({ onSave, onCancel }) {
 }
 
 // A real, live position — draggable to Exit, with editable notes.
-function HoldingCard({ row, onDragStart, onAddNotes, canUp, canDown, onMoveUp, onMoveDown }) {
+function HoldingCard({ row, color, onColor, onDragStart, onAddNotes }) {
   const [showClients, setShowClients] = useState(false)
   const [editingNotes, setEditingNotes] = useState(false)
   const [notes, setNotes] = useState(row.notes || '')
@@ -416,14 +529,11 @@ function HoldingCard({ row, onDragStart, onAddNotes, canUp, canDown, onMoveUp, o
   }
 
   return (
-    <div className="myboard-card myboard-card-holding" draggable onDragStart={onDragStart}>
+    <div className="myboard-card myboard-card-holding" draggable onDragStart={onDragStart} style={color ? { background: color } : undefined}>
       <div className="myboard-card-top">
         <span className="myboard-symbol">{row.symbol}</span>
-        <span className="myboard-reorder">
-          <button title="Move up" disabled={!canUp} onClick={onMoveUp}>▲</button>
-          <button title="Move down" disabled={!canDown} onClick={onMoveDown}>▼</button>
-        </span>
         <span className="myboard-price">{row.ltp != null ? inr(row.ltp) : '—'}</span>
+        <ColorPicker color={color} onColor={onColor} />
       </div>
       <div className={`myboard-pnl ${row.pnl >= 0 ? 'up' : 'down'}`}>{pctPlain(row.pnl_pct)} · {inrFull(row.pnl)}</div>
       <div className="myboard-plan">{row.qty} shares · avg {row.buy_avg != null ? inr(row.buy_avg) : '—'}</div>
@@ -451,20 +561,20 @@ function HoldingCard({ row, onDragStart, onAddNotes, canUp, canDown, onMoveUp, o
   )
 }
 
-function WatchingCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove }) {
+function WatchingCard({ item, color, onColor, onDragStart, onEditWhy, onEditPlan, onRemove }) {
   return (
     <PlanCard
-      item={item} onDragStart={onDragStart} onEditWhy={onEditWhy} onEditPlan={onEditPlan} onRemove={onRemove}
-      onReorder={(sourceId) => sourceId !== item.id && run(() => swapOrder(sourceId, item.id))}
+      item={item} color={color} onColor={onColor}
+      onDragStart={onDragStart} onEditWhy={onEditWhy} onEditPlan={onEditPlan} onRemove={onRemove}
     />
   )
 }
 
-function ExitCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove }) {
+function ExitCard({ item, color, onColor, onDragStart, onEditWhy, onEditPlan, onRemove }) {
   return (
     <PlanCard
-      item={item} onDragStart={onDragStart} onEditWhy={onEditWhy} onEditPlan={onEditPlan} onRemove={onRemove}
-      onReorder={(sourceId) => sourceId !== item.id && run(() => swapOrder(sourceId, item.id))}
+      item={item} color={color} onColor={onColor}
+      onDragStart={onDragStart} onEditWhy={onEditWhy} onEditPlan={onEditPlan} onRemove={onRemove}
       footer={item.source === 'holding' && (
         <div className="myboard-actual">
           From a real holding{item.exited_price != null && <> · price when flagged {inr(item.exited_price)} on {item.exited_at}</>}
@@ -474,12 +584,11 @@ function ExitCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove }) {
   )
 }
 
-function PlanCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove, onReorder, footer }) {
+function PlanCard({ item, color, onColor, onDragStart, onEditWhy, onEditPlan, onRemove, footer }) {
   const [why, setWhy] = useState(item.why || '')
   const [editingPlan, setEditingPlan] = useState(false)
   const [entryPrice, setEntryPrice] = useState(item.entry_price ?? '')
   const [exitPrice, setExitPrice] = useState(item.exit_price ?? '')
-  const [dragOverReorder, setDragOverReorder] = useState(false)
   const pnl = pnlPct(item)
 
   function saveWhy() { if (why !== (item.why || '')) onEditWhy(why) }
@@ -491,27 +600,12 @@ function PlanCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove, onReorde
     setEditingPlan(false)
   }
 
-  function onDragOver(e) {
-    e.preventDefault()
-    setDragOverReorder(true)
-    e.dataTransfer.dropEffect = 'move'
-  }
-
-  function onDrop(e) {
-    e.preventDefault()
-    e.stopPropagation()
-    setDragOverReorder(false)
-    try {
-      const payload = JSON.parse(e.dataTransfer.getData('application/json'))
-      if (payload.itemId && onReorder) onReorder(payload.itemId)
-    } catch {}
-  }
-
   return (
-    <div className="myboard-card" draggable onDragStart={onDragStart} onDragOver={onDragOver} onDragLeave={() => setDragOverReorder(false)} onDrop={onDrop} style={dragOverReorder ? { opacity: 0.7, borderColor: 'var(--accent)' } : {}}>
+    <div className="myboard-card" draggable onDragStart={onDragStart} style={color ? { background: color } : undefined}>
       <div className="myboard-card-top">
         <span className="myboard-symbol">{item.symbol}</span>
         <span className="myboard-price">{item.price != null ? inr(item.price) : '—'}</span>
+        <ColorPicker color={color} onColor={onColor} />
         <button className="myboard-remove" title="Remove" onClick={onRemove}>×</button>
       </div>
 
@@ -545,7 +639,7 @@ function PlanCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove, onReorde
 }
 
 // Watchlist entry: card from a watchlist, draggable to Exit, with editable notes.
-function WatchlistCard({ item, onDragStart, onAddNotes }) {
+function WatchlistCard({ item, color, onColor, onDragStart, onAddNotes }) {
   const [editingNotes, setEditingNotes] = useState(false)
   const [notes, setNotes] = useState(item.notes || '')
 
@@ -555,10 +649,11 @@ function WatchlistCard({ item, onDragStart, onAddNotes }) {
   }
 
   return (
-    <div className="myboard-card" draggable onDragStart={onDragStart}>
+    <div className="myboard-card" draggable onDragStart={onDragStart} style={color ? { background: color } : undefined}>
       <div className="myboard-card-top">
         <span className="myboard-symbol">{item.symbol}</span>
         <span className="myboard-price">{item.price != null ? inr(item.price) : '—'}</span>
+        <ColorPicker color={color} onColor={onColor} />
       </div>
       <div className="myboard-plan">{inr(item.added_price || '—')} on {item.added_date}</div>
       {item.why && <div className="myboard-why" style={{ marginTop: '6px', cursor: 'default', marginBottom: 0, padding: 0, border: 'none', background: 'transparent', fontSize: '12px', color: 'var(--muted)' }}>{item.why}</div>}

@@ -188,24 +188,72 @@
   color: var(--muted);
 }
 
-.myboard-reorder {
-  display: inline-flex;
-  flex-direction: column;
-  line-height: 1;
+/* Reorder drop slot: a thin accent line marks where the card will land. */
+.myboard-slot { position: relative; }
+
+.myboard-slot.ins-before::before,
+.myboard-slot.ins-after::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  z-index: 2;
 }
 
-.myboard-reorder button {
-  background: none;
-  border: none;
-  color: var(--muted);
-  font-size: 9px;
+.myboard-slot.ins-before::before { top: -6px; }
+.myboard-slot.ins-after::after { bottom: -6px; }
+
+/* Per-card colour picker. */
+.myboard-colorpick { position: relative; display: inline-flex; }
+
+.myboard-colorpick-btn {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
   cursor: pointer;
-  padding: 0 2px;
-  line-height: 1.1;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--faint);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.myboard-reorder button:hover:not(:disabled) { color: var(--accent) }
-.myboard-reorder button:disabled { opacity: 0.25; cursor: default }
+.myboard-colorpick-pop {
+  position: absolute;
+  top: 20px;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  gap: 4px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: var(--shadow);
+}
+
+.myboard-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  cursor: pointer;
+  padding: 0;
+  font-size: 11px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.myboard-swatch-none { background: var(--surface-2); }
+.myboard-swatch:hover { transform: scale(1.12); }
 
 .myboard-remove {
   background: none;
