@@ -54,6 +54,7 @@ export default function MyBoard({ managerId }) {
   const [adding, setAdding] = useState(false)
   const [dragOverExit, setDragOverExit] = useState(false)
   const [dragOverWatching, setDragOverWatching] = useState(false)
+  const [dragSourceId, setDragSourceId] = useState(null) // for reordering within column
 
   function refresh() { setReload((n) => n + 1) }
   async function run(fn) {
@@ -89,20 +90,34 @@ export default function MyBoard({ managerId }) {
   }
 
   // Combine manual board ideas + watchlist entries for Watching lane.
-  // Manual ideas have an id, watchlist entries don't, so tag them with wlId source.
-  const manualWatchingItems = (board.data || []).filter((i) => i.status === 'watching')
+  // Manual ideas have an id, watchlist entries don't, so tag them with wlSource.
+  const manualWatchingItems = (board.data || []).filter((i) => i.status === 'watching').sort((a, b) => (a.order || 0) - (b.order || 0))
   const watchlistWatchingItems = (watchlistEntries.data || []).map((e) => ({
     ...e,
     _fromWatchlist: true,
     _wlSource: true,
   }))
   const watchingItems = [...manualWatchingItems, ...watchlistWatchingItems]
-  const exitItems = (board.data || []).filter((i) => i.status === 'exit')
+  const exitItems = (board.data || []).filter((i) => i.status === 'exit').sort((a, b) => (a.order || 0) - (b.order || 0))
   const holdingRows = holdings.data?.holdings || []
+
+  async function swapOrder(item1Id, item2Id) {
+    const allItems = board.data || []
+    const item1 = allItems.find(i => i.id === item1Id)
+    const item2 = allItems.find(i => i.id === item2Id)
+    if (!item1 || !item2) return
+    const temp = item1.order ?? 0
+    await Promise.all([
+      api.boardUpdate(managerId, item1Id, { entryPrice: item1.entry_price, exitPrice: item1.exit_price, order: item2.order ?? 0 }),
+      api.boardUpdate(managerId, item2Id, { entryPrice: item2.entry_price, exitPrice: item2.exit_price, order: temp }),
+    ])
+    refresh()
+  }
 
   // Drag payload is JSON: {origin: 'watching'|'watching-wl'|'exit'|'holding', ...}
   function onDragStartWatching(e, item) {
     const isWatchlist = item._fromWatchlist
+    setDragSourceId(!isWatchlist ? item.id : null) // for reordering (only manual items)
     e.dataTransfer.setData('application/json', JSON.stringify({
       origin: isWatchlist ? 'watching-wl' : 'watching',
       itemId: item.id,
@@ -111,8 +126,10 @@ export default function MyBoard({ managerId }) {
       exitPrice: item.exit_price,
       why: item.why,
     }))
+    e.dataTransfer.effectAllowed = 'move'
   }
   function onDragStartExit(e, item) {
+    setDragSourceId(item.id) // for reordering
     e.dataTransfer.setData('application/json', JSON.stringify({ origin: 'exit', itemId: item.id }))
   }
   function onDragStartHolding(e, row) {
@@ -128,6 +145,7 @@ export default function MyBoard({ managerId }) {
   async function onDropExit(e) {
     e.preventDefault()
     setDragOverExit(false)
+    setDragSourceId(null)
     const p = readPayload(e)
     if (!p) return
     if (p.origin === 'watching') {
@@ -160,8 +178,12 @@ export default function MyBoard({ managerId }) {
     e.preventDefault()
     setDragOverWatching(false)
     const p = readPayload(e)
-    if (!p || p.origin !== 'exit') return // a real holding never demotes to a typed idea
-    await run(() => api.boardUpdate(managerId, p.itemId, { status: 'watching' }))
+    if (!p) return
+    if (p.origin === 'exit') {
+      // Move from Exit back to Watching
+      await run(() => api.boardUpdate(managerId, p.itemId, { status: 'watching' }))
+    }
+    setDragSourceId(null)
   }
 
   if (board.loading || clients.loading || watchlists.loading) return <Loading what="board" />
@@ -400,6 +422,7 @@ function WatchingCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove }) {
   return (
     <PlanCard
       item={item} onDragStart={onDragStart} onEditWhy={onEditWhy} onEditPlan={onEditPlan} onRemove={onRemove}
+      onReorder={(sourceId) => sourceId !== item.id && run(() => swapOrder(sourceId, item.id))}
     />
   )
 }
@@ -408,6 +431,7 @@ function ExitCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove }) {
   return (
     <PlanCard
       item={item} onDragStart={onDragStart} onEditWhy={onEditWhy} onEditPlan={onEditPlan} onRemove={onRemove}
+      onReorder={(sourceId) => sourceId !== item.id && run(() => swapOrder(sourceId, item.id))}
       footer={item.source === 'holding' && (
         <div className="myboard-actual">
           From a real holding{item.exited_price != null && <> · price when flagged {inr(item.exited_price)} on {item.exited_at}</>}
@@ -417,11 +441,12 @@ function ExitCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove }) {
   )
 }
 
-function PlanCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove, footer }) {
+function PlanCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove, onReorder, footer }) {
   const [why, setWhy] = useState(item.why || '')
   const [editingPlan, setEditingPlan] = useState(false)
   const [entryPrice, setEntryPrice] = useState(item.entry_price ?? '')
   const [exitPrice, setExitPrice] = useState(item.exit_price ?? '')
+  const [dragOverReorder, setDragOverReorder] = useState(false)
   const pnl = pnlPct(item)
 
   function saveWhy() { if (why !== (item.why || '')) onEditWhy(why) }
@@ -433,8 +458,24 @@ function PlanCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove, footer }
     setEditingPlan(false)
   }
 
+  function onDragOver(e) {
+    e.preventDefault()
+    setDragOverReorder(true)
+    e.dataTransfer.dropEffect = 'move'
+  }
+
+  function onDrop(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOverReorder(false)
+    try {
+      const payload = JSON.parse(e.dataTransfer.getData('application/json'))
+      if (payload.itemId && onReorder) onReorder(payload.itemId)
+    } catch {}
+  }
+
   return (
-    <div className="myboard-card" draggable onDragStart={onDragStart}>
+    <div className="myboard-card" draggable onDragStart={onDragStart} onDragOver={onDragOver} onDragLeave={() => setDragOverReorder(false)} onDrop={onDrop} style={dragOverReorder ? { opacity: 0.7, borderColor: 'var(--accent)' } : {}}>
       <div className="myboard-card-top">
         <span className="myboard-symbol">{item.symbol}</span>
         <span className="myboard-price">{item.price != null ? inr(item.price) : '—'}</span>
