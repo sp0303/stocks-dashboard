@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import (
-    admin, auth, broker, clients, corporate_actions, market, orb, portfolio, screener,
+    admin, auth, board, broker, clients, corporate_actions, market, orb, portfolio, screener,
     sectors, watchlists,
 )
 from app.seed import seed_if_empty
@@ -82,6 +82,7 @@ app.include_router(admin.router)
 app.include_router(clients.router)
 app.include_router(portfolio.router)
 app.include_router(watchlists.router)
+app.include_router(board.router)
 app.include_router(market.router)
 app.include_router(sectors.router)
 app.include_router(screener.router)

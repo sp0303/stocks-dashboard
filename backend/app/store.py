@@ -144,6 +144,19 @@ class BaseStore:
     async def update_watchlist_entry(self, owner_type: str, owner_id: str, symbol: str, patch: dict, watchlist_id: str | None = None) -> list[dict]: ...
     async def remove_watchlist_symbol(self, owner_type: str, owner_id: str, symbol: str, watchlist_id: str | None = None) -> list[dict]: ...
 
+    # board (owner_type: "MANAGER"). A single Kanban per owner — planning cards that
+    # move Watching -> Holding -> Exit. entry_price/exit_price are the plan, set at
+    # add time and editable; entered_price/exited_price are the actual live price
+    # captured (by the router, not here) the moment a card crosses into that column,
+    # so a card carries "what I planned" and "what happened" side by side.
+    async def get_board_items(self, owner_type: str, owner_id: str) -> list[dict]: ...
+    async def add_board_item(
+        self, owner_type: str, owner_id: str, symbol: str,
+        entry_price: float | None = None, exit_price: float | None = None, why: str | None = None,
+    ) -> list[dict]: ...
+    async def update_board_item(self, owner_type: str, owner_id: str, item_id: str, patch: dict) -> list[dict] | None: ...
+    async def remove_board_item(self, owner_type: str, owner_id: str, item_id: str) -> list[dict]: ...
+
     # uploads + trades
     async def create_upload(self, doc: dict) -> dict: ...
     async def list_uploads(self, client_id: str) -> list[dict]: ...
@@ -230,7 +243,7 @@ class JsonStore(BaseStore):
         self._db = {
             "managers": [], "clients": [], "uploads": [], "trades": [], "watchlists": [],
             "tags": [], "trade_tags": [], "dividends": [], "benchmark_prices": {},
-            "corporate_actions": [], "classifications": {}, "thesis": {},
+            "corporate_actions": [], "classifications": {}, "thesis": {}, "boards": [],
         }
 
     async def init(self) -> None:
@@ -238,7 +251,7 @@ class JsonStore(BaseStore):
         if self.path.exists():
             self._db = json.loads(self.path.read_text() or "{}")
             for k in ("managers", "clients", "uploads", "trades", "watchlists", "tags",
-                      "trade_tags", "dividends", "corporate_actions"):
+                      "trade_tags", "dividends", "corporate_actions", "boards"):
                 self._db.setdefault(k, [])
             self._db.setdefault("benchmark_prices", {})
             self._db.setdefault("classifications", {})
@@ -282,6 +295,10 @@ class JsonStore(BaseStore):
             self._db["watchlists"] = [
                 w for w in self._db["watchlists"]
                 if not (w["owner_type"] == "MANAGER" and w["owner_id"] == mid)
+            ]
+            self._db["boards"] = [
+                b for b in self._db["boards"]
+                if not (b["owner_type"] == "MANAGER" and b["owner_id"] == mid)
             ]
             self._flush()
             return len(self._db["managers"]) < before
@@ -462,6 +479,52 @@ class JsonStore(BaseStore):
             l["entries"] = [e for e in l["entries"] if e["symbol"] != symbol]
             self._flush()
             return l["entries"]
+
+    def _board_doc(self, owner_type, owner_id):
+        doc = next((b for b in self._db["boards"]
+                    if b["owner_type"] == owner_type and b["owner_id"] == owner_id), None)
+        if doc is None:
+            doc = {"owner_type": owner_type, "owner_id": owner_id, "items": []}
+            self._db["boards"].append(doc)
+        return doc
+
+    async def get_board_items(self, owner_type, owner_id):
+        doc = next((b for b in self._db["boards"]
+                    if b["owner_type"] == owner_type and b["owner_id"] == owner_id), None)
+        return doc["items"] if doc else []
+
+    async def add_board_item(self, owner_type, owner_id, symbol, entry_price=None, exit_price=None, why=None):
+        from datetime import date
+
+        async with self._lock:
+            doc = self._board_doc(owner_type, owner_id)
+            doc["items"].append({
+                "id": _new_id(), "symbol": symbol, "entry_price": entry_price, "exit_price": exit_price,
+                "why": why or "", "status": "watching", "created_at": date.today().isoformat(),
+                "entered_at": None, "entered_price": None, "exited_at": None, "exited_price": None,
+            })
+            self._flush()
+            return doc["items"]
+
+    async def update_board_item(self, owner_type, owner_id, item_id, patch):
+        async with self._lock:
+            doc = self._board_doc(owner_type, owner_id)
+            item = next((i for i in doc["items"] if i["id"] == item_id), None)
+            if item is None:
+                return None
+            for k in ("entry_price", "exit_price", "why", "status",
+                      "entered_at", "entered_price", "exited_at", "exited_price"):
+                if k in patch:
+                    item[k] = patch[k]
+            self._flush()
+            return doc["items"]
+
+    async def remove_board_item(self, owner_type, owner_id, item_id):
+        async with self._lock:
+            doc = self._board_doc(owner_type, owner_id)
+            doc["items"] = [i for i in doc["items"] if i["id"] != item_id]
+            self._flush()
+            return doc["items"]
 
     async def create_upload(self, doc):
         doc["id"] = doc.get("id") or _new_id()
@@ -763,6 +826,9 @@ class MongoStore(BaseStore):
         await self.db.watchlists.create_index(
             [("owner_type", 1), ("owner_id", 1)], unique=True
         )
+        await self.db.boards.create_index(
+            [("owner_type", 1), ("owner_id", 1)], unique=True
+        )
         await self.db.trade_tags.create_index(
             [("client_id", 1), ("fingerprint", 1)], unique=True
         )
@@ -813,6 +879,7 @@ class MongoStore(BaseStore):
     async def delete_manager(self, mid):
         res = await self.db.managers.delete_one({"id": mid})
         await self.db.watchlists.delete_many({"owner_type": "MANAGER", "owner_id": mid})
+        await self.db.boards.delete_many({"owner_type": "MANAGER", "owner_id": mid})
         return res.deleted_count > 0
 
     async def list_clients(self, manager_id=None):
@@ -951,6 +1018,49 @@ class MongoStore(BaseStore):
         l["entries"] = [e for e in l["entries"] if e["symbol"] != symbol]
         await self._save_lists(owner_type, owner_id, lists)
         return l["entries"]
+
+    async def get_board_items(self, owner_type, owner_id):
+        doc = await self.db.boards.find_one({"owner_type": owner_type, "owner_id": owner_id})
+        return doc["items"] if doc else []
+
+    async def add_board_item(self, owner_type, owner_id, symbol, entry_price=None, exit_price=None, why=None):
+        from datetime import date
+
+        items = await self.get_board_items(owner_type, owner_id)
+        items.append({
+            "id": _new_id(), "symbol": symbol, "entry_price": entry_price, "exit_price": exit_price,
+            "why": why or "", "status": "watching", "created_at": date.today().isoformat(),
+            "entered_at": None, "entered_price": None, "exited_at": None, "exited_price": None,
+        })
+        await self.db.boards.update_one(
+            {"owner_type": owner_type, "owner_id": owner_id},
+            {"$set": {"owner_type": owner_type, "owner_id": owner_id, "items": items}},
+            upsert=True,
+        )
+        return items
+
+    async def update_board_item(self, owner_type, owner_id, item_id, patch):
+        items = await self.get_board_items(owner_type, owner_id)
+        item = next((i for i in items if i["id"] == item_id), None)
+        if item is None:
+            return None
+        for k in ("entry_price", "exit_price", "why", "status",
+                  "entered_at", "entered_price", "exited_at", "exited_price"):
+            if k in patch:
+                item[k] = patch[k]
+        await self.db.boards.update_one(
+            {"owner_type": owner_type, "owner_id": owner_id}, {"$set": {"items": items}},
+        )
+        return items
+
+    async def remove_board_item(self, owner_type, owner_id, item_id):
+        items = await self.get_board_items(owner_type, owner_id)
+        items = [i for i in items if i["id"] != item_id]
+        await self.db.boards.update_one(
+            {"owner_type": owner_type, "owner_id": owner_id},
+            {"$set": {"items": items}}, upsert=True,
+        )
+        return items
 
     async def create_upload(self, doc):
         doc["id"] = doc.get("id") or _new_id()

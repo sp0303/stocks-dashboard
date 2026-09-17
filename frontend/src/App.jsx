@@ -8,6 +8,7 @@ const ManagerView = lazy(() => import('./components/ManagerView.jsx'))
 const ClientDashboard = lazy(() => import('./components/ClientDashboard.jsx'))
 const Watchlist = lazy(() => import('./components/Watchlist.jsx'))
 const SectorResearch = lazy(() => import('./components/SectorResearch.jsx'))
+const MyBoard = lazy(() => import('./components/MyBoard.jsx'))
 
 // Small pill showing the live market-data source. Angel One when connected, otherwise
 // the app is running on the Yahoo fallback. Polls every 60s.
@@ -97,7 +98,7 @@ function Dashboard({ auth }) {
   const [persona, setPersona] = useState(isAdmin ? initial.persona : 'manager') // managers are locked to 'manager'
   const [manager, setManager] = useState(isAdmin ? null : (auth.manager || null))
   const [client, setClient] = useState(null)                // selected client (drilled in)
-  const [managerPage, setManagerPage] = useState('clients') // 'clients' | 'watchlist' | 'rnd' — manager persona only
+  const [managerPage, setManagerPage] = useState('clients') // 'clients' | 'watchlist' | 'rnd' | 'board' — manager persona only
   const [restoring, setRestoring] = useState(!!(initial.managerId || initial.clientId))
 
   // Managers list is refetched on demand (mgReload) — a manager created in the Super Admin
@@ -160,6 +161,7 @@ function Dashboard({ auth }) {
             <button className={managerPage === 'clients' ? 'on' : ''} onClick={() => setManagerPage('clients')}>Overview</button>
             <button className={managerPage === 'watchlist' ? 'on' : ''} onClick={() => setManagerPage('watchlist')}>★ Watchlist</button>
             <button className={managerPage === 'rnd' ? 'on' : ''} onClick={() => setManagerPage('rnd')}>R&amp;D</button>
+            <button className={managerPage === 'board' ? 'on' : ''} onClick={() => setManagerPage('board')}>MyBoard</button>
           </div>
         )}
         <BrokerPill />
@@ -192,6 +194,8 @@ function Dashboard({ auth }) {
               <Watchlist scope="managers" id={manager.id} title="Manager watchlist" />
             ) : managerPage === 'rnd' && manager ? (
               <SectorResearch />
+            ) : managerPage === 'board' && manager ? (
+              <MyBoard managerId={manager.id} />
             ) : (
               <ManagerView
                 managers={managers.data}

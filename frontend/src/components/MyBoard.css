@@ -1,0 +1,247 @@
+.myboard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.myboard-head h2 { margin: 0 }
+
+.myboard-add-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.myboard-addform {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.myboard-addform input {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--ink);
+  width: 130px;
+}
+
+.myboard-addform input.myboard-why-input { width: 220px }
+
+.myboard-addform button {
+  border: none;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+}
+
+.myboard-addform button:disabled { opacity: 0.6; cursor: not-allowed }
+
+.myboard-addform button.myboard-cancel {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line-strong);
+}
+
+.myboard-cols {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .myboard-cols { grid-template-columns: 1fr }
+}
+
+.myboard-col {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  min-height: 200px;
+}
+
+.myboard-col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.myboard-col-title {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+
+.myboard-col-count {
+  background: var(--line);
+  color: var(--muted);
+  border-radius: 10px;
+  font-size: 11px;
+  padding: 1px 7px;
+  font-weight: 600;
+}
+
+.myboard-col-hint {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: 2px 0 10px;
+}
+
+.myboard-col-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.myboard-empty {
+  color: var(--faint);
+  font-size: 12.5px;
+  text-align: center;
+  padding: 18px 0;
+  font-style: italic;
+}
+
+.myboard-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
+}
+
+.myboard-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.myboard-symbol {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+.myboard-price {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.myboard-remove {
+  background: none;
+  border: none;
+  color: var(--faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.myboard-remove:hover { color: var(--down) }
+
+.myboard-pnl {
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.myboard-pnl.up { color: var(--up) }
+.myboard-pnl.down { color: var(--down) }
+
+.myboard-plan {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 6px;
+  cursor: pointer;
+  border-radius: 5px;
+  padding: 2px 4px;
+  margin-left: -4px;
+}
+
+.myboard-plan:hover { background: var(--surface-2) }
+
+.myboard-plan-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.myboard-plan-edit input {
+  width: 70px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 3px 6px;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.myboard-plan-edit span { color: var(--faint); font-size: 12px }
+
+.myboard-plan-edit button {
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 5px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.myboard-actual {
+  font-size: 11.5px;
+  color: var(--faint);
+  margin-top: 4px;
+}
+
+.myboard-why {
+  width: 100%;
+  margin-top: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12.5px;
+  color: var(--ink);
+  resize: vertical;
+  font-family: var(--sans);
+}
+
+.myboard-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.myboard-actions button {
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.myboard-actions button:hover { border-color: var(--accent); color: var(--accent) }

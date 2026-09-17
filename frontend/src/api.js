@@ -125,6 +125,27 @@ export const api = {
     }).then((r) => r.data),
   watchlistListDelete: (scope, id, wlId) =>
     req(`/api/${scope}/${id}/watchlists/${wlId}`, { method: 'DELETE' }).then((r) => r.data),
+  // MyBoard — manager Kanban: Watching -> Holding -> Exit
+  board: (managerId) => req(`/api/managers/${managerId}/board`).then((r) => r.data),
+  boardAdd: (managerId, { symbol, entryPrice, exitPrice, why }) =>
+    req(`/api/managers/${managerId}/board`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol, entry_price: entryPrice ?? undefined, exit_price: exitPrice ?? undefined, why: why || undefined,
+      }),
+    }).then((r) => r.data),
+  boardUpdate: (managerId, itemId, patch = {}) => {
+    const body = {}
+    if ('entryPrice' in patch) body.entry_price = patch.entryPrice
+    if ('exitPrice' in patch) body.exit_price = patch.exitPrice
+    if ('why' in patch) body.why = patch.why
+    if ('status' in patch) body.status = patch.status
+    return req(`/api/managers/${managerId}/board/${itemId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }).then((r) => r.data)
+  },
+  boardRemove: (managerId, itemId) =>
+    req(`/api/managers/${managerId}/board/${itemId}`, { method: 'DELETE' }).then((r) => r.data),
   // broker (market-data) connectivity
   angelStatus: () => req('/api/angel/status').then((r) => r.data),
   // email alerts
