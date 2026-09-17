@@ -13,16 +13,21 @@ function pnlPct(item) {
 }
 
 export default function MyBoard({ managerId }) {
+  // clients/board/holdings all fire in parallel on mount — none waits on another.
+  // selectedClientIds stays null ("all, unfiltered") until the user actually touches
+  // a checkbox, so the first holdings fetch never has to wait for the client list.
   const clients = useAsync(() => api.clients(managerId), [managerId])
-  const [selectedClientIds, setSelectedClientIds] = useState(null) // null until clients load -> default to all
+  const [selectedClientIds, setSelectedClientIds] = useState(null)
   const allClients = clients.data || []
-  const selected = selectedClientIds ?? allClients.map((c) => c.id)
+  const displaySelected = selectedClientIds ?? allClients.map((c) => c.id) // for checkbox display only
 
   const [reload, setReload] = useState(0)
   const board = useAsync(() => api.board(managerId), [managerId, reload])
   const holdings = useAsync(
-    () => (selected.length > 0 ? api.managerHoldings(managerId, selected) : Promise.resolve({ holdings: [] })),
-    [managerId, selected.join(',')],
+    () => (selectedClientIds && selectedClientIds.length === 0
+      ? Promise.resolve({ holdings: [] })
+      : api.managerHoldings(managerId, selectedClientIds)),
+    [managerId, selectedClientIds ? selectedClientIds.join(',') : 'all'],
   )
 
   const [err, setErr] = useState(null)
@@ -112,12 +117,12 @@ export default function MyBoard({ managerId }) {
 
       <div className="myboard-clientbar">
         <label className="myboard-client-chip myboard-client-all">
-          <input type="checkbox" checked={selected.length === allClients.length && allClients.length > 0} onChange={toggleAllClients} />
-          All clients ({selected.length}/{allClients.length})
+          <input type="checkbox" checked={displaySelected.length === allClients.length && allClients.length > 0} onChange={toggleAllClients} />
+          All clients ({displaySelected.length}/{allClients.length})
         </label>
         {allClients.map((c) => (
           <label key={c.id} className="myboard-client-chip">
-            <input type="checkbox" checked={selected.includes(c.id)} onChange={() => toggleClient(c.id)} />
+            <input type="checkbox" checked={displaySelected.includes(c.id)} onChange={() => toggleClient(c.id)} />
             {c.name}
           </label>
         ))}
@@ -175,7 +180,7 @@ export default function MyBoard({ managerId }) {
                   <HoldingCard key={row.symbol} row={row} onDragStart={(e) => onDragStartHolding(e, row)} />
                 ))}
                 {holdingRows.length === 0 && (
-                  <div className="myboard-empty">{selected.length === 0 ? 'Select at least one client' : 'No open positions'}</div>
+                  <div className="myboard-empty">{displaySelected.length === 0 ? 'Select at least one client' : 'No open positions'}</div>
                 )}
               </>
             )}

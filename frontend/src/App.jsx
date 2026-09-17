@@ -44,12 +44,16 @@ function BrokerPill() {
   )
 }
 
+const MANAGER_PAGES = ['clients', 'watchlist', 'rnd', 'board']
+
 function readUrlState() {
   const p = new URLSearchParams(window.location.search)
+  const page = p.get('page')
   return {
     persona: p.get('persona') === 'manager' ? 'manager' : 'admin',
     managerId: p.get('managerId') || null,
     clientId: p.get('clientId') || null,
+    page: MANAGER_PAGES.includes(page) ? page : 'clients',
   }
 }
 
@@ -98,7 +102,7 @@ function Dashboard({ auth }) {
   const [persona, setPersona] = useState(isAdmin ? initial.persona : 'manager') // managers are locked to 'manager'
   const [manager, setManager] = useState(isAdmin ? null : (auth.manager || null))
   const [client, setClient] = useState(null)                // selected client (drilled in)
-  const [managerPage, setManagerPage] = useState('clients') // 'clients' | 'watchlist' | 'rnd' | 'board' — manager persona only
+  const [managerPage, setManagerPage] = useState(initial.page) // 'clients' | 'watchlist' | 'rnd' | 'board' — manager persona only
   const [restoring, setRestoring] = useState(!!(initial.managerId || initial.clientId))
 
   // Managers list is refetched on demand (mgReload) — a manager created in the Super Admin
@@ -134,10 +138,11 @@ function Dashboard({ auth }) {
     params.set('persona', persona)
     if (manager) params.set('managerId', manager.id)
     if (client) params.set('clientId', client.id)
+    if (!client && managerPage !== 'clients') params.set('page', managerPage)
     const qs = params.toString()
     const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname
     window.history.replaceState(null, '', url)
-  }, [persona, manager, client])
+  }, [persona, manager, client, managerPage])
 
   function switchPersona(p) {
     setPersona(p)
