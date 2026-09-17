@@ -18,6 +18,33 @@
   cursor: pointer;
 }
 
+.myboard-clientbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.myboard-client-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.myboard-client-chip input { cursor: pointer }
+
+.myboard-client-all {
+  font-weight: 600;
+  border-color: var(--line-strong);
+}
+
 .myboard-addform {
   display: flex;
   flex-wrap: wrap;
@@ -109,6 +136,14 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-height: 60px;
+  border-radius: 8px;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.myboard-col-body.drag-over {
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .myboard-empty {
@@ -125,6 +160,13 @@
   border-radius: 10px;
   padding: 10px 12px;
   box-shadow: var(--shadow);
+  cursor: grab;
+}
+
+.myboard-card:active { cursor: grabbing }
+
+.myboard-card-holding {
+  border-left: 3px solid var(--accent);
 }
 
 .myboard-card-top {
@@ -214,6 +256,29 @@
   margin-top: 4px;
 }
 
+.myboard-holding-clients {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 6px;
+  cursor: pointer;
+}
+
+.myboard-holding-clientlist {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 4px;
+  padding: 4px 6px;
+  background: var(--surface-2);
+  border-radius: 6px;
+}
+
+.myboard-drag-hint {
+  font-size: 10.5px;
+  color: var(--faint);
+  margin-top: 8px;
+  font-style: italic;
+}
+
 .myboard-why {
   width: 100%;
   margin-top: 8px;
@@ -226,22 +291,3 @@
   resize: vertical;
   font-family: var(--sans);
 }
-
-.myboard-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: 8px;
-  flex-wrap: wrap;
-}
-
-.myboard-actions button {
-  border: 1px solid var(--line-strong);
-  background: transparent;
-  color: var(--ink);
-  border-radius: 6px;
-  padding: 5px 10px;
-  font-size: 11.5px;
-  cursor: pointer;
-}
-
-.myboard-actions button:hover { border-color: var(--accent); color: var(--accent) }

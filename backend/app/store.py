@@ -144,15 +144,18 @@ class BaseStore:
     async def update_watchlist_entry(self, owner_type: str, owner_id: str, symbol: str, patch: dict, watchlist_id: str | None = None) -> list[dict]: ...
     async def remove_watchlist_symbol(self, owner_type: str, owner_id: str, symbol: str, watchlist_id: str | None = None) -> list[dict]: ...
 
-    # board (owner_type: "MANAGER"). A single Kanban per owner — planning cards that
-    # move Watching -> Holding -> Exit. entry_price/exit_price are the plan, set at
-    # add time and editable; entered_price/exited_price are the actual live price
-    # captured (by the router, not here) the moment a card crosses into that column,
-    # so a card carries "what I planned" and "what happened" side by side.
+    # board (owner_type: "MANAGER"). A planning Kanban with two manual lanes, Watching
+    # and Exit — Holding is real data (aggregated client holdings from the tradebook,
+    # served by /managers/{id}/holdings) and never stored here. entry_price/exit_price
+    # are the plan, editable; exited_price is the actual live price captured (by the
+    # router, not here) the moment a card is dropped into Exit. source distinguishes a
+    # self-typed idea ("watching") from an exit plan dragged off a real holding
+    # ("holding"), so the card can show its origin.
     async def get_board_items(self, owner_type: str, owner_id: str) -> list[dict]: ...
     async def add_board_item(
         self, owner_type: str, owner_id: str, symbol: str,
         entry_price: float | None = None, exit_price: float | None = None, why: str | None = None,
+        source: str = "watching",
     ) -> list[dict]: ...
     async def update_board_item(self, owner_type: str, owner_id: str, item_id: str, patch: dict) -> list[dict] | None: ...
     async def remove_board_item(self, owner_type: str, owner_id: str, item_id: str) -> list[dict]: ...
@@ -493,14 +496,14 @@ class JsonStore(BaseStore):
                     if b["owner_type"] == owner_type and b["owner_id"] == owner_id), None)
         return doc["items"] if doc else []
 
-    async def add_board_item(self, owner_type, owner_id, symbol, entry_price=None, exit_price=None, why=None):
+    async def add_board_item(self, owner_type, owner_id, symbol, entry_price=None, exit_price=None, why=None, source="watching"):
         from datetime import date
 
         async with self._lock:
             doc = self._board_doc(owner_type, owner_id)
             doc["items"].append({
                 "id": _new_id(), "symbol": symbol, "entry_price": entry_price, "exit_price": exit_price,
-                "why": why or "", "status": "watching", "created_at": date.today().isoformat(),
+                "why": why or "", "status": "watching", "source": source, "created_at": date.today().isoformat(),
                 "entered_at": None, "entered_price": None, "exited_at": None, "exited_price": None,
             })
             self._flush()
@@ -1023,13 +1026,13 @@ class MongoStore(BaseStore):
         doc = await self.db.boards.find_one({"owner_type": owner_type, "owner_id": owner_id})
         return doc["items"] if doc else []
 
-    async def add_board_item(self, owner_type, owner_id, symbol, entry_price=None, exit_price=None, why=None):
+    async def add_board_item(self, owner_type, owner_id, symbol, entry_price=None, exit_price=None, why=None, source="watching"):
         from datetime import date
 
         items = await self.get_board_items(owner_type, owner_id)
         items.append({
             "id": _new_id(), "symbol": symbol, "entry_price": entry_price, "exit_price": exit_price,
-            "why": why or "", "status": "watching", "created_at": date.today().isoformat(),
+            "why": why or "", "status": "watching", "source": source, "created_at": date.today().isoformat(),
             "entered_at": None, "entered_price": None, "exited_at": None, "exited_price": None,
         })
         await self.db.boards.update_one(

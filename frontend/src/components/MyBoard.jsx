@@ -1,48 +1,128 @@
-import React, { useState } from 'react'
-import { api, inr, pct } from '../api.js'
+import React, { useMemo, useState } from 'react'
+import { api, inr, inrFull, pct, pctPlain } from '../api.js'
 import { Loading, ErrorBox, useAsync } from './common.jsx'
 import './MyBoard.css'
 
-const COLUMNS = [
-  { key: 'watching', title: 'Watching', hint: 'Idea — not yet entered' },
-  { key: 'holding', title: 'Holding', hint: 'Position is on' },
-  { key: 'exit', title: 'Exit', hint: 'Closed out' },
-]
+// Watching and Exit are manual planning lanes (board items in the store). Holding is
+// never stored here — it's real, live data from the tradebook (the same aggregation
+// that powers the Holdings-by-client view), so it can't be dragged into or edited.
 
-// Actual P&L once a real entry price exists (from the Holding transition); falls
-// back to the planned entry_price so a card still shows something before that.
 function pnlPct(item) {
-  const base = item.entered_price ?? item.entry_price
-  const cur = item.status === 'exit' ? (item.exited_price ?? item.price) : item.price
-  if (base == null || cur == null) return null
-  return ((cur - base) / base) * 100
+  if (item.entry_price == null || item.price == null) return null
+  return ((item.price - item.entry_price) / item.entry_price) * 100
 }
 
 export default function MyBoard({ managerId }) {
+  const clients = useAsync(() => api.clients(managerId), [managerId])
+  const [selectedClientIds, setSelectedClientIds] = useState(null) // null until clients load -> default to all
+  const allClients = clients.data || []
+  const selected = selectedClientIds ?? allClients.map((c) => c.id)
+
   const [reload, setReload] = useState(0)
-  const b = useAsync(() => api.board(managerId), [managerId, reload])
+  const board = useAsync(() => api.board(managerId), [managerId, reload])
+  const holdings = useAsync(
+    () => (selected.length > 0 ? api.managerHoldings(managerId, selected) : Promise.resolve({ holdings: [] })),
+    [managerId, selected.join(',')],
+  )
+
   const [err, setErr] = useState(null)
   const [adding, setAdding] = useState(false)
+  const [dragOverExit, setDragOverExit] = useState(false)
+  const [dragOverWatching, setDragOverWatching] = useState(false)
 
   function refresh() { setReload((n) => n + 1) }
-
   async function run(fn) {
     setErr(null)
     try { await fn() } catch (e) { setErr(e.message) }
     refresh()
   }
 
-  if (b.loading) return <Loading what="board" />
-  if (b.error) return <ErrorBox error={b.error} />
-  const items = b.data || []
+  function toggleClient(id) {
+    setSelectedClientIds((cur) => {
+      const base = cur ?? allClients.map((c) => c.id)
+      return base.includes(id) ? base.filter((x) => x !== id) : [...base, id]
+    })
+  }
+  function toggleAllClients() {
+    setSelectedClientIds((cur) => {
+      const base = cur ?? allClients.map((c) => c.id)
+      return base.length === allClients.length ? [] : allClients.map((c) => c.id)
+    })
+  }
+
+  const watchingItems = (board.data || []).filter((i) => i.status === 'watching')
+  const exitItems = (board.data || []).filter((i) => i.status === 'exit')
+  const holdingRows = holdings.data?.holdings || []
+
+  // Drag payload is JSON: {origin: 'watching' | 'exit' | 'holding', ...}
+  function onDragStartWatching(e, item) {
+    e.dataTransfer.setData('application/json', JSON.stringify({ origin: 'watching', itemId: item.id }))
+  }
+  function onDragStartExit(e, item) {
+    e.dataTransfer.setData('application/json', JSON.stringify({ origin: 'exit', itemId: item.id }))
+  }
+  function onDragStartHolding(e, row) {
+    e.dataTransfer.setData('application/json', JSON.stringify({
+      origin: 'holding', symbol: row.symbol, buyAvg: row.buy_avg,
+    }))
+  }
+
+  function readPayload(e) {
+    try { return JSON.parse(e.dataTransfer.getData('application/json')) } catch { return null }
+  }
+
+  async function onDropExit(e) {
+    e.preventDefault()
+    setDragOverExit(false)
+    const p = readPayload(e)
+    if (!p) return
+    if (p.origin === 'watching') {
+      await run(() => api.boardUpdate(managerId, p.itemId, { status: 'exit' }))
+    } else if (p.origin === 'holding') {
+      await run(async () => {
+        const items = await api.boardAdd(managerId, {
+          symbol: p.symbol, entryPrice: p.buyAvg ?? undefined, source: 'holding',
+        })
+        const created = items[items.length - 1]
+        await api.boardUpdate(managerId, created.id, { status: 'exit' })
+      })
+    }
+    // dropping an exit card back onto itself is a no-op
+  }
+
+  async function onDropWatching(e) {
+    e.preventDefault()
+    setDragOverWatching(false)
+    const p = readPayload(e)
+    if (!p || p.origin !== 'exit') return // a real holding never demotes to a typed idea
+    await run(() => api.boardUpdate(managerId, p.itemId, { status: 'watching' }))
+  }
+
+  if (board.loading || clients.loading) return <Loading what="board" />
+  if (board.error) return <ErrorBox error={board.error} />
+  if (clients.error) return <ErrorBox error={clients.error} />
 
   return (
     <div className="myboard">
       <div className="myboard-head">
         <h2>MyBoard</h2>
-        <button className="myboard-add-btn" onClick={() => setAdding(true)}>+ Add stock</button>
+        <button className="myboard-add-btn" onClick={() => setAdding(true)}>+ Add idea</button>
       </div>
       {err && <div className="warn-banner">{err}</div>}
+
+      <div className="myboard-clientbar">
+        <label className="myboard-client-chip myboard-client-all">
+          <input type="checkbox" checked={selected.length === allClients.length && allClients.length > 0} onChange={toggleAllClients} />
+          All clients ({selected.length}/{allClients.length})
+        </label>
+        {allClients.map((c) => (
+          <label key={c.id} className="myboard-client-chip">
+            <input type="checkbox" checked={selected.includes(c.id)} onChange={() => toggleClient(c.id)} />
+            {c.name}
+          </label>
+        ))}
+      </div>
+
       {adding && (
         <AddCard
           onCancel={() => setAdding(false)}
@@ -52,33 +132,83 @@ export default function MyBoard({ managerId }) {
           })}
         />
       )}
+
       <div className="myboard-cols">
-        {COLUMNS.map((col) => (
-          <div key={col.key} className="myboard-col">
-            <div className="myboard-col-head">
-              <span className="myboard-col-title">{col.title}</span>
-              <span className="myboard-col-count">{items.filter((i) => i.status === col.key).length}</span>
-            </div>
-            <div className="myboard-col-hint">{col.hint}</div>
-            <div className="myboard-col-body">
-              {items.filter((i) => i.status === col.key).map((item) => (
-                <Card
-                  key={item.id}
-                  item={item}
-                  onMove={(status) => run(() => api.boardUpdate(managerId, item.id, { status }))}
-                  onEditWhy={(why) => run(() => api.boardUpdate(managerId, item.id, { why }))}
-                  onEditPlan={(patch) => run(() => api.boardUpdate(managerId, item.id, patch))}
-                  onRemove={() => {
-                    if (window.confirm(`Remove ${item.symbol} from the board?`)) run(() => api.boardRemove(managerId, item.id))
-                  }}
-                />
-              ))}
-              {items.filter((i) => i.status === col.key).length === 0 && (
-                <div className="myboard-empty">Nothing here</div>
-              )}
-            </div>
+        <div className="myboard-col">
+          <div className="myboard-col-head">
+            <span className="myboard-col-title">Watching</span>
+            <span className="myboard-col-count">{watchingItems.length}</span>
           </div>
-        ))}
+          <div className="myboard-col-hint">Ideas you typed in — drag to Exit to abandon</div>
+          <div
+            className={`myboard-col-body${dragOverWatching ? ' drag-over' : ''}`}
+            onDragOver={(e) => { e.preventDefault(); setDragOverWatching(true) }}
+            onDragLeave={() => setDragOverWatching(false)}
+            onDrop={onDropWatching}
+          >
+            {watchingItems.map((item) => (
+              <WatchingCard
+                key={item.id}
+                item={item}
+                onDragStart={(e) => onDragStartWatching(e, item)}
+                onEditWhy={(why) => run(() => api.boardUpdate(managerId, item.id, { why }))}
+                onEditPlan={(patch) => run(() => api.boardUpdate(managerId, item.id, patch))}
+                onRemove={() => {
+                  if (window.confirm(`Remove ${item.symbol} from Watching?`)) run(() => api.boardRemove(managerId, item.id))
+                }}
+              />
+            ))}
+            {watchingItems.length === 0 && <div className="myboard-empty">Nothing here</div>}
+          </div>
+        </div>
+
+        <div className="myboard-col">
+          <div className="myboard-col-head">
+            <span className="myboard-col-title">Holding</span>
+            <span className="myboard-col-count">{holdingRows.length}</span>
+          </div>
+          <div className="myboard-col-hint">Real positions from the tradebook — drag one to Exit to plan a sell</div>
+          <div className="myboard-col-body">
+            {holdings.loading ? <Loading what="holdings" /> : holdings.error ? <ErrorBox error={holdings.error} /> : (
+              <>
+                {holdingRows.map((row) => (
+                  <HoldingCard key={row.symbol} row={row} onDragStart={(e) => onDragStartHolding(e, row)} />
+                ))}
+                {holdingRows.length === 0 && (
+                  <div className="myboard-empty">{selected.length === 0 ? 'Select at least one client' : 'No open positions'}</div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="myboard-col">
+          <div className="myboard-col-head">
+            <span className="myboard-col-title">Exit</span>
+            <span className="myboard-col-count">{exitItems.length}</span>
+          </div>
+          <div className="myboard-col-hint">Exit plans — a note, not a sale</div>
+          <div
+            className={`myboard-col-body${dragOverExit ? ' drag-over' : ''}`}
+            onDragOver={(e) => { e.preventDefault(); setDragOverExit(true) }}
+            onDragLeave={() => setDragOverExit(false)}
+            onDrop={onDropExit}
+          >
+            {exitItems.map((item) => (
+              <ExitCard
+                key={item.id}
+                item={item}
+                onDragStart={(e) => onDragStartExit(e, item)}
+                onEditWhy={(why) => run(() => api.boardUpdate(managerId, item.id, { why }))}
+                onEditPlan={(patch) => run(() => api.boardUpdate(managerId, item.id, patch))}
+                onRemove={() => {
+                  if (window.confirm(`Remove ${item.symbol} from Exit?`)) run(() => api.boardRemove(managerId, item.id))
+                }}
+              />
+            ))}
+            {exitItems.length === 0 && <div className="myboard-empty">Drop a card here</div>}
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -115,7 +245,52 @@ function AddCard({ onSave, onCancel }) {
   )
 }
 
-function Card({ item, onMove, onEditWhy, onEditPlan, onRemove }) {
+// A real, live position — read-only except for dragging it to Exit.
+function HoldingCard({ row, onDragStart }) {
+  const [showClients, setShowClients] = useState(false)
+  return (
+    <div className="myboard-card myboard-card-holding" draggable onDragStart={onDragStart}>
+      <div className="myboard-card-top">
+        <span className="myboard-symbol">{row.symbol}</span>
+        <span className="myboard-price">{row.ltp != null ? inr(row.ltp) : '—'}</span>
+      </div>
+      <div className={`myboard-pnl ${row.pnl >= 0 ? 'up' : 'down'}`}>{pctPlain(row.pnl_pct)} · {inrFull(row.pnl)}</div>
+      <div className="myboard-plan">{row.qty} shares · avg {row.buy_avg != null ? inr(row.buy_avg) : '—'}</div>
+      <div className="myboard-holding-clients" onClick={() => setShowClients((s) => !s)}>
+        {row.clients?.length || 0} client{row.clients?.length === 1 ? '' : 's'} {showClients ? '▾' : '▸'}
+      </div>
+      {showClients && (
+        <div className="myboard-holding-clientlist">
+          {row.clients?.map((c, i) => <div key={i}>{c.name} — {c.qty}</div>)}
+        </div>
+      )}
+      <div className="myboard-drag-hint">drag to Exit to plan a sell</div>
+    </div>
+  )
+}
+
+function WatchingCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove }) {
+  return (
+    <PlanCard
+      item={item} onDragStart={onDragStart} onEditWhy={onEditWhy} onEditPlan={onEditPlan} onRemove={onRemove}
+    />
+  )
+}
+
+function ExitCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove }) {
+  return (
+    <PlanCard
+      item={item} onDragStart={onDragStart} onEditWhy={onEditWhy} onEditPlan={onEditPlan} onRemove={onRemove}
+      footer={item.source === 'holding' && (
+        <div className="myboard-actual">
+          From a real holding{item.exited_price != null && <> · price when flagged {inr(item.exited_price)} on {item.exited_at}</>}
+        </div>
+      )}
+    />
+  )
+}
+
+function PlanCard({ item, onDragStart, onEditWhy, onEditPlan, onRemove, footer }) {
   const [why, setWhy] = useState(item.why || '')
   const [editingPlan, setEditingPlan] = useState(false)
   const [entryPrice, setEntryPrice] = useState(item.entry_price ?? '')
@@ -132,16 +307,14 @@ function Card({ item, onMove, onEditWhy, onEditPlan, onRemove }) {
   }
 
   return (
-    <div className="myboard-card">
+    <div className="myboard-card" draggable onDragStart={onDragStart}>
       <div className="myboard-card-top">
         <span className="myboard-symbol">{item.symbol}</span>
         <span className="myboard-price">{item.price != null ? inr(item.price) : '—'}</span>
         <button className="myboard-remove" title="Remove" onClick={onRemove}>×</button>
       </div>
 
-      {item.status !== 'watching' && pnl != null && (
-        <div className={`myboard-pnl ${pnl >= 0 ? 'up' : 'down'}`}>{pct(pnl)} since entry</div>
-      )}
+      {pnl != null && <div className={`myboard-pnl ${pnl >= 0 ? 'up' : 'down'}`}>{pct(pnl)} vs plan</div>}
 
       {editingPlan ? (
         <div className="myboard-plan-edit">
@@ -156,12 +329,7 @@ function Card({ item, onMove, onEditWhy, onEditPlan, onRemove }) {
         </div>
       )}
 
-      {item.status !== 'watching' && (
-        <div className="myboard-actual">
-          {item.entered_price != null && <span>Entered {inr(item.entered_price)} on {item.entered_at}</span>}
-          {item.status === 'exit' && item.exited_price != null && <span> · Exited {inr(item.exited_price)} on {item.exited_at}</span>}
-        </div>
-      )}
+      {footer}
 
       <textarea
         className="myboard-why"
@@ -171,17 +339,6 @@ function Card({ item, onMove, onEditWhy, onEditPlan, onRemove }) {
         onBlur={saveWhy}
         rows={2}
       />
-
-      <div className="myboard-actions">
-        {item.status === 'watching' && <button onClick={() => onMove('holding')}>Move to Holding →</button>}
-        {item.status === 'holding' && (
-          <>
-            <button onClick={() => onMove('watching')}>← Back to Watching</button>
-            <button onClick={() => onMove('exit')}>Move to Exit →</button>
-          </>
-        )}
-        {item.status === 'exit' && <button onClick={() => onMove('holding')}>← Reopen to Holding</button>}
-      </div>
     </div>
   )
 }

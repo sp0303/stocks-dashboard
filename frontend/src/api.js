@@ -125,13 +125,15 @@ export const api = {
     }).then((r) => r.data),
   watchlistListDelete: (scope, id, wlId) =>
     req(`/api/${scope}/${id}/watchlists/${wlId}`, { method: 'DELETE' }).then((r) => r.data),
-  // MyBoard — manager Kanban: Watching -> Holding -> Exit
+  // MyBoard — manager Kanban: Watching (typed ideas) + Exit (plans), both drag-driven.
+  // Holding is real data — see managerHoldings below, not a board endpoint.
   board: (managerId) => req(`/api/managers/${managerId}/board`).then((r) => r.data),
-  boardAdd: (managerId, { symbol, entryPrice, exitPrice, why }) =>
+  boardAdd: (managerId, { symbol, entryPrice, exitPrice, why, source }) =>
     req(`/api/managers/${managerId}/board`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         symbol, entry_price: entryPrice ?? undefined, exit_price: exitPrice ?? undefined, why: why || undefined,
+        source: source || undefined,
       }),
     }).then((r) => r.data),
   boardUpdate: (managerId, itemId, patch = {}) => {

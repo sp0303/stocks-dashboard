@@ -32,6 +32,7 @@ class BoardItemAdd(BaseModel):
     entry_price: float | None = None
     exit_price: float | None = None
     why: str | None = None
+    source: str = "watching"  # "watching" (typed idea) | "holding" (exit plan dragged off a real position)
 
 
 class BoardItemUpdate(BaseModel):
@@ -68,7 +69,7 @@ async def add_board_item(manager_id: str, body: BoardItemAdd, _ws: auth.Identity
         raise HTTPException(404, "manager not found")
     items = await store.add_board_item(
         "MANAGER", manager_id, body.symbol.upper(),
-        entry_price=body.entry_price, exit_price=body.exit_price, why=body.why,
+        entry_price=body.entry_price, exit_price=body.exit_price, why=body.why, source=body.source,
     )
     return {"data": _priced(items)}
 
