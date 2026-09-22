@@ -41,11 +41,27 @@ class Settings(BaseSettings):
     angel_pin: str = ""
     angel_totp_secret: str = ""
 
+    # Optional second Angel account (a *separate* identity, not the same login twice).
+    # When set, REST quotes/history are split across both accounts and fail over between
+    # them, doubling the effective rate budget. The ORB websocket feed stays on the
+    # primary only. Leave blank to run on the primary alone (unchanged behaviour).
+    angel2_api_key: str = ""
+    angel2_client_id: str = ""
+    angel2_pin: str = ""
+    angel2_totp_secret: str = ""
+
     @property
     def angel_enabled(self) -> bool:
         return bool(
             self.angel_api_key.strip() and self.angel_client_id.strip()
             and self.angel_pin.strip() and self.angel_totp_secret.strip()
+        )
+
+    @property
+    def angel2_enabled(self) -> bool:
+        return bool(
+            self.angel2_api_key.strip() and self.angel2_client_id.strip()
+            and self.angel2_pin.strip() and self.angel2_totp_secret.strip()
         )
 
     # Kite broker API — persistent session, auto-authenticate from .env

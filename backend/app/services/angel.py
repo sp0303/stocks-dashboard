@@ -12,6 +12,7 @@ map by the bare symbol so callers can keep passing plain tickers.
 from __future__ import annotations
 
 import collections
+import itertools
 import logging
 import threading
 import time
@@ -25,9 +26,9 @@ _SCRIP_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenA
 _SCRIP_CACHE = Path(settings.data_dir) / "angel_scrip_master.json"
 _SESSION_MAX_AGE = 6 * 3600  # re-login every 6h (tokens last a day; this is a safe margin)
 
-_lock = threading.Lock()
-_smart = None            # SmartConnect instance
-_session_ts = 0.0        # when the current session was created
+# Sentinel returned by a single account when it is over budget / rate-limited / unusable,
+# so the pool knows to try the next account rather than treating it as a real response.
+_OVER_BUDGET = object()
 
 
 class _RateLimiter:
@@ -69,10 +70,40 @@ class _RateLimiter:
 # Official Angel One SmartAPI limits (per the published rate-limit table):
 #   market/v1/quote        -> 10/s, 500/min, 5000/hr
 #   historical/getCandleData -> 3/s, 180/min, 5000/hr
-# We gate to exactly these. In practice volume is far lower (quotes are 15-min cached and
-# batched ≤50/call; candles are 30-min cached), so these ceilings are a safety backstop.
-_quote_limiter = _RateLimiter(0.10, per_min=500, per_hour=5000)    # quote: 10/s
-_candle_limiter = _RateLimiter(0.34, per_min=180, per_hour=5000)   # candle: ~3/s
+# We gate each account to exactly these — every account carries the full budget, so two
+# accounts roughly double the effective ceiling. In practice volume is far lower (quotes
+# are 15-min cached and batched ≤50/call; candles 30-min cached), so these are a backstop.
+class _Account:
+    """One Angel login: its own session, and its own rate limiters. Keeping the limiters
+    per-account is the whole point — the pool spreads load and fails over between accounts
+    that each have their own independent quota."""
+
+    def __init__(self, name: str, api_key: str, client_id: str, pin: str, totp_secret: str):
+        self.name = name
+        self.api_key = api_key
+        self.client_id = client_id
+        self.pin = pin
+        self.totp_secret = totp_secret
+        self.lock = threading.Lock()
+        self.smart = None
+        self.session_ts = 0.0
+        self.quote_limiter = _RateLimiter(0.10, per_min=500, per_hour=5000)    # quote: 10/s
+        self.candle_limiter = _RateLimiter(0.34, per_min=180, per_hour=5000)   # candle: ~3/s
+
+
+def _build_accounts() -> list["_Account"]:
+    accts: list[_Account] = []
+    if settings.angel_enabled:
+        accts.append(_Account("primary", settings.angel_api_key, settings.angel_client_id,
+                              settings.angel_pin, settings.angel_totp_secret))
+    if settings.angel2_enabled:
+        accts.append(_Account("secondary", settings.angel2_api_key, settings.angel2_client_id,
+                              settings.angel2_pin, settings.angel2_totp_secret))
+    return accts
+
+
+_ACCOUNTS: list[_Account] = _build_accounts()
+_rr = itertools.count()  # round-robin cursor: spreads calls across accounts
 
 
 def _rate_limited(msg: str) -> bool:
@@ -91,49 +122,74 @@ def _is_auth_error(resp) -> bool:
     return code in ("AG8001", "AG8002", "AG8003") or "invalid token" in msg or "invalid session" in msg
 
 
-def _invalidate_session() -> None:
-    """Drop the cached session so the next _ensure_session() logs in fresh."""
-    global _smart, _session_ts
-    with _lock:
-        _smart, _session_ts = None, 0.0
+def _invalidate_session(acct: "_Account") -> None:
+    """Drop this account's cached session so its next use logs in fresh."""
+    with acct.lock:
+        acct.smart, acct.session_ts = None, 0.0
 
 
-def _call(fn, params, limiter: _RateLimiter, what: str, retries: int = 3):
-    """Invoke an Angel API method through the rate-limit gate. Returns None when the
-    minute/hour budget is exhausted (caller falls back to Yahoo) or all retries fail;
-    retries with exponential backoff when Angel reports the access rate was exceeded."""
-    for attempt in range(retries):
-        if not limiter.acquire():
-            log.warning("angel %s over minute/hour budget — falling back", what)
-            return None
-        try:
-            resp = fn(params)
-        except Exception as exc:
-            # A blown hourly/minute quota comes back as a non-JSON body the SDK fails to
-            # parse — i.e. as an exception, not a status dict. Retrying in 1-2s cannot help
-            # (the budget is time-based), and sleeping here is exactly what stacked into the
-            # multi-second page hangs. Fast-fail so the caller falls back immediately.
-            if _rate_limited(str(exc)):
-                log.warning("angel %s rate-limited — falling back (no retry)", what)
-                return None
-            if attempt == retries - 1:
-                raise
-            log.warning("angel %s exception (retry %d): %s", what, attempt + 1, exc)
-            time.sleep(2 ** attempt)
-            continue
-        if isinstance(resp, dict) and not resp.get("status") and _rate_limited(str(resp.get("message"))):
-            log.warning("angel %s rate-limited (retry %d)", what, attempt + 1)
-            time.sleep(2 ** attempt)
-            continue
-        return resp
+def _call(fn, params, kind: str, what: str):
+    """Invoke an Angel method through the account pool. `fn` is called as fn(smart, params);
+    `kind` is "quote" or "candle" and selects which per-account limiter gates the call.
+
+    The starting account is round-robined so load spreads across accounts; then it fails
+    over — an account that is over budget, rate-limited, or unusable is skipped and the next
+    is tried. Returns None only when every account is exhausted (caller falls back to Yahoo).
+    """
+    if not _ACCOUNTS:
+        return None
+    n = len(_ACCOUNTS)
+    start = next(_rr) % n
+    for off in range(n):
+        acct = _ACCOUNTS[(start + off) % n]
+        resp = _call_account(acct, fn, params, kind, what)
+        if resp is not _OVER_BUDGET:
+            return resp
+    log.warning("angel %s: all accounts over budget/unavailable — falling back", what)
     return None
+
+
+def _call_account(acct: "_Account", fn, params, kind: str, what: str):
+    """Run one call on one account. Returns the response, or the _OVER_BUDGET sentinel to
+    tell the pool to move on to the next account. Self-heals an expired/invalidated token
+    once in place (the daily reset, or a token invalidated by a login elsewhere)."""
+    limiter = acct.quote_limiter if kind == "quote" else acct.candle_limiter
+    for attempt in range(2):  # a second pass only to re-auth after an auth error
+        if not limiter.acquire():
+            log.warning("angel %s over minute/hour budget [%s] — trying next account", what, acct.name)
+            return _OVER_BUDGET
+        try:
+            smart = _ensure_session(acct)
+        except Exception as exc:
+            log.warning("angel %s login failed [%s]: %s — trying next account", what, acct.name, exc)
+            return _OVER_BUDGET
+        try:
+            resp = fn(smart, params)
+        except Exception as exc:
+            # A blown quota can arrive as a non-JSON body the SDK fails to parse — i.e. an
+            # exception. Retrying can't beat a time-based budget; hand off to the next account.
+            if _rate_limited(str(exc)):
+                log.warning("angel %s rate-limited [%s] — trying next account", what, acct.name)
+            else:
+                log.warning("angel %s exception [%s]: %s — trying next account", what, acct.name, exc)
+            return _OVER_BUDGET
+        if isinstance(resp, dict) and not resp.get("status"):
+            if _rate_limited(str(resp.get("message"))):
+                log.warning("angel %s rate-limited [%s] — trying next account", what, acct.name)
+                return _OVER_BUDGET
+            if _is_auth_error(resp) and attempt == 0:
+                log.warning("angel %s auth error [%s] — re-authenticating and retrying", what, acct.name)
+                _invalidate_session(acct)
+                continue
+        return resp
+    return _OVER_BUDGET
 _nse: dict[str, str] = {}   # bare symbol -> token (NSE cash)
 _bse: dict[str, str] = {}   # bare symbol -> token (BSE cash)
 _maps_loaded = False
 
 
 def is_enabled() -> bool:
-    return settings.angel_enabled
+    return bool(_ACCOUNTS)
 
 
 # ── symbol/token master ────────────────────────────────────────────
@@ -194,53 +250,64 @@ def _token_for(symbol: str, exchange: str) -> tuple[str, str] | None:
 
 
 # ── session ────────────────────────────────────────────────────────
-def _ensure_session():
-    """Return a logged-in SmartConnect, (re)creating the session if missing/stale."""
-    global _smart, _session_ts
-    with _lock:
-        if _smart is not None and (time.time() - _session_ts) < _SESSION_MAX_AGE:
-            return _smart
+def _ensure_session(acct: "_Account | None" = None):
+    """Return a logged-in SmartConnect for `acct`, (re)creating it if missing/stale.
+    Defaults to the primary account — single-account callers and the ORB feed use it."""
+    acct = acct or (_ACCOUNTS[0] if _ACCOUNTS else None)
+    if acct is None:
+        raise RuntimeError("Angel is not configured")
+    with acct.lock:
+        if acct.smart is not None and (time.time() - acct.session_ts) < _SESSION_MAX_AGE:
+            return acct.smart
         import pyotp
         from SmartApi import SmartConnect
 
-        smart = SmartConnect(api_key=settings.angel_api_key)
-        totp = pyotp.TOTP(settings.angel_totp_secret).now()
-        resp = smart.generateSession(settings.angel_client_id, settings.angel_pin, totp)
+        smart = SmartConnect(api_key=acct.api_key)
+        totp = pyotp.TOTP(acct.totp_secret).now()
+        resp = smart.generateSession(acct.client_id, acct.pin, totp)
         if not resp.get("status"):
-            raise RuntimeError(f"Angel login failed: {resp.get('message')}")
-        _smart, _session_ts = smart, time.time()
-        log.info("angel session established")
-        return _smart
+            raise RuntimeError(f"Angel login failed [{acct.name}]: {resp.get('message')}")
+        acct.smart, acct.session_ts = smart, time.time()
+        log.info("angel session established [%s]", acct.name)
+        return acct.smart
 
 
 def is_ready() -> bool:
+    """True if at least one configured account can authenticate."""
     if not is_enabled():
         return False
-    try:
-        _ensure_session()
-        return True
-    except Exception as exc:
-        log.warning("angel not ready: %s", exc)
-        return False
+    for acct in _ACCOUNTS:
+        try:
+            _ensure_session(acct)
+            return True
+        except Exception as exc:
+            log.warning("angel account [%s] not ready: %s", acct.name, exc)
+    return False
 
 
 def status() -> dict:
-    ok = False
-    err = None
-    if is_enabled():
+    """Per-account auth status, plus the original top-level shape the BrokerPill reads
+    (authenticated = any account is logged in)."""
+    accounts = []
+    any_ok = False
+    for acct in _ACCOUNTS:
+        ok, err = False, None
         try:
-            _ensure_session()
-            ok = True
+            _ensure_session(acct)
+            ok = any_ok = True
         except Exception as exc:
             err = str(exc)
-    return {"enabled": is_enabled(), "authenticated": ok, "error": err}
+        accounts.append({"name": acct.name, "authenticated": ok, "error": err})
+    first_err = next((a["error"] for a in accounts if a["error"]), None)
+    return {"enabled": is_enabled(), "authenticated": any_ok, "error": first_err,
+            "accounts": accounts}
 
 
 # ── quotes ─────────────────────────────────────────────────────────
 def _market_data(mode: str, symbols: list[str], exchanges: dict[str, str]) -> dict[str, dict]:
     """Call getMarketData for the given symbols and return {our_symbol: fetched_row}.
-    Groups tokens by exchange and batches to Angel's 50-instrument limit."""
-    smart = _ensure_session()
+    Groups tokens by exchange and batches to Angel's 50-instrument limit. The account pool
+    (in _call) handles session choice, rate-limit failover and auth self-heal."""
     # resolve tokens; keep reverse maps to translate the response back to our symbols
     by_exchange: dict[str, list[str]] = {"NSE": [], "BSE": []}
     tok_to_sym: dict[tuple[str, str], str] = {}
@@ -253,12 +320,8 @@ def _market_data(mode: str, symbols: list[str], exchanges: dict[str, str]) -> di
         tok_to_sym[(ex, tok)] = s
 
     def _fetch(batch, ex):
-        try:
-            return _call(lambda p: smart.getMarketData(p[0], p[1]), (mode, {ex: batch}),
-                         _quote_limiter, "getMarketData")
-        except Exception as exc:
-            log.warning("angel getMarketData error: %s", exc)
-            return None
+        return _call(lambda smart, p: smart.getMarketData(p[0], p[1]), (mode, {ex: batch}),
+                     "quote", "getMarketData")
 
     out: dict[str, dict] = {}
     # batch across a flat list but keep exchange grouping per request
@@ -268,18 +331,7 @@ def _market_data(mode: str, symbols: list[str], exchanges: dict[str, str]) -> di
             if not batch:
                 continue
             resp = _fetch(batch, ex)
-            # self-heal once: an expired/invalidated token re-authenticates and retries.
-            # Covers the daily token reset and a token invalidated by a login elsewhere.
-            if _is_auth_error(resp):
-                log.warning("angel getMarketData: %s — re-authenticating and retrying", resp.get("message"))
-                _invalidate_session()
-                try:
-                    smart = _ensure_session()
-                except Exception as exc:
-                    log.warning("angel re-auth failed: %s", exc)
-                    continue
-                resp = _fetch(batch, ex)
-            if not resp:  # over budget or failed — leave these for the fallback
+            if not resp:  # every account over budget or failed — leave these for the fallback
                 continue
             if not resp.get("status"):
                 log.warning("angel getMarketData: %s", resp.get("message"))
@@ -321,16 +373,56 @@ def quote_details(symbols: list[str], exchanges: dict[str, str] | None = None) -
     return out
 
 
+#: A quote whose last exchange trade is older than this is not a live price. Long enough
+#: for the longest Indian market-holiday runs, short enough to catch a frozen feed.
+_QUOTE_MAX_AGE_DAYS = 7
+
+
+def _is_stale_quote(row: dict, now=None, max_age_days: int = _QUOTE_MAX_AGE_DAYS) -> bool:
+    """True when a FULL-mode row's last trade time is older than `max_age_days`.
+
+    Angel will happily serve a frozen instrument's last price as the LTP. VENUSREM's NSE
+    record stopped updating on 12-Jun-2026 and kept returning Rs 1,797.50 for three months
+    while the stock traded near Rs 1,582 — a 13.6% overstatement (Rs 48,658 across the
+    book) that surfaced as "inflated" unrealized P&L. A row with no timestamp is accepted:
+    absence of the field is not evidence of staleness.
+    """
+    from datetime import datetime
+
+    raw = row.get("exchTradeTime")
+    if not raw:
+        return False
+    try:
+        traded = datetime.strptime(str(raw), "%d-%b-%Y %H:%M:%S")
+    except ValueError:
+        return False
+    return ((now or datetime.now()) - traded).days > max_age_days
+
+
 def get_quotes(symbols: list[str], exchanges: dict[str, str] | None = None) -> dict[str, float]:
-    """{symbol: last_price} — LTP mode is lighter than FULL."""
+    """{symbol: last_price}, omitting any symbol whose quote is stale.
+
+    Uses FULL mode rather than LTP because only FULL carries the last-trade timestamp; it is
+    the same single call per 50-instrument batch. Omitted symbols fall through to the next
+    provider in the composite (Yahoo), which is the point.
+    """
     if not symbols or not is_ready():
         return {}
     try:
-        rows = _market_data("LTP", symbols, exchanges or {})
+        rows = _market_data("FULL", symbols, exchanges or {})
     except Exception as exc:
         log.warning("angel get_quotes failed: %s", exc)
         return {}
-    return {s: round(r["ltp"], 2) for s, r in rows.items() if r.get("ltp") is not None}
+    out: dict[str, float] = {}
+    for s, r in rows.items():
+        if r.get("ltp") is None:
+            continue
+        if _is_stale_quote(r):
+            log.warning("angel quote for %s is stale (last trade %s) — deferring to fallback",
+                        s, r.get("exchTradeTime"))
+            continue
+        out[s] = round(r["ltp"], 2)
+    return out
 
 
 # ── historical ─────────────────────────────────────────────────────
@@ -358,13 +450,7 @@ def get_history(symbol: str, from_date: str | None = None, interval: str = "1d",
         "todate": f"{date.today().isoformat()} 15:30",
     }
     try:
-        smart = _ensure_session()
-        resp = _call(smart.getCandleData, params, _candle_limiter, "getCandleData")
-        # self-heal once on an expired/invalidated token (see _market_data)
-        if _is_auth_error(resp):
-            log.warning("angel getCandleData: %s — re-authenticating and retrying", resp.get("message"))
-            _invalidate_session()
-            resp = _call(_ensure_session().getCandleData, params, _candle_limiter, "getCandleData")
+        resp = _call(lambda smart, p: smart.getCandleData(p), params, "candle", "getCandleData")
     except Exception as exc:
         log.warning("angel getCandleData error for %s: %s", symbol, exc)
         return None
@@ -414,14 +500,7 @@ def get_candles(token: str, exchange: str, interval: str, from_str: str,
     params = {"exchange": exchange, "symboltoken": str(token), "interval": ivl,
               "fromdate": from_str, "todate": to_str}
     try:
-        smart = _ensure_session()
-        resp = _call(smart.getCandleData, params, _candle_limiter, "getCandleData")
-        if _is_auth_error(resp):
-            log.warning("angel getCandleData: %s — re-authenticating and retrying",
-                        resp.get("message"))
-            _invalidate_session()
-            resp = _call(_ensure_session().getCandleData, params, _candle_limiter,
-                         "getCandleData")
+        resp = _call(lambda smart, p: smart.getCandleData(p), params, "candle", "getCandleData")
     except Exception as exc:
         log.warning("angel getCandleData error for token %s: %s", token, exc)
         return None
