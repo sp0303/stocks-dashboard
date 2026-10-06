@@ -19,6 +19,7 @@ from app.config import settings
 from app.services.market_data import _levels, _rsi  # reuse the validated helpers
 from app.services import screener_fundamentals  # value/quality (live-only, not backtested)
 from app.services import screener_plan, screener_setups  # Phase 2/3: setup label + plan
+from app.services import screener_factors  # Phase 1: the validated ranking composite
 
 DAILY_COLL = "orb_candles_1d"
 _KPI_PATH = Path(__file__).parent.parent / "data" / "nifty500_kpis.json"
@@ -45,9 +46,10 @@ def _pct(a, b):
 
 
 def score_for(w1, m1, rel, rsi) -> float:
-    """The ranking score, in one place so the live screen and the validation backtest
-    can never drift apart. Momentum is weighted toward the recent week, relative strength
-    rewards leading the sector, and RSI nudges toward healthy (not stretched) trends."""
+    """RETIRED — no longer ranks the live screen. Kept only so the Phase-0 backtest
+    (scripts/screener_backtest.py) can still reproduce its finding: 75% of this weight is
+    1-week momentum, which mean-reverts, and the forward test confirmed it lagged the market
+    (16 Sep – 6 Oct 2026). The live rank is `screener_factors.Composite` (see compute())."""
     score = 0.0
     if w1 is not None:
         score += 0.45 * w1
@@ -178,13 +180,20 @@ def compute() -> dict:
             sector_w1.setdefault(sec, []).append(mtr["w1"])
     sector_w1_avg = {s: sum(v) / len(v) for s, v in sector_w1.items() if v}
 
+    # Rank = the Phase-1 composite (z-scored 3/6-month skip momentum, nearness to the 52-week
+    # high, momentum quality, trend persistence, room to travel, volatility contraction),
+    # cross-sectional over today's universe. Forward-tested out of sample against the old
+    # 1-week score: beat the market at 3/5/7/10 sessions where the old score lagged it.
+    composite = screener_factors.Composite().score_universe(
+        {tk: screener_factors.raw_factors(daily[tk]) for tk in metrics_by_tk})
+
     stocks = []
     for tk, mtr in metrics_by_tk.items():
         k = kpis[tk]
         sec = k.get("industry", "Other")
         w1, m1, rsi = mtr.get("w1"), mtr.get("m1"), mtr.get("rsi")
         rel = (w1 - sector_w1_avg[sec]) if (w1 is not None and sec in sector_w1_avg) else None
-        score = score_for(w1, m1, rel, rsi)
+        score = composite.get(tk)
         rows_tk = daily.get(tk)
         # Phase 2/3: a labelled setup + a capital-independent trade plan (levels only).
         # Context, not a signal — the label carries its own fragility flag.

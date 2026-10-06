@@ -229,7 +229,7 @@ function Row({ s, expanded, news, onToggle }) {
         <td className={pctCls(s.rel_strength)}>{s.rel_strength == null ? '—' : `${s.rel_strength > 0 ? '+' : ''}${s.rel_strength.toFixed(1)}`}</td>
         <td className={pctCls(s.from_52w_high)}>{s.from_52w_high == null ? '—' : `${s.from_52w_high.toFixed(1)}%`}</td>
         <td>{fmtVol(s.volume)}</td>
-        <td className="scr-score">{s.score == null ? '—' : s.score.toFixed(1)}</td>
+        <td className="scr-score">{s.score == null ? '—' : s.score.toFixed(2)}</td>
         <td>
           {(() => { const b = setupBadge(s.setup); return (
             <span className={`scr-setup ${b.cls} ${s.plan?.setup_fragile ? 'fragile' : ''}`}
