@@ -106,3 +106,24 @@ def test_save_is_idempotent_per_date():
     FW.save_snapshot(db, {"_id": "2025-03-01", "as_of": "2025-03-01", "stocks": [{"x": 1}]})
     snaps = FW.load_snapshots(db)
     assert len(snaps) == 1 and snaps[0]["stocks"] == [{"x": 1}]     # overwrote, not duplicated
+
+
+def test_save_snapshot_stringifies_horizon_keys_and_report_reads_them():
+    """Regression: int horizon keys made every Mongo save raise bson InvalidDocument."""
+    from app.services import screener_forward as FW
+
+    class Coll:
+        def replace_one(self, flt, doc, upsert):
+            self.doc = doc
+
+    coll = Coll()
+    snap = {"_id": "2026-09-24", "as_of": "2026-09-24",
+            "stocks": [{"ticker": f"T{i}", "score": i, "setup": "No setup",
+                        "outcomes": {"ret": {3: i * 0.1}, "ret_net": {3: i * 0.1 - 0.3}, "mfe": 1, "mae": -1}}
+                       for i in range(10)]}
+    FW.save_snapshot({FW.SNAP_COLL: coll}, snap)
+    stored = coll.doc["stocks"][0]["outcomes"]
+    assert set(stored["ret"]) == {"3"} and set(stored["ret_net"]) == {"3"}
+    assert snap["stocks"][0]["outcomes"]["ret"] == {3: 0.0}          # caller's dict untouched
+    rep = FW.realized_report([coll.doc], horizon=3)
+    assert rep["pairs"] == 10 and rep["pooled_realized_ic"] == 1.0

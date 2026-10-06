@@ -126,9 +126,12 @@ def _save_forward_snapshot(data: dict) -> None:
         from datetime import datetime, timezone
 
         from app.services import screener_daily, screener_forward
-        as_of = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # File the snapshot under the close it was computed from, not the day it ran.
+        as_of = data.get("data_as_of") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         db = screener_daily._mongo()
-        screener_forward.save_snapshot(db, screener_forward.snapshot_from_compute(data, as_of))
+        snap = screener_forward.snapshot_from_compute(data, as_of)
+        snap["data_as_of"] = as_of
+        screener_forward.save_snapshot(db, snap)
     except Exception:
         log.exception("Phase 5 snapshot save failed (non-fatal)")
 

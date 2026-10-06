@@ -147,7 +147,8 @@ def realized_report(snapshots: list[dict], horizon: int = 10) -> dict:
             oc = st.get("outcomes")
             if not oc or st.get("score") is None:
                 continue
-            rn = oc.get("ret_net", {}).get(horizon)
+            net = oc.get("ret_net", {})
+            rn = net.get(horizon, net.get(str(horizon)))  # int in memory, str once stored
             if rn is None:
                 continue
             s_x.append(st["score"])
@@ -171,9 +172,18 @@ def realized_report(snapshots: list[dict], horizon: int = 10) -> dict:
 
 
 # ── thin Mongo persistence ────────────────────────────────────────
+def _mongo_safe(outcome: dict) -> dict:
+    """BSON keys must be strings; outcomes key returns by integer horizon in memory."""
+    return {k: ({str(h): v for h, v in val.items()} if isinstance(val, dict) else val)
+            for k, val in outcome.items()}
+
+
 def save_snapshot(db, snapshot: dict) -> None:
     """Upsert by _id=as_of, so re-running a scan on the same day overwrites, never duplicates."""
-    db[SNAP_COLL].replace_one({"_id": snapshot["_id"]}, snapshot, upsert=True)
+    doc = {**snapshot, "stocks": [
+        {**st, "outcomes": _mongo_safe(st["outcomes"])} if st.get("outcomes") else st
+        for st in snapshot.get("stocks", [])]}
+    db[SNAP_COLL].replace_one({"_id": doc["_id"]}, doc, upsert=True)
 
 
 def load_snapshots(db, limit: int = 400) -> list[dict]:

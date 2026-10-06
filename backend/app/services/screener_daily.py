@@ -10,6 +10,7 @@ The daily store is refreshed by the ORB backfill / daily top-up; this module onl
 from __future__ import annotations
 
 import json
+from collections import Counter
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -214,11 +215,17 @@ def compute() -> dict:
 
     stocks.sort(key=lambda s: (s["score"] is not None, s["score"] if s["score"] is not None else 0),
                 reverse=True)
+    # The close this screen is built from (the most common last daily row). The page and the
+    # Phase-5 snapshot must use THIS date — not "now" — or a morning scan of yesterday's
+    # data gets filed under today and the forward test measures from the wrong start.
+    last_dates = Counter(daily[tk][-1]["date"] for tk in metrics_by_tk if daily.get(tk))
+    data_as_of = last_dates.most_common(1)[0][0] if last_dates else None
     for i, s in enumerate(stocks, 1):
         s["rank"] = i
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "data_as_of": data_as_of,
         "count": len(stocks),
         "universe": len(universe),
         "stocks": stocks,
