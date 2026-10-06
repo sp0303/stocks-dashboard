@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from app.config import settings

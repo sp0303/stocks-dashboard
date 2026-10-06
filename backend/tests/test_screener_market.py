@@ -36,3 +36,69 @@ def test_event_badges_window():
                                 ("2026-10-12", "OTHER", None)])
     assert [x["kind"] for x in b] == ["RESULTS", "DIVIDEND"]
     assert b[1]["amount"] == 5.0
+
+
+# ── integration: compute()'s _market_context against a fake Mongo ──
+from datetime import date as _date, timedelta as _td
+
+from app.services import screener_daily as SD
+
+
+class _Coll:
+    def __init__(self, docs):
+        self.docs = docs
+
+    @staticmethod
+    def _match(doc, q):
+        for k, cond in q.items():
+            v = doc.get(k)
+            if isinstance(cond, dict):
+                if "$in" in cond and v not in cond["$in"]:
+                    return False
+                if "$gt" in cond and not (v is not None and v > cond["$gt"]):
+                    return False
+                if "$lte" in cond and not (v is not None and v <= cond["$lte"]):
+                    return False
+            elif v != cond:
+                return False
+        return True
+
+    def find(self, q=None, proj=None):
+        return [d for d in self.docs if self._match(d, q or {})]
+
+    def find_one(self, q, proj=None):
+        r = self.find(q)
+        return r[0] if r else None
+
+
+def _days(n, end="2026-10-06"):
+    out, d = [], _date.fromisoformat(end)
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d.isoformat())
+        d -= _td(days=1)
+    return out[::-1]
+
+
+def test_market_context_end_to_end_without_official_calendar():
+    ds = _days(230)
+    idx = [{"date": d, "c": int((100 + i * 0.3) * 100)} for i, d in enumerate(ds)]
+    db = {
+        SD.DAILY_COLL: _Coll([{"_id": "NIFTYBEES", "rows": idx},
+                              {"_id": "INDIA VIX", "rows": [{"date": ds[-1], "c": 1250}]}]),
+        "market_fno_expiries": _Coll([]),
+        "market_results_calendar": _Coll([{"symbol": "AAA", "meeting_date": "2026-10-15"}]),
+        "market_corporate_actions": _Coll([{"symbol": "HEGAM", "ex_date": "2026-10-09",
+                                            "type": "DIVIDEND", "amount_per_share": 4.0}]),
+    }
+    metrics = {"AAA": {"price": 110, "dma50": 100}, "HEG": {"price": 90, "dma50": 100}, "BBB": {"price": 120, "dma50": 100}}
+    stocks = [{"ticker": t} for t in metrics]
+    ctx = SD._market_context(db, ds[-1], metrics, stocks)
+    assert ctx["regime"]["state"] == "on" and abs(ctx["regime"]["breadth"] - 2 / 3) < 1e-9
+    assert ctx["regime"]["vix"] == 12.5
+    assert ctx["expiry"]["next_expiry"] == "2026-10-27"          # last Tuesday of Oct 2026
+    assert ctx["expiry"]["sessions_to_expiry"] == 15
+    ev = {s["ticker"]: s["events"] for s in stocks}
+    assert ev["AAA"][0]["kind"] == "RESULTS"
+    assert ev["HEG"][0]["kind"] == "DIVIDEND"                    # HEG → HEGAM alias
+    assert ev["BBB"] == [] and ctx["events_window"]["stocks_with_events"] == 2
