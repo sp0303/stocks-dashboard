@@ -211,6 +211,60 @@ function BriefPanel({ s, news }) {
   )
 }
 
+// Market context from the API: regime (trend + breadth + VIX) and the monthly F&O expiry cycle.
+// Evidence-based guidance (5y study), shown as context — never an order.
+const REGIME_TEXT = {
+  on: { t: 'Risk-on', hint: 'Trend up with broad participation — the ranking has historically worked here.' },
+  caution: { t: 'Caution', hint: 'Mixed signals — the edge was weaker; consider half size.' },
+  off: { t: 'Risk-off', hint: 'Downtrend or volatile rebound — momentum leaders historically lagged; consider waiting.' },
+}
+
+function MarketBanner({ market, asOf }) {
+  if (!market?.regime) return null
+  const r = market.regime
+  const x = market.expiry || {}
+  const t = REGIME_TEXT[r.state] || REGIME_TEXT.caution
+  const pct = (v) => (v == null ? '—' : `${(v * 100).toFixed(0)}%`)
+  return (
+    <div className={`scr-mkt ${r.state}`} role="status">
+      <div className="scr-mkt-main">
+        <span className={`scr-mkt-pill ${r.state}`}>{t.t}</span>
+        <span className="scr-mkt-size">suggested size ×{r.size_multiplier}</span>
+        <span className="scr-mkt-hint">{t.hint}</span>
+      </div>
+      <div className="scr-mkt-facts">
+        <span>Breadth {pct(r.breadth)} above 50-DMA</span>
+        <span>VIX {r.vix == null ? '—' : r.vix.toFixed(1)}</span>
+        <span>NIFTY vs 50/200-DMA: {r.index_close && r.dma50 ? (r.index_close > r.dma50 ? 'above' : 'below') : '—'} / {r.index_close && r.dma200 ? (r.index_close > r.dma200 ? 'above' : 'below') : '—'}</span>
+        {x.next_expiry && (
+          <span className={x.in_entry_window ? 'scr-mkt-window' : ''}>
+            F&O expiry {new Date(x.next_expiry).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+            {' '}· {x.sessions_to_expiry} session{x.sessions_to_expiry === 1 ? '' : 's'} away · {x.phase}
+          </span>
+        )}
+        {asOf && <span>data: close of {new Date(asOf).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>}
+      </div>
+      {r.reasons?.length > 0 && <div className="scr-mkt-why">{r.reasons.join(' · ')}</div>}
+    </div>
+  )
+}
+
+const EVENT_LABEL = { RESULTS: 'Results', DIVIDEND: 'Ex-div', BONUS: 'Bonus', SPLIT: 'Split', RIGHTS: 'Rights', BUYBACK: 'Buyback', DEMERGER: 'Demerger' }
+
+function EventChips({ events }) {
+  if (!events?.length) return null
+  return (
+    <div className="scr-events">
+      {events.map((e, i) => (
+        <span key={i} className={`scr-event ${e.kind === 'RESULTS' ? 'res' : ''}`}
+          title={e.kind === 'RESULTS' ? 'Results inside a typical swing hold: a ±4% one-day move is common' : 'Corporate action ex-date inside the hold'}>
+          {EVENT_LABEL[e.kind] || e.kind}{e.amount ? ` ₹${e.amount}` : ''} {new Date(e.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function Row({ s, expanded, news, onToggle }) {
   return (
     <>
@@ -219,6 +273,7 @@ function Row({ s, expanded, news, onToggle }) {
         <td className="l">
           <div className="scr-tk">{s.ticker}</div>
           <div className="scr-nm">{s.name}</div>
+          <EventChips events={s.events} />
         </td>
         <td className="l"><span className="scr-sec-pill">{SECTOR_LABELS[s.sector] || s.sector}</span></td>
         <td>₹{s.price?.toLocaleString('en-IN')}</td>
@@ -311,9 +366,9 @@ export default function Screener() {
         <div>
           <h1 className="scr-title">Swing Screener</h1>
           <p className="scr-sub">
-            Nifty 500 · momentum · relative strength · RSI(14) · FY26 fundamentals
+            Nifty 500 · ranked by the validated composite (3/6-month momentum, 52-week high, trend quality) · FY26 fundamentals
             {data?.count ? ` · ${data.count} stocks` : ''}
-            {data?.generated_at && ` · updated ${new Date(data.generated_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}`}
+            {data?.data_as_of && ` · close of ${new Date(data.data_as_of).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`}
           </p>
         </div>
         <button className="theme-toggle" onClick={toggleTheme} title={isDark ? 'Light mode' : 'Dark mode'}>
@@ -327,6 +382,8 @@ export default function Screener() {
         and sets no price targets. Momentum and RSI are computed from daily closes; relative strength is
         a stock's 1-week move minus its sector average. Always do your own due diligence.
       </div>
+
+      {!loading && !error && <MarketBanner market={data?.market} asOf={data?.data_as_of} />}
 
       {loading ? <Loading what="screener" /> : error ? <ErrorBox error={error} /> : (() => {
         const allStocks = data?.stocks || []

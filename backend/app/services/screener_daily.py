@@ -20,6 +20,7 @@ from app.services.market_data import _levels, _rsi  # reuse the validated helper
 from app.services import screener_fundamentals  # value/quality (live-only, not backtested)
 from app.services import screener_plan, screener_setups  # Phase 2/3: setup label + plan
 from app.services import screener_factors  # Phase 1: the validated ranking composite
+from app.services import screener_market  # regime, expiry phase, event badges
 
 DAILY_COLL = "orb_candles_1d"
 _KPI_PATH = Path(__file__).parent.parent / "data" / "nifty500_kpis.json"
@@ -232,12 +233,86 @@ def compute() -> dict:
     for i, s in enumerate(stocks, 1):
         s["rank"] = i
 
+    market = None
+    try:
+        market = _market_context(db, data_as_of, metrics_by_tk, stocks)
+    except Exception:                       # context is advisory; never break the screen
+        import logging
+        logging.getLogger("screener").exception("market context failed")
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "data_as_of": data_as_of,
+        "market": market,
         "count": len(stocks),
         "universe": len(universe),
         "stocks": stocks,
         "sectors": {s: _round(v) for s, v in sector_w1_avg.items()},
         "fundamentals_basis": "value/quality from FY26 snapshot — live context, not backtested",
     }
+
+
+INDEX_PROXY = "NIFTYBEES"        # NIFTY 50 ETF: 5y of daily history in the store
+VIX_SYMBOL = "INDIA VIX"
+EVENT_ALIASES = {"HEG": "HEGAM"}  # NSE lists HEG's history under HEGAM
+
+
+def _rule_expiries(trading_dates: list[str], months_ahead: int = 3) -> list[str]:
+    """Monthly F&O expiry by rule when the official calendar is not loaded: last Thursday
+    until Aug 2025, last Tuesday from Sep 2025; a known holiday moves it a session earlier."""
+    known = set(trading_dates)
+    today = date.fromisoformat(trading_dates[-1])
+    out, y, m = [], today.year - 1, 1
+    for _ in range(12 + 12 + months_ahead + 1):
+        wd = 3 if (y, m) < (2025, 9) else 1
+        d = date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1)
+        while d.weekday() != wd:
+            d -= timedelta(days=1)
+        iso = d.isoformat()
+        if iso <= trading_dates[-1]:
+            while iso not in known and iso > trading_dates[0]:
+                d -= timedelta(days=1)
+                iso = d.isoformat()
+        out.append(iso)
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return sorted(set(out))
+
+
+def _market_context(db, as_of, metrics_by_tk, stocks) -> dict:
+    idx = db[DAILY_COLL].find_one({"_id": INDEX_PROXY}, {"rows": 1}) or {}
+    rows = [r for r in idx.get("rows", []) if r["date"] <= as_of]
+    closes = [r["c"] / 100 for r in rows]
+    vx = db[DAILY_COLL].find_one({"_id": VIX_SYMBOL}, {"rows": {"$slice": -1}}) or {}
+    vix = (vx.get("rows") or [{}])[-1].get("c")
+    vix = vix / 100 if vix and (vx["rows"][-1]["date"] == as_of) else None
+    above = [m["price"] > m["dma50"] for m in metrics_by_tk.values() if m.get("price") and m.get("dma50")]
+    breadth = sum(above) / len(above) if above else None
+
+    trading = [r["date"] for r in rows]
+    official = [x["expiry_date"] for x in db["market_fno_expiries"].find({"kind": "MONTHLY_STOCK"}, {"expiry_date": 1})]
+    expiries = sorted(set(official)) if official else _rule_expiries(trading)
+    ctx = {
+        "regime": screener_market.regime(closes, breadth, vix),
+        "expiry": {**screener_market.expiry_phase(trading, expiries, as_of),
+                   "calendar": "official NSE" if official else "rule (last Thu → last Tue from Sep 2025)"},
+        "regime_basis": f"{INDEX_PROXY} trend, breadth over the screen, {VIX_SYMBOL}",
+    }
+
+    # event badges over the next ~14 sessions (≈ 20 calendar days)
+    horizon = (date.fromisoformat(as_of) + timedelta(days=20)).isoformat()
+    syms = {s["ticker"]: EVENT_ALIASES.get(s["ticker"], s["ticker"]) for s in stocks}
+    res, act = {}, {}
+    for r in db["market_results_calendar"].find(
+            {"symbol": {"$in": list(syms.values())}, "meeting_date": {"$gt": as_of, "$lte": horizon}},
+            {"symbol": 1, "meeting_date": 1}):
+        res.setdefault(r["symbol"], []).append(r["meeting_date"])
+    for r in db["market_corporate_actions"].find(
+            {"symbol": {"$in": list(syms.values())}, "ex_date": {"$gt": as_of, "$lte": horizon}},
+            {"symbol": 1, "ex_date": 1, "type": 1, "amount_per_share": 1}):
+        act.setdefault(r["symbol"], []).append((r["ex_date"], r.get("type"), r.get("amount_per_share")))
+    for s in stocks:
+        e = syms[s["ticker"]]
+        s["events"] = screener_market.event_badges(as_of, horizon, res.get(e, []), act.get(e, []))
+    ctx["events_window"] = {"from": as_of, "to": horizon,
+                            "stocks_with_events": sum(1 for s in stocks if s["events"])}
+    return ctx
