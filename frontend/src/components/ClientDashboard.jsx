@@ -231,7 +231,8 @@ function UploadBar({ client, onDone }) {
     try {
       const r = await api.uploadTradebook(client.id, file)
       const s = r.summary
-      setMsg({ ok: true, text: `Imported ${s.imported} trades (${s.duplicates} duplicates skipped, ${s.errors} errors).` })
+      const span = s.date_from ? ` File covers ${s.date_from} to ${s.date_to}.` : ''
+      setMsg({ ok: true, text: `Imported ${s.imported} trades (${s.duplicates} duplicates skipped, ${s.errors} errors).${span}` })
       onDone()
     } catch (e) {
       setMsg({ ok: false, text: e.message })

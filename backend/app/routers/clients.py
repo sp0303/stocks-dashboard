@@ -329,7 +329,17 @@ async def upload_tradebook(client_id: str, file: UploadFile = File(...), _: auth
     content = await file.read()
     fhash = ingestion.file_hash(content)
     if await store.upload_exists(client_id, fhash):
-        raise HTTPException(409, "this exact file was already uploaded")
+        # Say WHICH earlier upload this is and what it covered — the usual cause is picking
+        # an old export from Downloads instead of a fresh one, which leaves recent sells out
+        # and makes sold stocks look still held.
+        prev = next((u for u in await store.list_uploads(client_id) if u.get("file_hash") == fhash), {})
+        when = str(prev.get("uploaded_at") or "")[:10]
+        span = f" (trades {prev['date_from']} to {prev['date_to']})" if prev.get("date_from") else ""
+        raise HTTPException(
+            409,
+            f"this exact file was already uploaded{' on ' + when if when else ''}{span}. "
+            "Export a fresh tradebook from Zerodha Console covering the latest dates and upload that.",
+        )
 
     import io
 
@@ -372,6 +382,8 @@ async def upload_tradebook(client_id: str, file: UploadFile = File(...), _: auth
                 "imported": inserted,
                 "duplicates": dupes,
                 "errors": len(parsed.errors),
+                "date_from": parsed.date_from,
+                "date_to": parsed.date_to,
             },
         }
     }
