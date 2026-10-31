@@ -105,6 +105,14 @@ def _build_accounts() -> list["_Account"]:
 _ACCOUNTS: list[_Account] = _build_accounts()
 _rr = itertools.count()  # round-robin cursor: spreads calls across accounts
 
+# Both accounts call from the same server IP, and Angel throttles candles there even when
+# each account is under its own 3/s: the sequential 15:40 reconcile alternated accounts with
+# no pause and lost ~100 of ~220 symbols a day to "access rate" errors. One process-wide gate
+# keeps the combined candle rate under Angel's 3/s; the second account adds failover and
+# hourly headroom, not per-second burst.
+_CANDLE_GATE = _RateLimiter(0.40, per_min=150, per_hour=9000)
+_RATE_LIMIT_BACKOFF = 1.0  # seconds to wait before retrying a throttled account once
+
 
 def _rate_limited(msg: str) -> bool:
     m = (msg or "").lower()
@@ -154,8 +162,9 @@ def _call_account(acct: "_Account", fn, params, kind: str, what: str):
     tell the pool to move on to the next account. Self-heals an expired/invalidated token
     once in place (the daily reset, or a token invalidated by a login elsewhere)."""
     limiter = acct.quote_limiter if kind == "quote" else acct.candle_limiter
-    for attempt in range(2):  # a second pass only to re-auth after an auth error
-        if not limiter.acquire():
+    throttled = reauthed = False
+    for _ in range(3):  # extra passes only: re-auth once, back off once when throttled
+        if not limiter.acquire() or (kind == "candle" and not _CANDLE_GATE.acquire()):
             log.warning("angel %s over minute/hour budget [%s] — trying next account", what, acct.name)
             return _OVER_BUDGET
         try:
@@ -168,16 +177,22 @@ def _call_account(acct: "_Account", fn, params, kind: str, what: str):
         except Exception as exc:
             # A blown quota can arrive as a non-JSON body the SDK fails to parse — i.e. an
             # exception. Retrying can't beat a time-based budget; hand off to the next account.
-            if _rate_limited(str(exc)):
-                log.warning("angel %s rate-limited [%s] — trying next account", what, acct.name)
-            else:
+            if not _rate_limited(str(exc)):
                 log.warning("angel %s exception [%s]: %s — trying next account", what, acct.name, exc)
-            return _OVER_BUDGET
+                return _OVER_BUDGET
+            resp = {"status": False, "message": str(exc)}
         if isinstance(resp, dict) and not resp.get("status"):
             if _rate_limited(str(resp.get("message"))):
+                # Per-second throttling clears within a second; one paced retry here beats
+                # failing over to an account that shares the same IP-level throttle.
+                if not throttled:
+                    throttled = True
+                    time.sleep(_RATE_LIMIT_BACKOFF)
+                    continue
                 log.warning("angel %s rate-limited [%s] — trying next account", what, acct.name)
                 return _OVER_BUDGET
-            if _is_auth_error(resp) and attempt == 0:
+            if _is_auth_error(resp) and not reauthed:
+                reauthed = True
                 log.warning("angel %s auth error [%s] — re-authenticating and retrying", what, acct.name)
                 _invalidate_session(acct)
                 continue
