@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily safety-net run of pi-portfolio-recompute (normally triggered by pi-eod-sync OnSuccess)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 20:15:00 Asia/Kolkata
+Persistent=true
+Unit=pi-portfolio-recompute.service
+
+[Install]
+WantedBy=timers.target

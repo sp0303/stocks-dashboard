@@ -1,0 +1,21 @@
+[Unit]
+Description=Portfolio Intelligence v2 EOD sync (v1 Mongo orb_candles_1d/benchmarks -> market.*)
+After=network-online.target postgresql.service
+Wants=network-online.target
+# On success, recompute portfolio.* from the fresh prices (systemd >= 249).
+OnSuccess=pi-portfolio-recompute.service
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/var/www/portfolio-v2/apps/workers
+EnvironmentFile=/etc/pi/api.env
+# Optional overrides (e.g. the pi_worker DATABASE_URL, MONGODB_URL/MONGODB_DB); '-' = may be absent.
+EnvironmentFile=-/etc/pi/worker.env
+Environment=PYTHONPATH=/var/www/portfolio-v2/libs/pi_core:/var/www/portfolio-v2/apps/api:/var/www/portfolio-v2/apps/workers
+ExecStart=/var/www/portfolio-v2/.venv/bin/python -m pi_workers.eod_worker --sync-v1
+TimeoutStartSec=45min
+Nice=10
+MemoryMax=1G
+NoNewPrivileges=true
+PrivateTmp=true

@@ -1,0 +1,17 @@
+[Unit]
+Description=Portfolio Intelligence v2 Ingest Worker (Tradebook Parser)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=opc
+WorkingDirectory=/var/www/portfolio-v2/apps/workers
+EnvironmentFile=/etc/pi/worker.env
+ExecStart=/var/www/portfolio-v2/.venv/bin/python3 pi_workers/ingest_worker.py
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

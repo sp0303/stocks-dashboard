@@ -1,0 +1,17 @@
+[Unit]
+Description=Portfolio Intelligence v2 ORB Live Feed (NEVER restart between 08:45 and 15:30 IST)
+After=network.target
+
+[Service]
+Type=simple
+User=opc
+WorkingDirectory=/var/www/portfolio-v2/apps/workers
+EnvironmentFile=/etc/pi/worker.env
+ExecStart=/var/www/portfolio-v2/.venv/bin/python3 pi_workers/orb_feed.py
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

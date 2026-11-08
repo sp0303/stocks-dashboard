@@ -1,0 +1,20 @@
+[Unit]
+Description=Portfolio Intelligence v2 portfolio recompute (ledger.trades + market.eod_prices -> portfolio.*)
+After=network-online.target postgresql.service pi-eod-sync.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/var/www/portfolio-v2/apps/workers
+EnvironmentFile=/etc/pi/api.env
+# portfolio.* is writable only by the worker role (AGENTS §3.5): put the pi_worker
+# DATABASE_URL here; it overrides the API's read-only DSN from api.env.
+EnvironmentFile=-/etc/pi/worker.env
+Environment=PYTHONPATH=/var/www/portfolio-v2/libs/pi_core:/var/www/portfolio-v2/apps/api:/var/www/portfolio-v2/apps/workers
+ExecStart=/var/www/portfolio-v2/.venv/bin/python -m pi_workers.portfolio_worker --recompute-all
+TimeoutStartSec=30min
+Nice=10
+MemoryMax=1G
+NoNewPrivileges=true
+PrivateTmp=true

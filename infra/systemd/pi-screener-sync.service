@@ -1,0 +1,22 @@
+[Unit]
+Description=Portfolio Intelligence v2 screener sync (v1 daily screener -> research.screener_snapshots, read-only on v1)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/var/www/portfolio-v2/apps/workers
+EnvironmentFile=/etc/pi/api.env
+# DATABASE_URL (pi_worker), V1_SCREENER_URL (v1 GET /api/screener on loopback),
+# MONGODB_URL/MONGODB_DB (fallback: v1 screener_snapshots). '-' = may be absent.
+EnvironmentFile=-/etc/pi/worker.env
+Environment=PYTHONPATH=/var/www/portfolio-v2/libs/pi_core:/var/www/portfolio-v2/apps/api:/var/www/portfolio-v2/apps/workers
+ExecStart=/var/www/portfolio-v2/.venv/bin/python -m pi_workers.v1_sync_screener --source auto
+# exit 2 = refused (v1 screen warming/empty/undated): nothing written, not a unit failure storm
+SuccessExitStatus=2
+TimeoutStartSec=10min
+Nice=10
+MemoryMax=512M
+NoNewPrivileges=true
+PrivateTmp=true

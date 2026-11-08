@@ -1,0 +1,12 @@
+[Unit]
+Description=Run pi-ledger-sync every 15 minutes, Mon-Sat (IST). NOT enabled by default.
+
+[Timer]
+# Safe in market hours: it never restarts or touches the ORB process (AGENTS §10).
+OnCalendar=Mon..Sat *-*-* *:00/15:00 Asia/Kolkata
+Persistent=false
+RandomizedDelaySec=60
+Unit=pi-ledger-sync.service
+
+[Install]
+WantedBy=timers.target

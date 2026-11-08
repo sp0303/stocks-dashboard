@@ -1,0 +1,17 @@
+[Unit]
+Description=Portfolio Intelligence v2 API (FastAPI Modular Monolith)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=opc
+WorkingDirectory=/var/www/portfolio-v2/apps/api
+EnvironmentFile=/etc/pi/api.env
+ExecStart=/var/www/portfolio-v2/.venv/bin/uvicorn pi_api.main:app --host 127.0.0.1 --port 8200 --loop uvloop --http httptools --workers 2 --proxy-headers
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

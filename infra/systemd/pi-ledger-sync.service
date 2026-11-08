@@ -1,0 +1,24 @@
+[Unit]
+Description=Portfolio Intelligence v2 ledger resync (v1 Mongo trades/clients/CA/... -> core, ledger, research)
+After=network-online.target postgresql.service
+Wants=network-online.target
+# Does not touch the ORB feed (pi-orb-feed / v1 pm2 backend): Mongo reads + v2 Postgres writes only.
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/var/www/portfolio-v2
+EnvironmentFile=/etc/pi/api.env
+# worker.env (0600, owner-created): DATABASE_URL (pi_worker, used by the recompute),
+# LEDGER_SYNC_DSN (role with write on core/ledger/research/ops), MONGODB_URL, MONGODB_DB.
+EnvironmentFile=/etc/pi/worker.env
+Environment=PYTHONPATH=/var/www/portfolio-v2/libs/pi_core:/var/www/portfolio-v2/apps/api:/var/www/portfolio-v2/apps/workers
+# No --flag-orphans here: soft-flagging stays a manual, reviewed step.
+ExecStart=/var/www/portfolio-v2/.venv/bin/python scripts/sync_v1_ledger_to_v2.py --apply --recompute
+# exit 2 = another run held the lock (skipped), not a failure.
+SuccessExitStatus=2
+TimeoutStartSec=40min
+Nice=10
+MemoryMax=1G
+NoNewPrivileges=true
+PrivateTmp=true

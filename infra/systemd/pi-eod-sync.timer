@@ -1,0 +1,13 @@
+[Unit]
+Description=Run pi-eod-sync after the NSE close on weekdays (IST)
+
+[Timer]
+# v1's 1m->1d rollup lands some time after 15:30 IST; run twice, the sync is idempotent.
+OnCalendar=Mon..Fri *-*-* 16:45:00 Asia/Kolkata
+OnCalendar=Mon..Fri *-*-* 19:30:00 Asia/Kolkata
+Persistent=true
+RandomizedDelaySec=120
+Unit=pi-eod-sync.service
+
+[Install]
+WantedBy=timers.target

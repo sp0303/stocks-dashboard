@@ -1,0 +1,2 @@
+# apps/workers
+Background workers (quote_poller, portfolio_worker, eod_worker, ingest_worker, orb_feed, scheduler)

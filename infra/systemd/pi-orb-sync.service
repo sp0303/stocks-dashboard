@@ -1,0 +1,21 @@
+[Unit]
+Description=Portfolio Intelligence v2 ORB sync (read-only v1 Mongo -> v2 orb.*; no Angel login, safe in market hours)
+Documentation=file:///var/www/portfolio-v2/scripts/sync_v1_orb_to_v2.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/var/www/portfolio-v2
+EnvironmentFile=/etc/pi/api.env
+# Optional override: PG_DSN for a role with INSERT/UPDATE on orb.* (pi_worker), MONGODB_URL/MONGODB_DB for v1.
+EnvironmentFile=-/etc/pi/orb-sync.env
+ExecStart=/var/www/portfolio-v2/.venv/bin/python3 scripts/sync_v1_orb_to_v2.py --lookback-days 3
+TimeoutStartSec=120
+MemoryMax=512M
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
