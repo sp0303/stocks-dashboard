@@ -87,7 +87,7 @@ CREATE TABLE core.clients (
     legacy_id   TEXT UNIQUE,
     manager_id  UUID NOT NULL REFERENCES core.managers,
     name        TEXT NOT NULL,
-    client_code TEXT,                                   -- broker client id, e.g. QPJ806
+    client_code TEXT,                                   -- broker client id, e.g. AB1234
     broker      TEXT CHECK (broker IN ('ZERODHA','UPSTOX','ANGEL','OTHER')),
     status      TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()

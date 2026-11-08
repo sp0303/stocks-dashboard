@@ -62,7 +62,7 @@ A figure that appears in more than one place is computed by **one function**, an
 
 ## R6 — Price integrity
 
-1. Prices are keyed **`(symbol, exchange)`**. A BSE holding is never valued at the NSE price (v1's quote cache was keyed by symbol alone, so whichever exchange loaded first priced every holding of that symbol; illiquid listings can differ materially).
+1. Prices are keyed **`(symbol, exchange)`**. A lot is valued at the close of **its own exchange** whenever that exchange has a usable close (v1's quote cache was keyed by symbol alone, so whichever exchange loaded first priced every holding of that symbol; illiquid listings can differ materially). **Amended 2026-11-08 ([ADR-0009](../decisions/0009-value-lots-at-the-other-exchange-close-when-own-has-none.md)):** when the lot's own exchange has *no* usable close, the same symbol's close on the other exchange is used instead of leaving the lot unvalued. It is one close from one place (never an average), obeys the same freshness/carry limit (rule 3), and the lot is **flagged** (`priced_on` in the API, `priced_on_other_exchange` + a warning in the overview). A lot with no usable close on either exchange stays unpriced under rule 4.
 2. Every quote and close carries `as_of` and `source`.
 3. A quote whose last exchange trade is older than the freshness limit is **rejected at ingest**, not served (VENUSREM's NSE record stopped 12 Jun 2026 and kept returning ₹1,797.50: +13.6 %, ₹48,658 across the book).
 4. A position with no usable price is excluded from **both cost and market value** and listed in a warning. Excluding only one side turns a missing price into a fake loss.
