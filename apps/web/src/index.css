@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --canvas: #f8fafc;
+  --paper: #ffffff;
+  --ink: #0f172a;
+  --subtle: #64748b;
+  --hairline: #e2e8f0;
+  --accent: #0f172a;
+  --positive: #16a34a;
+  --negative: #dc2626;
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.dark {
+  --canvas: #090d16;
+  --paper: #111827;
+  --ink: #f8fafc;
+  --subtle: #94a3b8;
+  --hairline: #1f2937;
+  --accent: #38bdf8;
+  --positive: #22c55e;
+  --negative: #ef4444;
+}
+
+body {
+  background-color: var(--canvas);
+  color: var(--ink);
+  min-height: 100vh;
+}
