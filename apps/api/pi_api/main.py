@@ -13,6 +13,7 @@ from pi_api.core.db import close_db_pool, init_db_pool
 from pi_api.modules.admin.router import router as admin_router
 from pi_api.modules.analytics.router import router as analytics_router
 from pi_api.modules.auth.router import router as auth_router
+from pi_api.modules.heatmap.router import router as heatmap_router
 from pi_api.modules.ledger.router import router as ledger_router
 from pi_api.modules.market.router import router as market_router
 from pi_api.modules.ops.router import router as ops_router
@@ -63,6 +64,7 @@ app.include_router(ops_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
 app.include_router(portfolio_router, prefix="/api/v1")
+app.include_router(heatmap_router, prefix="/api/v1")
 app.include_router(analytics_router, prefix="/api/v1")
 app.include_router(ledger_router, prefix="/api/v1")
 app.include_router(market_router, prefix="/api/v1")

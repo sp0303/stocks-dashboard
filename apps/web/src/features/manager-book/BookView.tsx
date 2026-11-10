@@ -7,6 +7,7 @@ import { useBookSummary, useUrlParam } from './useBook';
 
 const ManagerMetricsTab = lazy(() => import('./ManagerMetricsTab').then((m) => ({ default: m.ManagerMetricsTab })));
 const ManagerHoldingsTable = lazy(() => import('./ManagerHoldingsTable').then((m) => ({ default: m.ManagerHoldingsTable })));
+const HoldingsHeatmap = lazy(() => import('./heatmap/HoldingsHeatmap').then((m) => ({ default: m.HoldingsHeatmap })));
 const ManagerTradeLog = lazy(() => import('./ManagerTradeLog').then((m) => ({ default: m.ManagerTradeLog })));
 const CorporateActionsTable = lazy(() => import('./CorporateActionsTable').then((m) => ({ default: m.CorporateActionsTable })));
 
@@ -31,6 +32,7 @@ export const BookView: React.FC<Props> = ({ managerId, onSelectClient }) => {
       <Suspense fallback={<LoadingBlock rows={6} label="Loading tab" />}>
         {tab === 'performance' && <ManagerMetricsTab managerId={managerId} />}
         {tab === 'holdings' && <ManagerHoldingsTable managerId={managerId} />}
+        {tab === 'heatmap' && <HoldingsHeatmap managerId={managerId} />}
         {tab === 'trades' && <ManagerTradeLog managerId={managerId} />}
         {tab === 'corporate-actions' && <CorporateActionsTable />}
       </Suspense>

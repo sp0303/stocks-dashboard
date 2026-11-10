@@ -1,10 +1,11 @@
 import React from 'react';
-import { BarChart3, Calendar, History, Layers, Users } from 'lucide-react';
+import { BarChart3, Calendar, Grid3x3, History, Layers, Users } from 'lucide-react';
 
 export const TABS = {
   clients: { label: 'Clients', icon: Users },
   performance: { label: 'Performance', icon: BarChart3 },
   holdings: { label: 'Holdings', icon: Layers },
+  heatmap: { label: 'Heatmap', icon: Grid3x3 },
   trades: { label: 'Trade log', icon: History },
   'corporate-actions': { label: 'Corporate actions', icon: Calendar },
 } as const;
