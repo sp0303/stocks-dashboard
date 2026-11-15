@@ -22,6 +22,44 @@ from app.config import settings
 
 log = logging.getLogger("angel")
 
+# SmartApi (via logzero) logs full request headers and params on API errors: the API key
+# (X-PrivateKey), the bearer JWT, and on login the password/TOTP. Redact them at the logger.
+import re as _re
+
+_SECRET_RE = _re.compile(
+    r"""(['"]?(?:X-PrivateKey|Authorization|password|totp|jwtToken|refreshToken|feedToken|"""
+    r"""api_key|apiKey|access_token)['"]?\s*[:=]\s*)(['"]?)[^'",}\s]*(?:\s[^'",}\s]+)?\2""",
+    _re.IGNORECASE,
+)
+
+
+def redact_secrets(text: str) -> str:
+    return _SECRET_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}***{m.group(2)}", text)
+
+
+class _RedactSecrets(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        clean = redact_secrets(msg)
+        if clean != msg:
+            record.msg, record.args = clean, ()
+        return True
+
+
+def install_log_redaction() -> None:
+    try:
+        from logzero import logger as _lz
+    except Exception:
+        return
+    if not any(isinstance(f, _RedactSecrets) for f in _lz.filters):
+        _lz.addFilter(_RedactSecrets())
+
+
+install_log_redaction()
+
 _SCRIP_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
 _SCRIP_CACHE = Path(settings.data_dir) / "angel_scrip_master.json"
 _SESSION_MAX_AGE = 6 * 3600  # re-login every 6h (tokens last a day; this is a safe margin)
