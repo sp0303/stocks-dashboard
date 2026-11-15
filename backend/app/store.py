@@ -169,6 +169,7 @@ class BaseStore:
     async def list_trades(self, client_id: str) -> list[dict]: ...
     async def count_trades(self, client_id: str) -> int: ...
     async def delete_trade(self, client_id: str, fingerprint: str) -> bool: ...
+    async def delete_upload(self, client_id: str, upload_id: str, deleted_at: str) -> int | None: ...
 
     # trade journal — Zerodha-Console-style tags: reusable, named, colored labels
     # defined once per client and applied to any number of trades. The rationale for
@@ -546,8 +547,25 @@ class JsonStore(BaseStore):
     async def upload_exists(self, client_id, file_hash):
         return any(
             u["client_id"] == client_id and u.get("file_hash") == file_hash
+            and u.get("status") != "DELETED"
             for u in self._db["uploads"]
         )
+
+    async def delete_upload(self, client_id, upload_id, deleted_at):
+        """Remove the trades this upload imported and mark the upload DELETED (kept for
+        the record). Returns the number of trades removed, or None if no such upload."""
+        async with self._lock:
+            up = next((u for u in self._db["uploads"]
+                       if u["client_id"] == client_id and u.get("id") == upload_id), None)
+            if up is None or up.get("status") == "DELETED":
+                return None
+            before = len(self._db["trades"])
+            self._db["trades"] = [t for t in self._db["trades"]
+                                  if not (t["client_id"] == client_id and t.get("upload_id") == upload_id)]
+            removed = before - len(self._db["trades"])
+            up.update(status="DELETED", deleted_at=deleted_at, deleted_trades=removed)
+            self._flush()
+            return removed
 
     async def next_upload_version(self, client_id):
         vs = [u.get("version", 0) for u in self._db["uploads"] if u["client_id"] == client_id]
@@ -1076,8 +1094,18 @@ class MongoStore(BaseStore):
 
     async def upload_exists(self, client_id, file_hash):
         return await self.db.uploads.find_one(
-            {"client_id": client_id, "file_hash": file_hash}
+            {"client_id": client_id, "file_hash": file_hash, "status": {"$ne": "DELETED"}}
         ) is not None
+
+    async def delete_upload(self, client_id, upload_id, deleted_at):
+        up = await self.db.uploads.find_one({"client_id": client_id, "id": upload_id})
+        if up is None or up.get("status") == "DELETED":
+            return None
+        res = await self.db.trades.delete_many({"client_id": client_id, "upload_id": upload_id})
+        await self.db.uploads.update_one(
+            {"client_id": client_id, "id": upload_id},
+            {"$set": {"status": "DELETED", "deleted_at": deleted_at, "deleted_trades": res.deleted_count}})
+        return res.deleted_count
 
     async def next_upload_version(self, client_id):
         last = await self.db.uploads.find_one(

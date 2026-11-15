@@ -29,9 +29,41 @@ async function req(path, opts = {}) {
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
     try { msg = (await res.json()).detail || msg } catch { /* ignore */ }
-    throw new Error(msg)
+    const err = new Error(msg)
+    err.status = res.status
+    throw err
   }
   return res.json()
+}
+
+// Download a binary file (e.g. an .xlsx) from an authenticated endpoint. A plain
+// <a href> cannot do this: the API only accepts the login token as a Bearer header, and a
+// link click sends no headers, so the server answered 401 and the download never started.
+async function downloadFile(path, fallbackName) {
+  const token = getToken()
+  const res = await fetch(`${BASE}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  if (res.status === 401) {
+    setToken(null); setAuth(null)
+    window.location.reload()
+    throw new Error('Session expired — please log in again')
+  }
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try { msg = (await res.json()).detail || msg } catch { /* not json */ }
+    throw new Error(msg)
+  }
+  // Prefer the server's filename (it carries the client code) over our fallback.
+  const disp = res.headers.get('Content-Disposition') || ''
+  const m = /filename="?([^";]+)"?/i.exec(disp)
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = m ? m[1] : fallbackName
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 10000)
 }
 
 const _postJson = (path, body) =>
@@ -170,12 +202,21 @@ export const api = {
     const url = clientIds ? `/api/managers/${id}/holdings?client_ids=${clientIds.join(',')}` : `/api/managers/${id}/holdings`
     return req(url).then((r) => r.data)
   },
-  uploadTradebook: (clientId, file) => {
+  holdingsHeatmap: (id, clientIds = null, params = {}) => {
+    const q = new URLSearchParams()
+    if (clientIds) q.set('client_ids', clientIds.join(','))
+    Object.entries(params).forEach(([k, v]) => { if (v) q.set(k, v) })
+    return req(`/api/managers/${id}/holdings/heatmap?${q}`).then((r) => r.data)
+  },
+  uploadTradebook: (clientId, file, { force = false } = {}) => {
     const fd = new FormData()
     fd.append('file', file)
-    return req(`/api/clients/${clientId}/tradebooks`, { method: 'POST', body: fd }).then((r) => r.data)
+    const q = force ? '?force=true' : ''
+    return req(`/api/clients/${clientId}/tradebooks${q}`, { method: 'POST', body: fd }).then((r) => r.data)
   },
   uploads: (clientId) => req(`/api/clients/${clientId}/tradebooks`).then((r) => r.data),
+  deleteUpload: (clientId, uploadId) =>
+    req(`/api/clients/${clientId}/tradebooks/${uploadId}`, { method: 'DELETE' }).then((r) => r.data),
   portfolio: (clientId) => req(`/api/clients/${clientId}/portfolio`).then((r) => r.data),
   holdings: (clientId) => req(`/api/clients/${clientId}/holdings`).then((r) => r.data),
   allocation: (clientId, by, basis = 'current') =>
@@ -239,7 +280,8 @@ export const api = {
       `/api/clients/${clientId}/playbook?sort=${sort}&order=${order}&page=${page}&page_size=${pageSize}${symbol ? `&symbol=${symbol}` : ''}`
     ).then((r) => r),
   // Direct download URL for the multi-sheet .xlsx export (no auth header needed).
-  playbookExportUrl: (clientId) => `${BASE}/api/clients/${clientId}/playbook/export`,
+  downloadPlaybook: (clientId) => downloadFile(`/api/clients/${clientId}/playbook/export`, 'playbook.xlsx'),
+  downloadTradebook: (clientId) => downloadFile(`/api/clients/${clientId}/tradebook/export`, 'tradebook.xlsx'),
   playbookByStock: (clientId, { minDays, maxDays, intraday } = {}) => {
     const p = new URLSearchParams()
     if (minDays != null) p.set('min_days', minDays)

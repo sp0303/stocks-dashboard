@@ -57,7 +57,8 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
       <div className="cards">
         <Stat label="Total P&L (all clients)" value={inr(t.total_pnl)} tone={t.total_pnl >= 0 ? 'up' : 'down'} sub={pct(t.return_pct) + ' return'} />
         <Stat label="Book market value" value={inr(t.market_value)} sub={inrFull(t.market_value)} />
-        <Stat label="Total invested" value={inr(t.invested_value)} />
+        <Stat label="Capital deployed" value={inr(t.peak_capital)} sub="real investment" title="The most of the clients' own money ever tied up at once, summed per client. Profits that were reinvested are not counted again." />
+        <Stat label="Current invested" value={inr(t.invested_value)} sub="cost of what is held now" title="Cost basis of the holdings the clients still own." />
         <Stat label="Realized" value={inr(t.realized_pnl)} tone={t.realized_pnl >= 0 ? 'up' : 'down'} />
         <Stat label="Unrealized" value={inr(t.unrealized_pnl)} tone={t.unrealized_pnl >= 0 ? 'up' : 'down'} />
         <Stat label="Clients / Stocks" value={`${t.clients} / ${t.unique_stocks}`} />
@@ -77,7 +78,8 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
                 <th>Client</th>
                 <th className="mono" style={{ fontSize: 11 }}>Code</th>
                 <th className="r">Trades</th>
-                <th className="r">Invested</th>
+                <th className="r" title="Real investment: the most of this client's own money ever tied up at once. Reinvested profit is not counted again.">Capital deployed</th>
+                <th className="r" title="Cost basis of the holdings this client still owns.">Current invested</th>
                 <th className="r">Market Value</th>
                 <th>Status</th>
                 <th className="r">Unrealized P&L</th>
@@ -90,6 +92,7 @@ export default function ManagerMetrics({ managerId, reload, onOpenClient, onEdit
                   <td style={{ fontWeight: 600, cursor: 'pointer', color: 'var(--accent-ink)' }} data-client-id={c.id} onClick={() => onOpenClient && onOpenClient(c)}>{c.name}</td>
                   <td className="mono">{c.client_code || '—'}</td>
                   <td className="r tnum">{c.trade_count || 0}</td>
+                  <td className="r tnum">{inrFull(c.peak_capital)}</td>
                   <td className="r tnum">{inrFull(c.invested)}</td>
                   <td className="r tnum">{inrFull(c.market_value)}</td>
                   <td><span className="badge" style={c.status !== 'ACTIVE' ? { background: 'var(--surface-2)', color: 'var(--muted)' } : {}}>{c.status}</span></td>
@@ -133,7 +136,7 @@ const BOOK_BENCHMARK_COLORS = {
 const BOOK_BENCHMARK_LABELS = {
   total_value: 'Whole Book',
   nifty_50: 'Nifty 50',
-  mid_cap: 'Nifty Midcap 100',
+  mid_cap: 'Nifty Midcap 150',
   large_cap: 'Nifty 100 (Large Cap)',
   small_cap: 'Nifty Smallcap 100',
 }
@@ -151,14 +154,10 @@ function ManagerPerformance({ managerId, reload }) {
   // Same profit/loss framing as the client-level chart: raw value would be dominated by
   // deposit timing across clients (one big new account joining looks like a "gain"), so
   // every line is value-minus-invested — pure book-wide gain/loss vs. each benchmark.
-  const bookPnl = book.map((d) => ({
-    date: d.date,
-    pnl: d.total_value != null && d.invested_value != null ? d.total_value - d.invested_value : null,
-    nifty_50_pnl: d.nifty_50_value != null && d.invested_value != null ? d.nifty_50_value - d.invested_value : null,
-    mid_cap_pnl: d.mid_cap_value != null && d.invested_value != null ? d.mid_cap_value - d.invested_value : null,
-    large_cap_pnl: d.large_cap_value != null && d.invested_value != null ? d.large_cap_value - d.invested_value : null,
-    small_cap_pnl: d.small_cap_value != null && d.invested_value != null ? d.small_cap_value - d.invested_value : null,
-  }))
+  // Summed server-side against one shared baseline (value minus net capital deployed),
+  // same as the client-level chart. Previously each line subtracted open cost basis here,
+  // which drove every benchmark to zero whenever clients closed positions.
+  const bookPnl = book
 
   // Individual clients on one chart: capital sizes differ hugely across clients, so
   // absolute ₹ would make a big account's line dwarf everyone else's regardless of who's
@@ -209,7 +208,7 @@ function ManagerPerformance({ managerId, reload }) {
             <ReferenceLine y={0} stroke="var(--muted)" strokeDasharray="2 2" />
             <Line type="monotone" dataKey="pnl" name="Whole Book" stroke={BOOK_BENCHMARK_COLORS.total_value} dot={false} strokeWidth={2.5} connectNulls />
             {benchmarks.nifty_50 && <Line type="monotone" dataKey="nifty_50_pnl" name="Nifty 50" stroke={BOOK_BENCHMARK_COLORS.nifty_50} dot={false} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-            {benchmarks.mid_cap && <Line type="monotone" dataKey="mid_cap_pnl" name="Nifty Midcap 100" stroke={BOOK_BENCHMARK_COLORS.mid_cap} dot={false} strokeWidth={2} connectNulls />}
+            {benchmarks.mid_cap && <Line type="monotone" dataKey="mid_cap_pnl" name="Nifty Midcap 150" stroke={BOOK_BENCHMARK_COLORS.mid_cap} dot={false} strokeWidth={2} connectNulls />}
             {benchmarks.large_cap && <Line type="monotone" dataKey="large_cap_pnl" name="Nifty 100 (Large Cap)" stroke={BOOK_BENCHMARK_COLORS.large_cap} dot={false} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
             {benchmarks.small_cap && <Line type="monotone" dataKey="small_cap_pnl" name="Nifty Smallcap 100" stroke={BOOK_BENCHMARK_COLORS.small_cap} dot={false} strokeWidth={2} connectNulls />}
           </LineChart>

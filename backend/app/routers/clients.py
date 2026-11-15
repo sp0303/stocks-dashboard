@@ -3,16 +3,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 import asyncio
+from collections import Counter
 
 from starlette.concurrency import run_in_threadpool
 
 from app.models.schemas import ClientCreate, ClientUpdate
 from app.routers.portfolio import _actions_for, cached_performance_series
 from app.services import analytics, auth, ingestion
-from app.services.engine import compute_round_trips
+from app.services.engine import compute_round_trips, split_intraday
 from app.store import get_store
 
 router = APIRouter(prefix="/api", tags=["clients"])
@@ -20,6 +21,21 @@ router = APIRouter(prefix="/api", tags=["clients"])
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def _delivery_trades(client_id: str) -> list[dict]:
+    """Delivery/swing trades only, matching what every client-level endpoint gets from
+    portfolio._trades_or_404.
+
+    The manager routes used to read store.list_trades() raw, so same-day round trips
+    (intraday/speculative under Section 43(5)) were folded into the book's invested value,
+    holdings and round trips here while the client's own screen excluded them. The same
+    client therefore reported different numbers depending on which page you opened it from.
+    Intraday P&L is real but it is not investment: the capital comes back the same day and
+    is margin-funded, so it belongs in its own report, not in the book's cost basis.
+    """
+    delivery, _ = split_intraday(await get_store().list_trades(client_id))
+    return delivery
 
 
 @router.get("/managers/{manager_id}/clients")
@@ -40,9 +56,20 @@ async def manager_metrics(manager_id: str, _: auth.Identity = Depends(auth.requi
     clients = await store.list_clients(manager_id)
     # Read every client's trades concurrently — a serial await-per-client loop made this
     # O(clients) round-trips and was a big part of the manager page's load time.
-    trades_lists = await asyncio.gather(*(store.list_trades(c["id"]) for c in clients))
-    payload = [{"id": c["id"], "name": c["name"], "trades": t}
-               for c, t in zip(clients, trades_lists)]
+    trades_lists = await asyncio.gather(*(_delivery_trades(c["id"]) for c in clients))
+    # The Trades column is the count of trades actually stored — the delivery-only list
+    # above is consolidated (same-day round trips collapse to VWAP rows), so len() of it
+    # would understate it (one client: 1,456 shown against 4,219 stored).
+    raw_counts = await asyncio.gather(*(store.count_trades(c["id"]) for c in clients))
+    # Corporate actions per client, so a split/bonus is applied here exactly as it is on the
+    # client's own page; client_code/status were never passed before, so the Code column
+    # was blank for every client.
+    actions_lists = await asyncio.gather(*(_actions_for(t) for t in trades_lists))
+    payload = [
+        {"id": c["id"], "name": c["name"], "trades": t, "trade_count": n, "actions": a,
+         "client_code": c.get("client_code") or "", "status": c.get("status") or "ACTIVE"}
+        for c, t, n, a in zip(clients, trades_lists, raw_counts, actions_lists)
+    ]
     return {"data": analytics.manager_metrics(payload)}
 
 
@@ -65,19 +92,19 @@ async def manager_performance(manager_id: str, _: auth.Identity = Depends(auth.r
     clients = await store.list_clients(manager_id)
 
     async def _one_client(c: dict) -> tuple[list[dict] | None, dict | None]:
-        trades = await store.list_trades(c["id"])
+        trades = await _delivery_trades(c["id"])
         if not trades:
             return None, None
         actions = await _actions_for(trades)
         series = await cached_performance_series(c["id"], trades, actions)
-        pct_series = [
-            {
-                "date": row["date"],
-                "return_pct": round((row["total_value"] - row["invested_value"]) / row["invested_value"] * 100, 2)
-                if row.get("total_value") is not None and row.get("invested_value") else 0.0,
-            }
-            for row in series
-        ]
+        # Time-weighted return, so the comparison between clients is fair regardless of
+        # when each of them added money. The old formula divided P&L by OPEN COST BASIS,
+        # which made a client's line fall simply because they bought more (one real
+        # account dropped 11.60% -> 9.09% on a purchase day, having lost nothing), and
+        # collapsed to a flat 0% for anyone who closed out entirely, since the guard for
+        # a zero denominator returned 0.
+        nav = analytics.twr_series(series)
+        pct_series = [{"date": n["date"], "return_pct": round(n["nav"] - 100, 2)} for n in nav]
         return series, {"id": c["id"], "name": c["name"], "series": pct_series}
 
     results = await asyncio.gather(*(_one_client(c) for c in clients))
@@ -86,6 +113,97 @@ async def manager_performance(manager_id: str, _: auth.Identity = Depends(auth.r
 
     book = analytics.aggregate_performance_series(client_series)
     return {"data": {"book": book, "clients": client_summaries}}
+
+
+@router.get("/managers/{manager_id}/holdings/heatmap")
+async def manager_holdings_heatmap(
+    manager_id: str,
+    client_ids: str = None,
+    mode: str = Query("day", pattern="^(day|range)$"),
+    day: str | None = Query(None, description="YYYY-MM-DD; omitted = live (today's quotes)"),
+    start: str | None = Query(None, description="range: common start date; omitted = each stock's tracking day"),
+    grain: str = Query("auto", pattern="^(auto|day|week|month)$"),
+    _: auth.Identity = Depends(auth.require_manager_scope),
+):
+    """Returns for every stock the selected clients hold: one day's move (`mode=day`), or
+    period-by-period returns from each stock's tracking day (`mode=range`). Decimals.
+    Daily closes come from the stored daily candles first, so this makes no broker calls
+    for stocks already in the store."""
+    from app.services import heatmap, market_data
+
+    store = get_store()
+    if not await store.get_manager(manager_id):
+        raise HTTPException(404, "manager not found")
+    clients = await store.list_clients(manager_id)
+    if client_ids:
+        wanted = set(client_ids.split(","))
+        clients = [c for c in clients if c["id"] in wanted]
+    # Quantities and tracking days only: no live prices here, so a past day or the
+    # tracking grid never waits on 40 quote lookups (that made the Day view take ~20 s).
+    meta: dict[str, dict] = {}
+    for c in clients:
+        trades = await _delivery_trades(c["id"])
+        if not trades:
+            continue
+        hold = analytics.build_holdings(trades, with_prices=False, actions=await _actions_for(trades))
+        for h in hold["holdings"]:
+            if (h.get("quantity") or 0) <= 0:
+                continue
+            m = meta.setdefault(h["symbol"], {"qty": 0.0, "invested": 0.0, "clients": 0, "entry_date": None})
+            m["qty"] += h["quantity"]
+            m["invested"] += h.get("invested_value") or 0
+            m["clients"] += 1
+            ed = (h.get("entry_date") or "")[:10] or None
+            if ed and (m["entry_date"] is None or ed < m["entry_date"]):
+                m["entry_date"] = ed
+    if not meta:
+        return {"data": {"mode": mode, "tiles": [], "columns": [], "rows": []}}
+    weights = {s: m["invested"] for s, m in meta.items()}
+
+    if mode == "day" and not day:
+        quotes = await run_in_threadpool(market_data.get_quote_details, list(weights))
+        tiles = []
+        for sym in weights:
+            q = quotes.get(sym, {})
+            price, prev = q.get("price"), q.get("prev_close")
+            ret = (price / prev - 1.0) if price and prev else None
+            tiles.append({"symbol": sym, "ret": ret, "close": price, "prev_close": prev, **meta[sym]})
+        tiles.sort(key=lambda t: (t["ret"] is None, -(t["ret"] or 0)))
+        return {"data": {"mode": "day", "day": "live", "tiles": tiles}}
+
+    earliest = min((m["entry_date"] for m in meta.values() if m["entry_date"]), default=None)
+    from_date = min(filter(None, [start, day, earliest])) if any([start, day, earliest]) else None
+    actions = await _actions_for([{"symbol": s} for s in weights])
+    by_sym: dict[str, list[dict]] = {}
+    for a in actions:
+        by_sym.setdefault(a.get("symbol"), []).append(a)
+
+    async def _series(sym):
+        hist = await run_in_threadpool(market_data.get_history, sym, from_date, "1d", "NSE")
+        return sym, heatmap.adjusted_closes(hist.get("points", []), by_sym.get(sym))
+    series = {s: pts for s, pts in await asyncio.gather(*(_series(s) for s in weights)) if pts}
+    # The last date most stocks share, not the newest single bar: a fallback provider can
+    # stamp a weekend "bar" for one symbol, which would otherwise end every row there.
+    from collections import Counter
+    lasts = Counter(pts[-1][0] for pts in series.values())
+    latest = max(lasts, key=lambda d: (lasts[d], d)) if lasts else None
+
+    if mode == "day":
+        rets = heatmap.day_returns(series, day)
+        tiles = [{"symbol": s, **rets.get(s, {"ret": None}), **meta[s]} for s in weights]
+        tiles.sort(key=lambda t: (t["ret"] is None, -(t["ret"] or 0)))
+        return {"data": {"mode": "day", "day": day, "latest": latest, "tiles": tiles}}
+
+    end = latest or datetime.now(timezone.utc).date().isoformat()
+    starts = {s: (start or meta[s]["entry_date"]) for s in series}
+    first = min(filter(None, starts.values()), default=end)
+    g = heatmap.pick_grain(first, end) if grain == "auto" else grain
+    m = heatmap.range_matrix(series, starts, end, g)
+    for r in m["rows"]:
+        r.update(meta[r["symbol"]])
+    m["rows"].sort(key=lambda r: -(weights.get(r["symbol"]) or 0))
+    missing = sorted(set(weights) - set(series))
+    return {"data": {"mode": "range", "end": end, "no_history": missing, **m}}
 
 
 @router.get("/managers/{manager_id}/holdings")
@@ -122,7 +240,7 @@ async def manager_holdings(manager_id: str, client_ids: str = None, _: auth.Iden
     totals = {"market_value": 0, "invested_value": 0, "unrealized_pnl": 0}
 
     for client in clients:
-        trades = await store.list_trades(client["id"])
+        trades = await _delivery_trades(client["id"])
         if not trades:
             continue
 
@@ -213,7 +331,7 @@ async def manager_trade_log(manager_id: str, _: auth.Identity = Depends(auth.req
 
     rows: list[dict] = []
     for c in clients:
-        trades = await store.list_trades(c["id"])
+        trades = await _delivery_trades(c["id"])
         if not trades:
             continue
         rts = await run_in_threadpool(compute_round_trips, trades)
@@ -320,7 +438,9 @@ async def delete_client(client_id: str, _: auth.Identity = Depends(auth.require_
 
 
 @router.post("/clients/{client_id}/tradebooks")
-async def upload_tradebook(client_id: str, file: UploadFile = File(...), _: auth.Identity = Depends(auth.require_client_access)):
+async def upload_tradebook(client_id: str, file: UploadFile = File(...),
+                           force: bool = Query(False, description="re-import a file already uploaded; trades are still deduped"),
+                           _: auth.Identity = Depends(auth.require_client_access)):
     store = get_store()
     client = await store.get_client(client_id)
     if not client:
@@ -328,7 +448,7 @@ async def upload_tradebook(client_id: str, file: UploadFile = File(...), _: auth
 
     content = await file.read()
     fhash = ingestion.file_hash(content)
-    if await store.upload_exists(client_id, fhash):
+    if not force and await store.upload_exists(client_id, fhash):
         raise HTTPException(409, "this exact file was already uploaded")
 
     import io
@@ -337,15 +457,49 @@ async def upload_tradebook(client_id: str, file: UploadFile = File(...), _: auth
     if not parsed.trades:
         raise HTTPException(422, f"no valid trades found ({'; '.join(parsed.errors[:3])})")
 
-    # tag every trade with our internal client id
+    # A tradebook belongs to one broker account. If the file names an account and this
+    # client already has a different one, it is someone else's file: reject it before a
+    # single trade is written (force does not override this — it only re-imports a file).
+    stored_code = (client.get("client_code") or "").strip().upper()
+    file_code = (parsed.file_client_id or "").strip().upper()
+    if stored_code and file_code and file_code != stored_code:
+        raise HTTPException(
+            422,
+            f"this tradebook is for account {file_code}, but this client's account is "
+            f"{stored_code}. Upload it to the right client, or correct the client's code first.",
+        )
+    # A file we cannot tie to an account is never accepted onto an account we know.
+    if stored_code and not file_code:
+        raise HTTPException(
+            422,
+            f"this file does not show which account it is for, so it cannot be checked "
+            f"against {stored_code}. Upload the broker's original export.",
+        )
+    # A client without a code yet would adopt the file's code: refuse if another client owns it.
+    if file_code and not stored_code:
+        owner = next((c for c in await store.list_clients()
+                      if c["id"] != client_id and (c.get("client_code") or "").strip().upper() == file_code), None)
+        if owner:
+            raise HTTPException(
+                422,
+                f"this tradebook is for account {file_code}, which belongs to another client "
+                f"({owner.get('name')}). Upload it there.",
+            )
+
+    # tag every trade with our internal client id and the upload that brought it in, so
+    # the upload can be deleted later (a deduped trade keeps its first upload's id)
+    import uuid
+    upload_id = uuid.uuid4().hex
     for t in parsed.trades:
         t["client_id"] = client_id
+        t["upload_id"] = upload_id
 
     version = await store.next_upload_version(client_id)
     inserted, dupes = await store.insert_trades(parsed.trades)
 
     upload = await store.create_upload(
         {
+            "id": upload_id,
             "client_id": client_id,
             "version": version,
             "file_name": file.filename,
@@ -380,4 +534,22 @@ async def upload_tradebook(client_id: str, file: UploadFile = File(...), _: auth
 @router.get("/clients/{client_id}/tradebooks")
 async def list_uploads(client_id: str, _: auth.Identity = Depends(auth.require_client_access)):
     store = get_store()
-    return {"data": await store.list_uploads(client_id)}
+    ups = await store.list_uploads(client_id)
+    linked = Counter(t.get("upload_id") for t in await store.list_trades(client_id))
+    for u in ups:
+        # trades still in the book from this upload; None for uploads made before trades
+        # were linked to their upload (those can only have their record removed)
+        n = linked.get(u.get("id"), 0)
+        u["trade_count"] = None if (not n and u.get("imported_count") and u.get("status") != "DELETED") else n
+    return {"data": ups}
+
+
+@router.delete("/clients/{client_id}/tradebooks/{upload_id}")
+async def delete_upload(client_id: str, upload_id: str, _: auth.Identity = Depends(auth.require_client_access)):
+    """Remove an upload and the trades it imported. Manual trades and trades that came in
+    through another upload are untouched. The upload stays listed as DELETED."""
+    store = get_store()
+    removed = await store.delete_upload(client_id, upload_id, _now())
+    if removed is None:
+        raise HTTPException(404, "upload not found or already deleted")
+    return {"data": {"upload_id": upload_id, "trades_removed": removed}}

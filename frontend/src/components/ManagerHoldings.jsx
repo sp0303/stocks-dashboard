@@ -116,9 +116,9 @@ export default function ManagerHoldings({ managerId, clients = [] }) {
         <>
           <div className="cards">
             <Stat label="Total Market Value" value={inrFull(stats.marketValue)} sub={`${selectedClientIds.length} client(s)`} />
-            <Stat label="Total Invested" value={inrFull(stats.investedValue)} />
+            <Stat label="Holdings cost" value={inrFull(stats.investedValue)} title="Cost basis of the holdings selected below. The book-level Total invested card is peak capital at risk, which is a different measure." />
             <Stat label="Unrealized P&L" value={inrFull(stats.unrealizedPnl)} tone={stats.unrealizedPnl >= 0 ? 'up' : 'down'} />
-            <Stat label="Return %" value={`${stats.returnPct > 0 ? '+' : ''}${stats.returnPct.toFixed(2)}%`} tone={stats.returnPct >= 0 ? 'up' : 'down'} />
+            <Stat label="Unrealized return" title="Unrealized P&L as a percentage of holdings cost" value={`${stats.returnPct > 0 ? '+' : ''}${stats.returnPct.toFixed(2)}%`} tone={stats.returnPct >= 0 ? 'up' : 'down'} />
           </div>
 
           {holdings.loading ? <Loading what="holdings" /> : holdings.error ? <ErrorBox error={holdings.error} /> : (

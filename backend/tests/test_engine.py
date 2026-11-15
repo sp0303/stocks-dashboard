@@ -171,3 +171,19 @@ def test_partially_matched_sell_only_realizes_matched_portion():
     assert p.quantity == 0
     assert p.unmatched_sell_qty == 8
     assert round(p.unmatched_sell_value, 2) == round(8 * 150, 2)
+
+
+def test_split_that_changes_isin_applies_whatever_the_row_order():
+    """NUVAMA: bought on the old ISIN, split 1:5 (filed under the old ISIN), later trades
+    carry the new ISIN. The store may return rows newest-first; the holding must be 25."""
+    from app.services.engine import compute_positions
+    old = {"symbol": "NUVAMA", "isin": "INE531F01015", "trade_date": "2025-06-02", "trade_type": "buy",
+           "quantity": 5, "price": 6185.0, "order_execution_time": "2025-06-02T10:00:00"}
+    new_b = {"symbol": "NUVAMA", "isin": "INE531F01023", "trade_date": "2026-04-01", "trade_type": "buy",
+             "quantity": 10, "price": 1173.0, "order_execution_time": "2026-04-01T09:19:17"}
+    new_s = {**new_b, "trade_type": "sell", "trade_date": "2026-04-02", "price": 1180.0,
+             "order_execution_time": "2026-04-02T10:00:00"}
+    actions = [{"symbol": "NUVAMA", "isin": "INE531F01015", "type": "SPLIT", "ex_date": "2025-12-26", "qty_multiplier": 5.0}]
+    for rows in ([old, new_b, new_s], [new_s, new_b, old]):
+        pos, _ = compute_positions(rows, actions=actions)
+        assert [p.quantity for p in pos if p.quantity > 0] == [25.0]

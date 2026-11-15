@@ -13,8 +13,8 @@ import uuid
 from app.models.schemas import (
     DividendCreate, DividendUpdate, ManualTradeCreate, TagCreate, TagUpdate, TradeNoteUpdate, TradeTagsUpdate,
 )
-from app.services import analytics
-from app.services.engine import compute_positions, split_intraday
+from app.services import analytics, ingestion
+from app.services.engine import compute_positions, matched_trades, split_intraday
 from app.services.llm import fallback_narrate, narrate
 from app.services.market_data import get_dividend_history
 from app.services.auth import require_client_access
@@ -31,7 +31,11 @@ BENCHMARK_SYMBOL = "^NSEI"
 # Nifty 50 line itself, matching what the UI's checkbox implies).
 BENCHMARK_INDEX_SYMBOLS = {
     "nifty_50": "^NSEI",
-    "mid_cap": "^CRSMID",
+    # ^CRSMID (Nifty Midcap 100) stopped returning data on Yahoo in mid-July 2026 — the
+    # cache in production ends 2026-07-17 and a live fetch now yields zero rows — so this
+    # line flatlined for two months. NIFTY_MIDCAP_100.NS returns a single row. The Midcap
+    # 150 is the nearest index with full daily history back to 2020 (it contains the 100).
+    "mid_cap": "NIFTYMIDCAP150.NS",
     "large_cap": "^CNX100",
     # ^CNXSC (Nifty Smallcap 100) only exposes ~1 day of history on Yahoo's chart
     # endpoint — verified dead end. NIFTYSMLCAP250.NS is the same index family under its
@@ -146,8 +150,18 @@ async def _actions_for(trades: list[dict]) -> list[dict]:
 
 @router.get("/{client_id}/portfolio")
 async def portfolio(client_id: str):
-    trades = await _trades_or_404(client_id)
-    return {"data": analytics.portfolio_summary(trades, await _actions_for(trades))}
+    trades, intraday = await _delivery_and_intraday(client_id)
+    if not trades and not intraday:
+        raise HTTPException(404, "no trades for client")
+    summary = analytics.portfolio_summary(trades, await _actions_for(trades))
+    # Intraday is its own pool (R9): kept out of the delivery P&L, return % and NAV, but
+    # reported, so a day-trader's realised profit doesn't silently vanish from the page.
+    summary["intraday_realized_pnl"] = round(sum(r["pnl"] for r in intraday), 2)
+    # The Overview card and the manager table must agree. `total_trades` counts the
+    # consolidated delivery rows (same-day round trips collapse into one), so also expose
+    # the number of trades actually stored.
+    summary["stored_trade_count"] = await get_store().count_trades(client_id)
+    return {"data": summary}
 
 
 @router.get("/{client_id}/holdings")
@@ -262,39 +276,51 @@ async def compute_performance_series(trades: list[dict], actions: list[dict]) ->
     comparison endpoint, so both use identical, real (non-mocked) methodology."""
     from app.services import market_data
 
-    series = analytics.performance_series(trades)
     if not trades:
-        return series
+        return []
 
-    # Mark the portfolio's own line to market: fetch each traded symbol's historical
-    # close series and revalue open positions day-by-day, instead of the cost-basis
-    # fallback already in `series` (which silently omits unrealized gains/losses).
     exchange_by_symbol = {t["symbol"]: t.get("exchange") or "NSE" for t in trades}
-    first_trade_date = min((t["trade_date"] for t in trades), default=None)
-    if first_trade_date:
-        symbols = sorted(exchange_by_symbol)
+    first_trade_date = min(t["trade_date"] for t in trades)
+    symbols = sorted(exchange_by_symbol)
 
-        async def _history_for(sym: str) -> tuple[str, dict[str, float]]:
-            result = await run_in_threadpool(
-                market_data.get_history, sym, first_trade_date, "1d", exchange_by_symbol[sym]
-            )
-            return sym, {p["date"]: p["close"] for p in result.get("points", [])}
+    async def _history_for(sym: str) -> tuple[str, dict[str, float]]:
+        result = await run_in_threadpool(
+            market_data.get_history, sym, first_trade_date, "1d", exchange_by_symbol[sym]
+        )
+        return sym, {p["date"]: p["close"] for p in result.get("points", [])}
 
-        histories = await asyncio.gather(*(_history_for(s) for s in symbols))
-        price_maps = {sym: prices for sym, prices in histories if prices}
-        if price_maps:
-            mtm = {row["date"]: row["market_value"] for row in analytics.market_value_series(trades, price_maps, actions)}
-            for row in series:
-                if row["date"] in mtm:
-                    row["total_value"] = mtm[row["date"]]
+    histories = await asyncio.gather(*(_history_for(s) for s in symbols))
+    price_maps = {sym: prices for sym, prices in histories if prices}
 
+    index_prices: dict[str, dict[str, float]] = {}
     for key, symbol in BENCHMARK_INDEX_SYMBOLS.items():
         prices = await _benchmark_price_map(trades, symbol)
-        if not prices:
-            continue
-        bench = {row["date"]: row["benchmark_value"] for row in analytics.benchmark_series(trades, prices)}
+        if prices:
+            index_prices[key] = prices
+
+    # The trading calendar: the days NSE was actually open. Nifty 50's own price dates are
+    # the authoritative source; fall back to the union of whatever price history we do have.
+    # Sampling on this instead of on trade dates is what puts a point on the chart for every
+    # market day rather than only the handful of days the client happened to trade.
+    calendar = sorted(index_prices.get("nifty_50") or
+                      {d for pm in list(price_maps.values()) + list(index_prices.values()) for d in pm})
+
+    # Sells with no matching buy (demerger credits, IPO allotments, transfers-in) have an
+    # unknown cost basis and are excluded from P&L; drop them from the cash-flow series too
+    # so chart P&L agrees with the realized + unrealized on the cards.
+    flow_trades = matched_trades(trades, actions)
+    series = analytics.daily_performance_series(flow_trades, calendar, price_maps, actions)
+    if not series:
+        # No usable price history at all — fall back to the cost-basis curve so the chart
+        # renders something truthful (it just can't show unrealised movement).
+        return analytics.performance_series(trades)
+
+    for key, prices in index_prices.items():
+        bench = {row["date"]: row for row in analytics.benchmark_series(flow_trades, prices, calendar)}
         for row in series:
-            row[f"{key}_value"] = bench.get(row["date"])
+            hit = bench.get(row["date"])
+            row[f"{key}_value"] = hit["benchmark_value"] if hit else None
+            row[f"{key}_pnl"] = hit["benchmark_pnl"] if hit else None
 
     return series
 
@@ -317,68 +343,24 @@ async def metrics(client_id: str, response: Response):
     trades = await _trades_or_404(client_id)
     actions = await _actions_for(trades)
 
-    # Get portfolio performance series
-    performance_series = await compute_performance_series(trades, actions)
+    series = await cached_performance_series(client_id, trades, actions)
+    nav = analytics.twr_series(series)
 
-    # Override the last row with current market data from holdings
-    if performance_series:
-        holdings_data = analytics.build_holdings(trades, with_prices=True, actions=actions or [])
-        current_invested = holdings_data["totals"]["invested_value"]
-        current_market_value = holdings_data["totals"]["market_value"]
-        current_unrealized = holdings_data["totals"]["unrealized_pnl"]
+    # The benchmark goes through the identical transform — its own daily price history
+    # turned into a NAV — so beta, alpha and the CAGR comparison are like for like.
+    nifty_nav = None
+    nifty_prices = await _benchmark_price_map(trades, BENCHMARK_SYMBOL)
+    if nifty_prices:
+        first = series[0]["date"] if series else None
+        nifty_nav = analytics.twr_series([
+            {"date": d, "market_value": px, "net_invested": 0.0}
+            for d, px in sorted(nifty_prices.items()) if first and d >= first
+        ])
 
-        # Get realized P&L (constant, from closed trades)
-        _, realized = analytics.compute_positions(trades, actions=actions or [])
-
-        current_total_pnl = current_unrealized + realized
-        current_total_value = current_invested + current_total_pnl
-
-        # Update or append today's row with real current values
-        from datetime import date
-        today_str = str(date.today())
-        today_row_idx = -1
-        for i, row in enumerate(performance_series):
-            if row["date"] == today_str:
-                today_row_idx = i
-                break
-
-        if today_row_idx >= 0:
-            # Update existing today row
-            performance_series[today_row_idx]["invested_value"] = round(current_invested, 2)
-            performance_series[today_row_idx]["realized_pnl"] = round(realized, 2)
-            performance_series[today_row_idx]["total_value"] = round(current_total_value, 2)
-            performance_series[today_row_idx]["portfolio_return"] = round(
-                (current_total_value / (performance_series[0]["invested_value"] if performance_series[0]["invested_value"] > 0 else 1)) * 100, 2
-            )
-        elif performance_series[-1]["date"] != today_str:
-            # Append new today row
-            performance_series.append({
-                "date": today_str,
-                "invested_value": round(current_invested, 2),
-                "realized_pnl": round(realized, 2),
-                "total_value": round(current_total_value, 2),
-                "portfolio_return": round(
-                    (current_total_value / (performance_series[0]["invested_value"] if performance_series[0]["invested_value"] > 0 else 1)) * 100, 2
-                ),
-            })
-
-    # Extract benchmark series (Nifty 50 for comparison)
-    nifty_series = None
-    if performance_series:
-        nifty_series = [
-            {"date": row["date"], "total_value": row.get("nifty_50_value")}
-            for row in performance_series
-            if row.get("nifty_50_value") is not None
-        ]
-
-    # Calculate all Phase 1 metrics
-    metrics_data = analytics.compute_performance_metrics(
-        performance_series,
-        benchmark_performance=nifty_series,
-        risk_free_rate=0.065  # Current RBI repo rate
-    )
-
-    return {"data": metrics_data}
+    data = analytics.compute_performance_metrics(nav, benchmark_nav=nifty_nav)
+    if series and series[-1].get("price_basis_symbols"):
+        data["price_basis_symbols"] = series[-1]["price_basis_symbols"]
+    return {"data": data}
 
 
 @router.get("/{client_id}/attribution")
@@ -433,9 +415,10 @@ async def risk_monitoring(client_id: str):
     """Phase 4: Risk monitoring (concentration, health score, alerts)."""
     trades = await _trades_or_404(client_id)
     actions = await _actions_for(trades)
-    performance_series = await compute_performance_series(trades, actions)
-    risk_data = analytics.compute_risk_monitoring(performance_series, trades)
-    return {"data": risk_data}
+    series = await cached_performance_series(client_id, trades, actions)
+    nav = analytics.twr_series(series)
+    holdings = analytics.build_holdings(trades, actions=actions)["holdings"]
+    return {"data": analytics.compute_risk_monitoring(nav, trades, holdings=holdings)}
 
 
 @router.get("/{client_id}/xirr")
@@ -443,7 +426,16 @@ async def xirr(client_id: str):
     store = get_store()
     trades = await _trades_or_404(client_id)
     dividends = await store.list_dividends(client_id)
-    return {"data": {"xirr": analytics.portfolio_xirr(trades, dividends), "cagr": analytics.cagr(trades)}}
+    actions = await _actions_for(trades)
+    # Cash flows describe only the shares the P&L describes: proceeds of sells with no
+    # matching buy (demerger credits, IPO allotments) are not returns on invested money.
+    flow_trades = matched_trades(trades, actions)
+    # One CAGR definition across the app: the time-weighted one from the NAV curve, the same
+    # figure the Overview metrics show. This card used to compute its own from open cost
+    # basis and disagreed with the Overview for the same account (+10.6% vs -12.1%).
+    series = await cached_performance_series(client_id, trades, actions)
+    cagr = analytics.calculate_cagr(analytics.twr_series(series))
+    return {"data": {"xirr": analytics.portfolio_xirr(flow_trades, dividends), "cagr": cagr}}
 
 
 @router.get("/{client_id}/trades")
@@ -655,6 +647,28 @@ async def playbook_export(client_id: str):
     name = (client or {}).get("name") or client_id
     safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(name))[:40]
     fname = f"playbook_{safe}_{date.today().isoformat()}.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.get("/{client_id}/tradebook/export")
+async def tradebook_export(client_id: str):
+    """Download every stored trade for this client as a Zerodha-layout .xlsx.
+
+    Deliberately the RAW ledger (_raw_trades_or_404), not the delivery-only view the
+    analytics use: same-day intraday round trips and manually-added trades are part of the
+    client's record and must not disappear from a backup. The file re-uploads cleanly (see
+    ingestion.build_tradebook_xlsx).
+    """
+    client = await _client_or_404(client_id)
+    trades = await _raw_trades_or_404(client_id)
+    code = (client.get("client_code") or "").strip()
+    data = await run_in_threadpool(ingestion.build_tradebook_xlsx, trades, code, client.get("name") or "")
+    base = code or "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(client.get("name") or client_id))[:30]
+    fname = f"tradebook-{base}-EQ.xlsx"
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

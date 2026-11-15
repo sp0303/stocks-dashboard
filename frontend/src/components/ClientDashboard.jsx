@@ -180,6 +180,100 @@ export default function ClientDashboard({ client }) {
 }
 
 
+// A button that runs an authenticated download and shows progress/errors, so a failed
+// download says why instead of doing nothing.
+function DownloadButton({ label, title, onDownload, onError }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  async function run() {
+    setBusy(true); setErr(null)
+    try { await onDownload() } catch (e) { setErr(e.message); onError && onError(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <button type="button" className="btn" onClick={run} disabled={busy} title={title}>{busy ? 'Preparing…' : label}</button>
+      {err && !onError && <span className="err" style={{ fontSize: 12 }}>{err}</span>}
+    </span>
+  )
+}
+
+// Every tradebook uploaded for this client, newest first, with a delete per upload.
+// Deleting removes only the trades that upload brought in; uploads from before trades
+// were linked to their upload (trade_count null) can only have their record removed.
+function UploadHistory({ client, reload, onChanged }) {
+  const u = useAsync(() => api.uploads(client.id), [client.id, reload])
+  const [busyId, setBusyId] = useState(null)
+  const [err, setErr] = useState(null)
+  const [showDeleted, setShowDeleted] = useState(false)
+  const all = u.data || []
+  const rows = showDeleted ? all : all.filter((x) => x.status !== 'DELETED')
+  const deletedCount = all.length - all.filter((x) => x.status !== 'DELETED').length
+  const fmt = (s) => (s ? new Date(s).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—')
+
+  async function remove(x) {
+    const legacy = x.trade_count == null
+    const text = legacy
+      ? `Delete the record of "${x.file_name}"?\n\nThis upload is from before trades were linked to their file, so its trades cannot be told apart from other uploads. Only the record is removed; the trades stay.`
+      : `Delete "${x.file_name}" and the ${x.trade_count} trade(s) it brought in?\n\nManual trades and trades from other uploads are not touched. This cannot be undone; re-upload the file to bring them back.`
+    if (!window.confirm(text)) return
+    setBusyId(x.id); setErr(null)
+    try {
+      await api.deleteUpload(client.id, x.id)
+      onChanged()
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  if (u.loading && !u.data) return <Loading what="uploads" />
+  if (u.error) return <ErrorBox error={u.error} />
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <strong style={{ fontSize: 13 }}>Previous uploads</strong>
+        {deletedCount > 0 && (
+          <label className="sub" style={{ margin: 0, fontSize: 12 }}>
+            <input type="checkbox" checked={showDeleted} onChange={(e) => setShowDeleted(e.target.checked)} /> show {deletedCount} deleted
+          </label>
+        )}
+      </div>
+      {!rows.length ? <div className="sub" style={{ marginTop: 6 }}>No tradebooks uploaded yet.</div> : (
+        <div style={{ overflowX: 'auto', marginTop: 6 }}>
+          <table className="ledger" style={{ fontSize: 12, width: "100%" }}>
+            <thead>
+              <tr><th>#</th><th style={{ textAlign: 'left' }}>File</th><th>Uploaded</th><th>Covers</th><th>Imported</th><th>Dupes</th><th>In book</th><th></th></tr>
+            </thead>
+            <tbody>
+              {rows.map((x) => {
+                const deleted = x.status === 'DELETED'
+                return (
+                  <tr key={x.id} style={deleted ? { opacity: 0.5 } : undefined}>
+                    <td className="tnum">v{x.version}</td>
+                    <td style={{ textAlign: 'left', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={x.file_name}>{x.file_name}</td>
+                    <td>{fmt(x.uploaded_at)}</td>
+                    <td>{x.date_from && x.date_to ? `${x.date_from} → ${x.date_to}` : '—'}</td>
+                    <td className="tnum">{x.imported_count}</td>
+                    <td className="tnum">{x.duplicate_count}</td>
+                    <td className="tnum" title={x.trade_count == null ? 'Older upload: trades not linked to this file' : ''}>{deleted ? `deleted ${fmt(x.deleted_at)}` : x.trade_count == null ? 'not linked' : x.trade_count}</td>
+                    <td>{!deleted && (
+                      <button className="btn ghost" disabled={busyId === x.id} onClick={() => remove(x)} style={{ color: 'var(--down)' }}>
+                        {busyId === x.id ? 'Deleting…' : 'Delete'}
+                      </button>
+                    )}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {err && <div className="err" style={{ marginTop: 6 }}>{err}</div>}
+    </div>
+  )
+}
+
 function UploadBar({ client, onDone }) {
   const inputRef = useRef()
   const [msg, setMsg] = useState(null)
@@ -188,6 +282,7 @@ function UploadBar({ client, onDone }) {
   const [kiteApiKey, setKiteApiKey] = useState('')
   const [kiteAccessToken, setKiteAccessToken] = useState('')
   const [reloadAccounts, setReloadAccounts] = useState(0)
+  const [hist, setHist] = useState(0)
   const t = useAsync(() => api.trades(client.id), [client.id, onDone])
   const kiteStatus = useAsync(() => api.kiteStatus(client.id), [client.id])
 
@@ -229,9 +324,21 @@ function UploadBar({ client, onDone }) {
     if (!file) return
     setBusy(true); setMsg(null)
     try {
-      const r = await api.uploadTradebook(client.id, file)
+      let r
+      try {
+        r = await api.uploadTradebook(client.id, file)
+      } catch (e) {
+        // 409 = this exact file was uploaded before. Let the user re-import it on purpose;
+        // trades already stored are still skipped by fingerprint, only missing ones are added.
+        if (e.status !== 409 || !window.confirm(
+          'This exact file was already uploaded for this client.\n\n' +
+          'Upload it again anyway? Trades already stored are skipped; only missing ones are added.'
+        )) throw e
+        r = await api.uploadTradebook(client.id, file, { force: true })
+      }
       const s = r.summary
       setMsg({ ok: true, text: `Imported ${s.imported} trades (${s.duplicates} duplicates skipped, ${s.errors} errors).` })
+      setHist((n) => n + 1)
       onDone()
     } catch (e) {
       setMsg({ ok: false, text: e.message })
@@ -289,9 +396,16 @@ function UploadBar({ client, onDone }) {
               )}
             </div>
           )}
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 12, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
             <input ref={inputRef} type="file" accept=".xlsx,.xls" onChange={(e) => upload(e.target.files[0])} disabled={busy} />
+            <DownloadButton
+              label="⬇ Download tradebook"
+              title="Every stored trade for this client — including same-day and manually added ones — as an Excel file in the broker's own tradebook layout. It can be uploaded again without creating duplicates."
+              onDownload={() => api.downloadTradebook(client.id)}
+              onError={(text) => setMsg({ ok: false, text })}
+            />
           </div>
+          <UploadHistory client={client} reload={hist} onChanged={() => { setHist((n) => n + 1); onDone() }} />
         </div>
       )}
 
@@ -607,22 +721,30 @@ function Overview({ client, reload, onChanged }) {
       <TargetAlerts alerts={alerts.data} />
       <div className="cards">
         <Stat label="Market Value" value={inr(d.market_value)} sub={inrFull(d.market_value)} />
-        <Stat label="Deployed Capital" value={inr(d.initial_capital)} sub={inrFull(d.initial_capital)} title="External capital deployed (buys - sells)" />
-        <Stat label="Current Invested" value={inr(d.current_invested)} sub={inrFull(d.current_invested)} title="Cost basis of current holdings" />
+        <Stat label="Invested" value={inr(d.peak_capital)} sub={inrFull(d.peak_capital)} title="Peak capital at risk — the most of your own money ever tied up at once. Reinvested profits don't inflate it." />
+        <Stat label="Current Invested" value={inr(d.current_invested)} sub={inrFull(d.current_invested)} title="Cost basis of the holdings you still own (can exceed Invested once gains are reinvested)" />
         <Stat label="Total P&L" value={inr(d.total_pnl)} tone={d.total_pnl >= 0 ? 'up' : 'down'} sub={`${pct(d.return_pct)} over ${getHoldingPeriod()}`} />
         <Stat label="Realized P&L" value={inr(d.realized_pnl)} tone={d.realized_pnl >= 0 ? 'up' : 'down'} />
         <Stat label="Unrealized P&L" value={inr(d.unrealized_pnl)} tone={d.unrealized_pnl >= 0 ? 'up' : 'down'} />
-        <Stat label="Open positions" value={d.open_positions} sub={`${d.total_trades} trades`} />
+        {d.intraday_realized_pnl != null && d.intraday_realized_pnl !== 0 && (
+          <Stat label="Intraday P&L" value={inr(d.intraday_realized_pnl)} tone={d.intraday_realized_pnl >= 0 ? 'up' : 'down'} title="Same-day round trips (a separate pool): not part of Total P&L or return %" />
+        )}
+        <Stat label="Open positions" value={d.open_positions} sub={`${d.stored_trade_count ?? d.total_trades} trades`} />
         <Stat label="Last trade date" value={d.last_trade_date ? d.last_trade_date : '—'} sub="most recent trade" />
       </div>
       {!m.loading && !m.error && m.data && (
         <div className="cards" style={{ marginTop: '1rem' }}>
-          <Stat label="CAGR" value={m.data.cagr != null ? pct(m.data.cagr * 100) : '—'} sub="annualized" title="Compound Annual Growth Rate" />
-          <Stat label="Sharpe Ratio" value={m.data.sharpe_ratio ? m.data.sharpe_ratio.toFixed(2) : '—'} sub="risk-adjusted" title="Return per unit of risk (>1 is good)" />
-          <Stat label="Volatility" value={m.data.volatility ? pct(m.data.volatility) : '—'} sub="annual" title="Standard deviation of returns" />
+          {/* Every one of these is a DECIMAL from the API (0.1973 = 19.73%), so each needs
+              x100. Volatility and Alpha were missing it and rendered as "0.14%" for 14%.
+              Beta and Alpha also used a truthiness check, so a legitimate 0 showed "—". */}
+          {m.data.cagr != null
+            ? <Stat label="CAGR" value={pct(m.data.cagr * 100)} sub="time-weighted, annualized" title="Annualized per-unit return. It ignores how much money was invested at each point, so a client who lost heavily while small and gained while large can show a negative CAGR beside a positive rupee P&L. XIRR on the Performance tab weights by capital." />
+            : <Stat label="Total return" value={m.data.total_return != null ? pct(m.data.total_return * 100) : '—'} sub="under 1 year — not annualized" title="Annualizing a partial year invents a return the portfolio never earned, so CAGR is withheld until a full year of history exists" />}
+          <Stat label="Sharpe Ratio" value={m.data.sharpe_ratio != null ? m.data.sharpe_ratio.toFixed(2) : '—'} sub="risk-adjusted" title="Return per unit of risk (>1 is good)" />
+          <Stat label="Volatility" value={m.data.volatility != null ? pct(m.data.volatility * 100) : '—'} sub="annual" title="Standard deviation of daily returns, annualized" />
           <Stat label="Max Drawdown" value={m.data.max_drawdown != null ? pct(m.data.max_drawdown * 100) : '—'} tone="down" sub="peak-to-trough" />
-          <Stat label="Beta" value={m.data.beta ? m.data.beta.toFixed(3) : '—'} sub="vs Nifty 50" title="1.0 = moves with market" />
-          <Stat label="Alpha" value={m.data.alpha ? (m.data.alpha >= 0 ? '+' : '') + pct(m.data.alpha) : '—'} tone={m.data.alpha >= 0 ? 'up' : 'down'} sub="vs benchmark" title="Excess return after risk adjustment" />
+          <Stat label="Beta" value={m.data.beta != null ? m.data.beta.toFixed(3) : '—'} sub="vs Nifty 50" title="1.0 = moves with market" />
+          <Stat label="Alpha" value={m.data.alpha != null ? (m.data.alpha >= 0 ? '+' : '') + pct(m.data.alpha * 100) : '—'} tone={m.data.alpha >= 0 ? 'up' : 'down'} sub="vs benchmark" title="Excess return after risk adjustment" />
         </div>
       )}
       {!rm.loading && !rm.error && rm.data && !rm.data.error && (
@@ -712,10 +834,11 @@ function Playbook({ client, reload }) {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-        <a className="btn" href={api.playbookExportUrl(client.id)}
-          title="Download the full playbook (lots + by-stock + intraday + within-a-week) as an Excel workbook">
-          ⬇ Export to Excel
-        </a>
+        <DownloadButton
+          label="⬇ Export to Excel"
+          title="Download the full playbook (lots + by-stock + intraday + within-a-week) as an Excel workbook"
+          onDownload={() => api.downloadPlaybook(client.id)}
+        />
       </div>
       <PlaybookByStockTable client={client} reload={reload}
         intro="Closed round trips, merged stock-wise — weighted-average buy/sell price and total P&L. Click a stock for its individual lots. Click a column to sort." />
@@ -1008,7 +1131,7 @@ function Performance({ client, reload, onOpenStock }) {
   const benchmarkLabels = {
     total_value: 'Your Portfolio',
     nifty_50: 'Nifty 50',
-    mid_cap: 'Nifty Midcap 100',
+    mid_cap: 'Nifty Midcap 150',
     large_cap: 'Nifty 100 (Large Cap)',
     small_cap: 'Nifty Smallcap 100',
   }
@@ -1018,24 +1141,23 @@ function Performance({ client, reload, onOpenStock }) {
   // into that index instead of your stocks — computed server-side from real index
   // prices. So it's directly comparable to total_value with no rescaling here.
   const rawData = p.data
-  const startValue = rawData[0]?.total_value ?? ((rawData[0]?.invested_value || 0) + (rawData[0]?.realized_pnl || 0))
   const lastRaw = rawData[rawData.length - 1]
-  const endValue = lastRaw?.total_value ?? ((lastRaw?.invested_value || 0) + (lastRaw?.realized_pnl || 0))
-  const absoluteGain = endValue - startValue
+  // Gain is the last row's P&L outright — it is already net of capital deployed. Taking
+  // (end total_value - start total_value) counted every later deposit as profit.
+  const absoluteGain = lastRaw?.pnl ?? 0
+  const netCashIn = lastRaw?.net_invested ?? 0
+  const endValue = lastRaw?.market_value ?? 0
 
   // The chart itself plots PROFIT/LOSS, not raw value — an absolute-value line conflates
   // "money you've deposited" with "how it performed" (every new buy makes the line jump,
   // even with zero return), which read as broken/confusing. Subtracting invested_value
   // from every line (portfolio and each benchmark) removes the deposit-timing noise and
   // leaves pure gain/loss — all lines start near ₹0 and diverge only on real performance.
-  const data = rawData.map((d) => ({
-    ...d,
-    pnl: d.total_value - d.invested_value,
-    nifty_50_pnl: d.nifty_50_value != null ? d.nifty_50_value - d.invested_value : null,
-    mid_cap_pnl: d.mid_cap_value != null ? d.mid_cap_value - d.invested_value : null,
-    large_cap_pnl: d.large_cap_value != null ? d.large_cap_value - d.invested_value : null,
-    small_cap_pnl: d.small_cap_value != null ? d.small_cap_value - d.invested_value : null,
-  }))
+  // `pnl` and each `{index}_pnl` are computed server-side now, both as
+  // (value - net capital deployed), so the portfolio and every benchmark share one
+  // baseline. Subtracting open cost basis here — as this used to — zeroed the benchmark
+  // whenever a position was closed, so the index looked flat every time you took a profit.
+  const data = rawData
 
   return (
     <div>
@@ -1045,10 +1167,10 @@ function Performance({ client, reload, onOpenStock }) {
           <Stat
             label="XIRR"
             value={pct(x.data?.xirr != null ? x.data.xirr * 100 : null)}
-            sub={x.data?.xirr != null ? 'money-weighted, incl. dividends' : 'not computable — very short, high-return round trips push the required rate off the chart'}
+            sub={x.data?.xirr != null ? 'money-weighted — weights returns by how much capital was invested' : 'not computable — very short, high-return round trips push the required rate off the chart'}
           />
-          <Stat label="CAGR" value={pct(x.data?.cagr != null ? x.data.cagr * 100 : null)} sub="invested → market value" />
-          <Stat label="Portfolio growth" value={inr(absoluteGain)} tone={absoluteGain >= 0 ? 'up' : 'down'} sub={`from ${inr(startValue)} → ${inr(endValue)}`} />
+          <Stat label="CAGR (time-weighted)" value={pct(x.data?.cagr != null ? x.data.cagr * 100 : null)} sub={x.data?.cagr != null ? "per-unit return, ignores how much money was in" : "needs a full year of history"} />
+          <Stat label="Portfolio growth" value={inr(absoluteGain)} tone={absoluteGain >= 0 ? 'up' : 'down'} sub={`${inr(endValue)} held · ${inr(netCashIn)} net cash in`} />
         </div>
       )}
 
@@ -1093,7 +1215,7 @@ function Performance({ client, reload, onOpenStock }) {
               <Line type="monotone" dataKey="nifty_50_pnl" name="Nifty 50" stroke={benchmarkColors.nifty_50} dot={false} strokeWidth={2} strokeDasharray="4 3" connectNulls />
             )}
             {benchmarks.mid_cap && (
-              <Line type="monotone" dataKey="mid_cap_pnl" name="Nifty Midcap 100" stroke={benchmarkColors.mid_cap} dot={false} strokeWidth={2} connectNulls />
+              <Line type="monotone" dataKey="mid_cap_pnl" name="Nifty Midcap 150" stroke={benchmarkColors.mid_cap} dot={false} strokeWidth={2} connectNulls />
             )}
             {benchmarks.large_cap && (
               <Line type="monotone" dataKey="large_cap_pnl" name="Nifty 100 (Large Cap)" stroke={benchmarkColors.large_cap} dot={false} strokeWidth={2} strokeDasharray="4 3" connectNulls />

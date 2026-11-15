@@ -96,7 +96,12 @@ def _prep(trades: Iterable[dict]) -> tuple[list[dict], dict[str, str], dict[str,
     """
     trades = list(trades)
     sym_isin: dict[str, str] = {}
-    for t in trades:
+    # Earliest trade first, so the choice doesn't depend on the order the store returned
+    # the rows in. A split that changes the ISIN (NUVAMA INE531F01015 -> ...023) otherwise
+    # grouped the symbol under whichever ISIN came first in the list, and when that was
+    # the new one the split (filed under the old ISIN) was never applied: 5 shares shown
+    # for 25 held.
+    for t in sorted(trades, key=lambda t: (str(t.get("trade_date", "")), str(t.get("order_execution_time", "")))):
         s = t.get("symbol")
         i = (t.get("isin") or "").strip()
         if s and i and s not in sym_isin:
@@ -121,7 +126,8 @@ def _prep(trades: Iterable[dict]) -> tuple[list[dict], dict[str, str], dict[str,
     return trades, sym_isin, display
 
 
-def _adjustment_events(actions: Iterable[dict] | None) -> list[tuple[str, str, float, str]]:
+def _adjustment_events(actions: Iterable[dict] | None,
+                       sym_isin: dict[str, str] | None = None) -> list[tuple[str, str, float, str]]:
     """Build (ex_date, key, multiplier, type) events from split/bonus corporate actions.
 
     Only SPLIT and BONUS change share count, so only those become events. Each event is
@@ -136,7 +142,10 @@ def _adjustment_events(actions: Iterable[dict] | None) -> list[tuple[str, str, f
         ex = a.get("ex_date")
         if not ex or mult == 1.0:
             continue
-        for key in {(a.get("isin") or "").strip(), (a.get("symbol") or "").strip()}:
+        sym = (a.get("symbol") or "").strip()
+        # ...and under the key the engine grouped that symbol by, which differs from the
+        # action's own ISIN when the split itself changed the ISIN.
+        for key in {(a.get("isin") or "").strip(), sym, (sym_isin or {}).get(sym, "")}:
             if key:
                 events.append((ex, key, mult, a["type"]))
     return events
@@ -163,7 +172,7 @@ def compute_positions(trades: Iterable[dict],
     for t in trades:
         prio = 0 if str(t.get("trade_type", "")).lower() == "buy" else 1
         stream.append((str(t.get("trade_date", "")), prio, str(t.get("order_execution_time", "")), "T", t))
-    for ex, key, mult, atype in _adjustment_events(actions):
+    for ex, key, mult, atype in _adjustment_events(actions, sym_isin):
         stream.append((ex, -1, "", "A", (key, mult, atype)))
     stream.sort(key=lambda x: (x[0], x[1], x[2]))
 
@@ -246,6 +255,78 @@ def compute_positions(trades: Iterable[dict],
     return list(pos.values()), round(total_realized, 4)
 
 
+def matched_trades(trades: Iterable[dict], actions: Iterable[dict] | None = None) -> list[dict]:
+    """The trade list with sell quantity trimmed to what FIFO could actually match.
+
+    A sell with no matching buy in the tradebook has an unknown cost basis — a demerger
+    credit (RAYMONDREL), an IPO allotment (HDBFS), a bonus, an off-market transfer-in.
+    compute_positions already refuses to book P&L on that quantity. But cash-flow based
+    series (net capital deployed, the benchmark's index units) were still counting its
+    PROCEEDS as money withdrawn, so on the chart it showed up as pure profit: one real
+    account's chart jumped ~60% in a day on a sale of shares it never bought.
+
+    Dropping the unmatched quantity from the sells makes every derived series describe the
+    same set of shares the P&L does, so chart P&L equals realized + unrealized exactly.
+    Buys are untouched. Sells fully matched are returned unchanged (same dict object).
+    """
+    trades, sym_isin, _display = _prep(trades)
+
+    stream: list[tuple] = []
+    for i, t in enumerate(trades):
+        prio = 0 if str(t.get("trade_type", "")).lower() == "buy" else 1
+        stream.append((str(t.get("trade_date", "")), prio, str(t.get("order_execution_time", "")), "T", (i, t)))
+    for ex, key, mult, atype in _adjustment_events(actions, sym_isin):
+        stream.append((ex, -1, "", "A", (key, mult, atype)))
+    stream.sort(key=lambda x: (x[0], x[1], x[2]))
+
+    lots: dict[str, deque[Lot]] = defaultdict(deque)
+    matched_qty: dict[int, float] = {}
+
+    for _d, _p, _tm, kind, payload in stream:
+        if kind == "A":
+            key, mult, _atype = payload
+            for lot in lots.get(key, ()):
+                lot.qty *= mult
+                lot.unit_cost /= mult
+            continue
+
+        i, t = payload
+        key = _rkey_of(t, sym_isin)
+        qty = _num(t.get("quantity"))
+        if qty <= 0:
+            continue
+        ttype = str(t.get("trade_type", "")).lower()
+        if ttype == "buy":
+            lots[key].append(Lot(qty=qty, unit_cost=0.0, trade_date=str(t.get("trade_date", ""))))
+        elif ttype == "sell":
+            remaining = qty
+            dq = lots[key]
+            while remaining > 1e-9 and dq:
+                lot = dq[0]
+                take = min(remaining, lot.qty)
+                lot.qty -= take
+                remaining -= take
+                if lot.qty <= 1e-9:
+                    dq.popleft()
+            matched_qty[i] = qty - remaining
+
+    out: list[dict] = []
+    for i, t in enumerate(trades):
+        if str(t.get("trade_type", "")).lower() != "sell":
+            out.append(t)
+            continue
+        qty = _num(t.get("quantity"))
+        m = matched_qty.get(i, qty)
+        if qty <= 0 or m >= qty - 1e-9:
+            out.append(t)
+        elif m > 1e-9:
+            frac = m / qty
+            out.append({**t, "quantity": m, "charges": _num(t.get("charges")) * frac,
+                        "trade_value": _num(t.get("trade_value")) * frac})
+        # m == 0: the whole sell is unmatched — drop it
+    return out
+
+
 def compute_round_trips(trades: Iterable[dict]) -> list[dict]:
     """FIFO-matched closed round trips ("playbook" rows): each row is one buy-lot
     slice matched against a sell. A sell spanning multiple buy lots produces one row
@@ -303,6 +384,37 @@ def compute_round_trips(trades: Iterable[dict]) -> list[dict]:
                     dq.popleft()
 
     return round_trips
+
+
+#: Tradebook `segment` values that represent cash-market equity, i.e. positions that are
+#: paid for in full and whose trade value therefore IS capital deployed.
+EQUITY_SEGMENTS = {"EQ", "EQUITY", "CASH", "BE", "BSE_EQ", "NSE_EQ"}
+
+
+def split_segments(trades: Iterable[dict]) -> tuple[list[dict], list[dict]]:
+    """Split cash-equity trades from derivative (F&O / NRML) trades.
+
+    This matters for capital, not just tidiness. A futures or options trade's `trade_value`
+    is NOTIONAL — a contract carrying 10L of notional may be held against roughly 1.5L of
+    margin. Feeding that notional into the FIFO engine and into peak capital would report
+    several times the money the investor actually put up, and would swamp the equity book
+    it is averaged with. Derivatives also expire rather than being sold, so a held-to-expiry
+    contract leaves a phantom open lot that never clears.
+
+    Until margin data is available there is nothing meaningful to say about a derivative's
+    "invested value", so these are separated out and reported on their own P&L terms.
+
+    A missing or blank `segment` is treated as equity: older imported rows predate the field
+    and dropping them would silently empty an existing client's portfolio.
+
+    Returns (equity_trades, derivative_trades).
+    """
+    equity: list[dict] = []
+    derivatives: list[dict] = []
+    for t in trades:
+        seg = str(t.get("segment") or "").strip().upper()
+        (equity if not seg or seg in EQUITY_SEGMENTS else derivatives).append(t)
+    return equity, derivatives
 
 
 def split_intraday(trades: Iterable[dict]) -> tuple[list[dict], list[dict]]:

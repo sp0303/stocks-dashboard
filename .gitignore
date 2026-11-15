@@ -31,3 +31,9 @@ graphify-out/
 *.log
 logs/
 push.zip
+
+# local prod data dump (contains client PII) — never commit
+pfdump.tgz
+pfdump/
+dump-prod.sh
+graphify-out/

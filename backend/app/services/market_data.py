@@ -390,26 +390,37 @@ class QuoteCache:
         self.provider = provider
         self.ttl = ttl
         self.negative_ttl = negative_ttl if negative_ttl is not None else min(ttl, 300)
-        self._cache: dict[str, tuple[float | None, float]] = {}  # sym -> (price or None, ts)
+        # keyed by (symbol, exchange): the same share trades on NSE and BSE at different
+        # prices (an illiquid BSE listing can lag its NSE price by double digits), and this
+        # used to be keyed by symbol alone. Whichever page loaded first then decided the
+        # price every other page showed — one client's BSE holding was valued at another
+        # client's NSE price, overstating it by Rs 4,979 on a Rs 2.5L account.
+        self._cache: dict[tuple[str, str], tuple[float | None, float]] = {}
 
     def _ttl_for(self, price: float | None) -> int:
         return self.ttl if price is not None else self.negative_ttl
 
     def get(self, symbols: list[str], exchanges: dict[str, str] | None = None) -> dict[str, dict]:
         now = time.time()
-        fresh = {
-            s: v for s, (v, ts) in self._cache.items()
-            if s in symbols and now - ts < self._ttl_for(v)
-        }
-        need = [s for s in symbols if s not in fresh]
+        ex = exchanges or {}
+
+        def key(s: str) -> tuple[str, str]:
+            return (s, ex.get(s) or "NSE")
+
+        need = []
+        for s in symbols:
+            hit = self._cache.get(key(s))
+            if not hit or now - hit[1] >= self._ttl_for(hit[0]):
+                need.append(s)
         if need:
             fetched = self.provider.get_quotes(need, exchanges)  # type: ignore[call-arg]
             for s in need:
-                self._cache[s] = (fetched.get(s), now)
+                self._cache[key(s)] = (fetched.get(s), now)
         result: dict[str, dict] = {}
         for s in symbols:
-            if s in self._cache:
-                price, ts = self._cache[s]
+            hit = self._cache.get(key(s))
+            if hit:
+                price, ts = hit
                 result[s] = {"price": price, "as_of": ts, "stale": (now - ts) >= self._ttl_for(price)}
             else:
                 result[s] = {"price": None, "as_of": None, "stale": True}

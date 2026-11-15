@@ -8,9 +8,14 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime
 
-from app.services.engine import compute_positions, compute_round_trips
+from app.services.engine import _num, compute_positions, compute_round_trips, matched_trades
 from app.services.market_data import get_quotes
 from app.services.securities import classify
+
+#: Annual risk-free rate used by every risk-adjusted metric. One value, because Sharpe was
+#: previously computed at 6% in the summary and 6.5% in the metrics endpoint, so the same
+#: portfolio scored differently depending on which card you read. Roughly the RBI repo rate.
+RISK_FREE_RATE = 0.065
 
 
 def _exchange_map(trades: list[dict]) -> dict[str, str]:
@@ -38,7 +43,12 @@ def build_holdings(trades: list[dict], with_prices: bool = True,
     for p in open_pos:
         meta = classify(p.symbol)
         q = quotes.get(p.symbol, {})
-        ltp = q.get("price")
+        # A rights entitlement (NSE "-RE" series) is not a holding: it trades for a couple of
+        # weeks, then converts into shares (bought separately) or lapses worthless. Its last
+        # traded price keeps a lapsed entitlement on the books at a value nobody can realise,
+        # so it is left unpriced (out of cost AND value, R6) and flagged for review (R8).
+        rights = p.symbol.upper().endswith("-RE")
+        ltp = None if rights else q.get("price")
         invested = p.invested_value
         market_value = (ltp * p.quantity) if ltp is not None else None
         unrealized = (market_value - invested) if market_value is not None else None
@@ -77,6 +87,7 @@ def build_holdings(trades: list[dict], with_prices: bool = True,
                 "cap": meta["cap"],
                 "stale": q.get("stale", True),
                 "price_unavailable": market_value is None,
+                "rights_entitlement": rights,
                 "entry_date": entry_date,
                 "holding_days": holding_days,
                 # split/bonus events applied to this holding's lots (empty for most) —
@@ -96,7 +107,7 @@ def build_holdings(trades: list[dict], with_prices: bool = True,
     return {
         "holdings": holdings,
         "totals": {
-            "invested_value": round(total_invested, 2),
+            "invested_value": round(total_invested, 2),      # current investment (cost of holdings)
             "market_value": round(total_market, 2),
             "realized_pnl": round(total_realized, 2),
             "unrealized_pnl": round(total_unrealized, 2),
@@ -118,37 +129,89 @@ def build_holdings(trades: list[dict], with_prices: bool = True,
     }
 
 
+def peak_capital_deployed(trades: list[dict]) -> float:
+    """The most of the investor's OWN money ever tied up at one time — the maximum of the
+    running (cumulative buys - cumulative sells) cash outflow.
+
+    This is what "Invested" means across the dashboard, and it is the denominator for
+    return %. Two tempting alternatives are both wrong as a headline:
+
+    * `buy_total - sell_total` (what this used to show as "Deployed Capital") is ending
+      NET cash flow, not capital deployed. It shrinks as the investor takes money out and
+      goes negative on a profitable account that recycles capital — e.g. 10L recycled four
+      times at +20% reports -5.7L "deployed". It only looks right on an account that has
+      accumulated monotonically and never withdrawn.
+    * Gross bought double-counts recycled capital: a book that turns the same 1L over ten
+      times reads as 10L invested, understating return tenfold.
+
+    Peak outflow has neither failure mode: it never goes negative, and reinvested proceeds
+    don't inflate it because the sell that funded the buy is netted off first.
+    """
+    if not trades:
+        return 0.0
+    # Net each DAY's flows before accumulating, rather than walking trade by trade. Within
+    # a single session the order of fills is not a capital requirement: selling A and buying
+    # B the same day is funded by the sale, not by new money. Walking trade-by-trade with
+    # buys first would book a phantom spike — a book that rolls 10L from one stock to the
+    # next each month would read as 22L of capital at risk instead of the 10L actually put in.
+    by_day: dict[str, float] = defaultdict(float)
+    for t in trades:
+        gross = _num(t.get("price")) * _num(t.get("quantity"))
+        charges = _num(t.get("charges"))
+        if str(t.get("trade_type", "")).lower() == "buy":
+            by_day[str(t.get("trade_date", ""))] += gross + charges
+        else:
+            by_day[str(t.get("trade_date", ""))] -= gross - charges
+
+    running = peak = 0.0
+    for day in sorted(by_day):
+        running += by_day[day]
+        peak = max(peak, running)
+    return round(peak, 2)
+
+
 def portfolio_summary(trades: list[dict], actions: list[dict] | None = None) -> dict:
     data = build_holdings(trades, actions=actions)
     t = data["totals"]
     buys = sum(1 for x in trades if x["trade_type"] == "buy")
     sells = len(trades) - buys
 
-    # Calculate dates and deployed capital
-    # Deployed capital = net cash flow (sum of buys - sum of sells)
-    # This is the actual external capital deployed, excluding reinvested sale proceeds
     first_date = min((t["trade_date"] for t in trades), default=None) if trades else None
     last_date = max((t["trade_date"] for t in trades), default=None) if trades else None
     buy_total = sum(t["trade_value"] for t in trades if t["trade_type"] == "buy")
     sell_total = sum(t["trade_value"] for t in trades if t["trade_type"] == "sell")
-    initial_capital = buy_total - sell_total
 
-    # Current invested = cost basis of currently held positions
+    # "Invested" headline = peak capital at risk. See peak_capital_deployed() for why the
+    # old `buy_total - sell_total` is not capital deployed (it can go negative).
+    peak_capital = peak_capital_deployed(matched_trades(trades, actions))
+
+    # Current invested = cost basis of currently held positions. Kept as its own figure
+    # (it's what a broker's holdings screen shows) but NOT the return denominator: once
+    # realized gains are reinvested it exceeds the cash ever put in, which is exactly how
+    # a 10.0% return came to display as 9.1%.
     current_invested = t["invested_value"]
 
-    # Calculate Sharpe Ratio (risk-adjusted returns)
-    sharpe = calculate_sharpe_ratio(trades, risk_free_rate=0.06)  # 6% risk-free rate for India
+    total_pnl = t["total_pnl"]
 
     return {
         **t,
+        # Override the holdings-scoped return_pct from build_holdings, which divides by
+        # open cost basis and so inflates returns on any book with closed trades.
+        "return_pct": round(total_pnl / peak_capital * 100, 2) if peak_capital else 0.0,
         "total_trades": len(trades),
         "buy_trades": buys,
         "sell_trades": sells,
         "first_trade_date": first_date,
         "last_trade_date": last_date,
-        "initial_capital": round(initial_capital, 2),
+        "peak_capital": peak_capital,
+        "gross_bought": round(buy_total, 2),
+        "gross_sold": round(sell_total, 2),
+        # Retained so existing callers don't KeyError; superseded by peak_capital.
+        "initial_capital": round(buy_total - sell_total, 2),
         "current_invested": round(current_invested, 2),
-        "sharpe_ratio": sharpe,  # Risk-adjusted returns metric
+        # Sharpe needs the time-weighted NAV curve, which needs historical prices, which
+        # this synchronous summary has no business fetching. It is served by /metrics,
+        # which is where the UI reads it from.
     }
 
 
@@ -185,17 +248,28 @@ def allocation(trades: list[dict], by: str = "sector", basis: str = "current") -
             buckets[key] += v
             total += v
 
-        # Add closed positions (by buy price)
-        round_trips = compute_round_trips(trades)
-        for r in round_trips:
-            sym = r["symbol"]
+        # Closed positions, valued at the PEAK capital each symbol ever required rather
+        # than the sum of every round trip's buy leg. Summing the legs counts recycled
+        # money once per cycle: a symbol traded 11 times contributed 11 separate buys to
+        # its own weight, so the names churned most looked like the largest bets when they
+        # may never have held more than a small position at a time.
+        by_symbol: dict[str, list[dict]] = defaultdict(list)
+        for t in trades:
+            by_symbol[t["symbol"]].append(t)
+
+        open_symbols = {h["symbol"] for h in data["holdings"]}
+        for sym, sym_trades in by_symbol.items():
+            if sym in open_symbols:
+                continue  # already counted above at its open cost basis
+            peak = peak_capital_deployed(sym_trades)
+            if peak <= 0:
+                continue
             m = classify(sym)
-            buy_value = r["buy_price"] * r["quantity"]
             key = {
                 "sector": m["sector"], "asset": m["asset_class"], "stock": sym, "cap": m["cap"],
             }.get(by, m["sector"])
-            buckets[key] += buy_value
-            total += buy_value
+            buckets[key] += peak
+            total += peak
 
     out = [
         {"key": k, "value": round(v, 2), "pct": round(v / total * 100, 2) if total else 0.0}
@@ -316,9 +390,268 @@ def market_value_series(
     return out
 
 
+def daily_performance_series(
+    trades: list[dict],
+    calendar: list[str],
+    price_maps: dict[str, dict[str, float]] | None = None,
+    actions: list[dict] | None = None,
+) -> list[dict]:
+    """Mark-to-market portfolio value for EVERY day in `calendar`, not just trade days.
+
+    The series this replaces emitted one row per day the client traded, which on a real
+    book meant a chart with almost no data in it — a typical account had 15 points across
+    191 calendar days (7.9% coverage) with single straight lines drawn across gaps of up
+    to 48 days. Every metric derived from it (volatility, drawdown, beta, Sharpe) was being
+    computed on those 15 points and then annualised as though they were consecutive days.
+
+    `calendar` is the trading calendar to sample on — pass the benchmark index's own price
+    dates, which are exactly the days NSE was open. Trade dates are always included even if
+    the index map lacks them.
+
+    Positions are re-derived only on days the book actually changed; every other day reuses
+    the most recent snapshot and re-values it at that day's close. So cost stays O(trade
+    days x trades) as before, and the extra daily resolution costs only a valuation pass.
+
+    Each row carries:
+      invested_value  cost basis of open positions
+      realized_pnl    cumulative realised, from closed quantity
+      net_invested    cumulative cash actually put in (buys - sells)
+      market_value    mark-to-market value of open positions
+      total_value     market_value + realized_pnl (the historical key, kept for callers)
+      pnl             market_value - net_invested == realised + unrealised
+
+    `pnl` is the figure to plot. It shares a baseline with the benchmark lines (see
+    benchmark_series), so portfolio and index are finally measured the same way.
+    """
+    import bisect
+
+    if not trades:
+        return []
+
+    by_day: dict[str, list[dict]] = defaultdict(list)
+    for t in trades:
+        by_day[str(t["trade_date"])].append(t)
+    trade_days = sorted(by_day)
+
+    price_maps = price_maps or {}
+    sorted_px = {sym: sorted(pm) for sym, pm in price_maps.items()}
+
+    def price_on_or_before(symbol: str, day: str) -> float | None:
+        dates = sorted_px.get(symbol)
+        if not dates:
+            return None
+        idx = bisect.bisect_right(dates, day) - 1
+        return price_maps[symbol][dates[idx]] if idx >= 0 else None
+
+    def price_on_or_after(symbol: str, day: str) -> float | None:
+        dates = sorted_px.get(symbol)
+        if not dates:
+            return None
+        idx = bisect.bisect_left(dates, day)
+        return price_maps[symbol][dates[idx]] if idx < len(dates) else None
+
+    # Price basis (R17). Trades are as-traded, but the history may be split-adjusted, and
+    # the engine applies every known split/bonus to the snapshot quantities up front. So a
+    # stock bought at 429 can sit next to a history close of 86 (an adjusted 1:5 split the
+    # corporate-action feed never reported): valued at 86 the buy books an instant -80% day,
+    # and on one real account those days compounded into a -64% TWR on a book that had made
+    # +7L. On each trade day we measure the stock's trade price against its close, in the
+    # snapshot's (post-known-actions) units; a gap beyond normal intraday range is a basis
+    # difference, and the history is rescaled by it until the stock next trades.
+    split_events: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    for a in actions or []:
+        mult = _num(a.get("qty_multiplier")) or 1.0
+        if a.get("type") in ("SPLIT", "BONUS") and a.get("ex_date") and mult != 1.0:
+            split_events[str(a.get("symbol") or "")].append((str(a["ex_date"]), mult))
+
+    def future_mult(symbol: str, day: str) -> float:
+        m = 1.0
+        for ex, mult in split_events.get(symbol, ()):
+            if ex > day:
+                m *= mult
+        return m
+
+    basis: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    mismatched: set[str] = set()
+    for day in trade_days:
+        legs: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+        for t in by_day[day]:
+            q = _num(t.get("quantity"))
+            legs[t["symbol"]][0] += q * _num(t.get("price"))
+            legs[t["symbol"]][1] += q
+        for sym, (val, qty) in legs.items():
+            close = price_on_or_before(sym, day) or price_on_or_after(sym, day)
+            if not close or not qty:
+                continue
+            h = (val / qty) / (close * future_mult(sym, day))
+            if 0.8 < h < 1.25:
+                h = 1.0
+            else:
+                mismatched.add(sym)
+            basis[sym].append((day, h))
+
+    def basis_on(symbol: str, day: str) -> float:
+        rows = basis.get(symbol)
+        if not rows:
+            return 1.0
+        idx = bisect.bisect_right(rows, (day, float("inf"))) - 1
+        return rows[idx][1] if idx >= 0 else 1.0
+
+    # One snapshot per day the book changed: (open positions, cumulative realised, net cash).
+    snapshots: list[tuple[list, float, float]] = []
+    running: list[dict] = []
+    net_cash = 0.0
+    for day in trade_days:
+        running.extend(by_day[day])
+        for t in by_day[day]:
+            gross = _num(t.get("price")) * _num(t.get("quantity"))
+            charges = _num(t.get("charges"))
+            if str(t.get("trade_type", "")).lower() == "buy":
+                net_cash += gross + charges
+            else:
+                net_cash -= gross - charges
+        positions, realized = compute_positions(running, actions=actions or [])
+        opens = [(p.symbol, p.quantity, p.avg_cost, p.invested_value)
+                 for p in positions if p.quantity > 0]
+        snapshots.append((opens, realized, net_cash))
+
+    days = sorted({d for d in calendar if d >= trade_days[0]} | set(trade_days))
+
+    def _moved_before(c0: float | None, c1: float | None, p: float) -> float:
+        """Share of the day's price move that had already happened by the time a trade
+        executed at price `p` (0 = at the previous close, 1 = at today's close). Falls back
+        to mid-day when the stock barely moved or a price is missing, where the ratio is
+        meaningless."""
+        if not c0 or not c1 or abs(c1 - c0) / c0 < 0.005:
+            return 0.5
+        return min(1.0, max(0.0, (p - c0) / (c1 - c0)))
+
+    out: list[dict] = []
+    prev_row: dict | None = None
+    for day in days:
+        idx = bisect.bisect_right(trade_days, day) - 1
+        if idx < 0:
+            continue
+        opens, realized, net_in = snapshots[idx]
+
+        market_value = invested = 0.0
+        for symbol, qty, avg_cost, inv in opens:
+            px = price_on_or_before(symbol, day)
+            # No price history for this symbol (recent listing, delisted, renamed) — hold it
+            # at cost rather than dropping it, so the curve doesn't step down for a data gap.
+            market_value += qty * (px * basis_on(symbol, day) if px is not None else avg_cost)
+            invested += inv
+
+        # Capital genuinely at work today, for the time-weighted return. Yesterday's value
+        # plus new money in proportion to how much of the day's move it was invested for,
+        # minus sold shares for the part of the move they missed. Weighting by execution
+        # price (which the tradebook records) means a tranche bought at the close adds
+        # nothing to the base and one bought at the open adds all of it, so staged buying
+        # and a lump sum give the same curve when the price path is the same.
+        twr_base = None
+        if prev_row is not None:
+            twr_base = prev_row["market_value"]
+            for t in by_day.get(day, []):
+                sym, q, px_t = t["symbol"], _num(t.get("quantity")), _num(t.get("price"))
+                # Closes in as-traded units, so they compare with the execution price.
+                k = basis_on(sym, day) * future_mult(sym, day)
+                c0 = price_on_or_before(sym, prev_row["date"])
+                c1 = price_on_or_before(sym, day)
+                c0, c1 = (c0 * k if c0 else c0), (c1 * k if c1 else c1)
+                m = _moved_before(c0, c1, px_t)
+                if str(t.get("trade_type", "")).lower() == "buy":
+                    twr_base += q * px_t * (1.0 - m)
+                else:
+                    twr_base -= q * (c0 or px_t) * (1.0 - m)
+
+        row = {
+            "date": day,
+            "invested_value": round(invested, 2),
+            "realized_pnl": round(realized, 2),
+            "net_invested": round(net_in, 2),
+            "market_value": round(market_value, 2),
+            "total_value": round(market_value + realized, 2),
+            "pnl": round(market_value - net_in, 2),
+            "twr_base": round(twr_base, 2) if twr_base is not None else None,
+        }
+        out.append(row)
+        prev_row = row
+    if out and mismatched:
+        # Surfaced as a data-quality issue (R16/R17): usually a split or bonus missing from
+        # the corporate-action feed, which also leaves the held quantity wrong.
+        out[-1]["price_basis_symbols"] = sorted(mismatched)
+    return out
+
+
+def twr_series(rows: list[dict]) -> list[dict]:
+    """Time-weighted return as a NAV indexed to 100 — the basis for every risk metric.
+
+    Each day's return is the change in the value of what is HELD, with that day's cash
+    flow removed:  r = (V_t - V_t-1 - flow_t) / V_t-1.  Buying more therefore doesn't
+    register as a gain and selling doesn't register as a loss, which is the whole point:
+    the previous series treated a full exit as a ~-90% day and then fed that into
+    volatility, drawdown and beta.
+
+    V is the market value of open positions only. Sale proceeds leave the portfolio as a
+    negative flow on the same day, so they cancel out exactly rather than vanishing.
+
+    This is the same NAV-unit method Zerodha Console uses for its performance curve, where
+    deposits create units and withdrawals remove them so neither moves the NAV.
+    """
+    out: list[dict] = []
+    nav = 100.0
+    prev_value: float | None = None
+    prev_net: float | None = None
+
+    for row in rows:
+        value = row["market_value"]
+        net_in = row["net_invested"]
+        if prev_value is not None:
+            flow = net_in - prev_net
+            # Money paid IN counts toward the day's capital base; money taken OUT does not.
+            #
+            # Contributions at start: a purchase is assumed to be working for the day, so it
+            # belongs in the denominator. Dividing by the pre-flow value instead explodes
+            # when a near-empty portfolio is topped up — on one real account, 434 rupees of
+            # residual value followed by a 3,514 rupee purchase gave a -403% daily return,
+            # drove NAV negative, and left 746 days of nonsense after it (max drawdown came
+            # out at -1084%).
+            #
+            # Withdrawals at end: a sale is assumed to happen after the day's move, so the
+            # base stays at yesterday's value and the day still earns on the money that was
+            # invested. Putting withdrawals in the denominator would zero the base on a full
+            # exit and silently discard that day's gain.
+            gain = value - prev_value - flow
+            # Prefer the execution-price-weighted base the series builder computed; rows
+            # without one (a hand-built value/flow series) fall back to counting new money
+            # in full and ignoring withdrawals.
+            base = row.get("twr_base")
+            if base is None:
+                base = prev_value + max(flow, 0.0)
+            # Below a rupee of base there is nothing to earn a return on — the day is pure
+            # cash movement, so carry NAV flat rather than manufacturing a return from noise.
+            if base > 1.0:
+                r = gain / base
+                # A long-only cash portfolio cannot lose more than everything in a day. If
+                # this trips, the inputs disagree (a trade priced far from its close, or a
+                # position that cannot be valued), and compounding it would corrupt every
+                # later NAV. Hold flat instead of propagating a negative NAV.
+                if r <= -1.0:
+                    r = 0.0
+            else:
+                r = 0.0
+            nav *= (1 + r)
+            out.append({"date": row["date"], "nav": round(nav, 6), "ret": r})
+        prev_value, prev_net = value, net_in
+    return out
+
+
 _BOOK_VALUE_KEYS = [
-    "invested_value", "realized_pnl", "total_value",
+    "invested_value", "realized_pnl", "total_value", "market_value", "net_invested", "pnl",
     "nifty_50_value", "mid_cap_value", "large_cap_value", "small_cap_value",
+    # The P&L lines are additive across clients (each is already value minus that client's
+    # own deployed capital), so the book's line is just their sum.
+    "nifty_50_pnl", "mid_cap_pnl", "large_cap_pnl", "small_cap_pnl",
 ]
 
 
@@ -436,8 +769,14 @@ def portfolio_cashflows(trades: list[dict], dividends: list[dict], market_value:
     return cfs
 
 
-def portfolio_xirr(trades: list[dict], dividends: list[dict] | None = None) -> float | None:
+def portfolio_xirr(trades: list[dict], dividends: list[dict] | None = None,
+                   today: date | None = None) -> float | None:
+    """Money-weighted return, suppressed under a year (R4) for the same reason CAGR is:
+    annualising a few months turns a 5% gain into a headline 20%+."""
     if not trades:
+        return None
+    first = min(str(t["trade_date"])[:10] for t in trades)
+    if ((today or date.today()) - date.fromisoformat(first)).days < 365:
         return None
     data = build_holdings(trades)
     cfs = portfolio_cashflows(trades, dividends or [], data["totals"]["market_value"])
@@ -467,36 +806,76 @@ def cagr(trades: list[dict]) -> float | None:
     return round((ending_value / invested) ** (1 / years) - 1, 6)
 
 
-def benchmark_series(trades: list[dict], prices: dict[str, float]) -> list[dict]:
-    """Simulate investing each buy/sell's cash amount into the benchmark index on the
-    same date, using the caller-supplied {date: close} price map (already resolved from
-    cache + live fetch — this function does no I/O). Produces {date, benchmark_value}
-    aligned to the same trade-days as `performance_series` so the two can be merged."""
-    ts = sorted(trades, key=lambda t: t["trade_date"])
-    by_day: dict[str, list[dict]] = defaultdict(list)
-    for t in ts:
-        by_day[t["trade_date"]].append(t)
+def benchmark_series(trades: list[dict], prices: dict[str, float],
+                     calendar: list[str] | None = None) -> list[dict]:
+    """What the SAME cash flows would be worth in the index — the index-units method.
 
-    price_dates = sorted(prices.keys())
+    Each buy purchases units of the index at that day's close; each sell redeems them. The
+    result is directly comparable to the portfolio because both are valued with real prices
+    on the same days. This is the Kaplan-Schoar public-market-equivalent construction.
+
+    Emits `benchmark_pnl = benchmark_value - net_invested`, which is the number to plot.
+    That baseline is what makes the comparison honest, and it is why the old chart was
+    wrong: it subtracted OPEN COST BASIS from the benchmark. On a round trip where the
+    index rose 10% alongside the portfolio, selling drove units to zero, so the benchmark
+    line reported 0 gain against the portfolio's real +10% — the index appeared to do
+    nothing whenever the client took a profit.
+
+    Portfolio P&L reduces to `market_value - net_invested` (the realised and cost terms
+    cancel), so subtracting the same `net_invested` here puts both on one baseline.
+
+    Pass `calendar` to value the index on every trading day; without it the series only has
+    points on trade days, which is what left the chart nearly empty.
+    """
+    import bisect
+
+    if not trades:
+        return []
+
+    by_day: dict[str, list[dict]] = defaultdict(list)
+    for t in trades:
+        by_day[str(t["trade_date"])].append(t)
+    trade_days = sorted(by_day)
+
+    price_dates = sorted(prices)
 
     def price_on_or_before(day: str) -> float | None:
-        import bisect
-
         idx = bisect.bisect_right(price_dates, day) - 1
         return prices[price_dates[idx]] if idx >= 0 else None
 
-    units = 0.0
-    last_price: float | None = None
-    out: list[dict] = []
-    for day in sorted(by_day):
+    # Units held and cash deployed after each day the book changed.
+    units = net_cash = 0.0
+    state: list[tuple[float, float]] = []
+    for day in trade_days:
         px = price_on_or_before(day)
-        if px:
-            last_price = px
-            for t in by_day[day]:
-                amt = t["price"] * t["quantity"]
-                units += amt / px if t["trade_type"] == "buy" else -amt / px
-        value = units * (px or last_price or 0)
-        out.append({"date": day, "benchmark_value": round(value, 2)})
+        for t in by_day[day]:
+            gross = _num(t.get("price")) * _num(t.get("quantity"))
+            charges = _num(t.get("charges"))
+            if str(t.get("trade_type", "")).lower() == "buy":
+                net_cash += gross + charges
+                if px:
+                    units += gross / px
+            else:
+                net_cash -= gross - charges
+                if px:
+                    units -= gross / px
+        state.append((units, net_cash))
+
+    days = sorted({d for d in (calendar or []) if d >= trade_days[0]} | set(trade_days))
+
+    out: list[dict] = []
+    for day in days:
+        idx = bisect.bisect_right(trade_days, day) - 1
+        if idx < 0:
+            continue
+        u, net_in = state[idx]
+        px = price_on_or_before(day)
+        value = u * px if px else 0.0
+        out.append({
+            "date": day,
+            "benchmark_value": round(value, 2),
+            "benchmark_pnl": round(value - net_in, 2),
+        })
     return out
 
 
@@ -540,75 +919,73 @@ def holding_summary(trades: list[dict]) -> list[dict]:
 def manager_metrics(clients: list[dict]) -> dict:
     """Aggregate across all of a manager's clients.
 
-    `clients` = [{"id","name","trades":[...]}]. One quote fetch for the whole book.
+    `clients` = [{"id","name","trades":[...], optional "actions", "trade_count"}].
+
+    Each client is valued exactly the way that client's own dashboard values it: its own
+    corporate actions applied, each position priced on the exchange it was traded on, and
+    unpriced positions left out of BOTH cost and market value. The book figures are then the
+    sums of the client figures, so the manager page can never disagree with a client page.
+    Previously the whole book was priced at once with one book-wide exchange map ("NSE if
+    any client used NSE"), splits and bonuses were ignored, and an unpriced symbol dropped
+    out of market value but stayed in cost. One BSE holding of VENUSREM was valued at the
+    NSE price, overstating a Rs 2.5L account by Rs 4,979.
     """
     from collections import defaultdict
 
-    # per-symbol aggregates across the whole book
+    # per-symbol aggregates across the whole book (priced positions only)
     invested_by_sym: dict[str, float] = defaultdict(float)
-    qty_by_sym: dict[str, float] = defaultdict(float)
-    realized_by_sym: dict[str, float] = defaultdict(float)
+    market_by_sym: dict[str, float] = defaultdict(float)
     trade_count_by_sym: dict[str, int] = defaultdict(int)
-    exchanges: dict[str, str] = {}
 
     total_realized = 0.0
-    per_client_open: list[tuple[str, str, list]] = []  # (client_id, name, open positions)
+    total_invested = total_market = 0.0
     all_symbols: set[str] = set()
+    # Book-wide "Invested" = the sum of each client's own peak capital at risk. Summed
+    # per client rather than run over the merged trade stream, because one client's sell
+    # must not offset another's buy — they are separate pools of money.
+    book_peak_capital = 0.0
+    by_client: list[dict] = []
 
     for c in clients:
         trades = c.get("trades", [])
+        actions = c.get("actions") or []
+        peak = peak_capital_deployed(matched_trades(trades, actions))
+        book_peak_capital += peak
         for t in trades:
             trade_count_by_sym[t["symbol"]] += 1
-            if exchanges.get(t["symbol"]) != "NSE":
-                exchanges[t["symbol"]] = t.get("exchange") or "NSE"
-        positions, realized = compute_positions(trades)
+
+        positions, realized = compute_positions(trades, actions)
         total_realized += realized
         opens = [p for p in positions if p.quantity > 0]
-        per_client_open.append((c["id"], c.get("name", ""), opens))
+        quotes = get_quotes([p.symbol for p in opens], _exchange_map(trades)) if opens else {}
+
+        cinv = cmv = 0.0
         for p in opens:
-            invested_by_sym[p.symbol] += p.invested_value
-            qty_by_sym[p.symbol] += p.quantity
             all_symbols.add(p.symbol)
-        for p in positions:
-            realized_by_sym[p.symbol] += p.realized_pnl
-
-    quotes = get_quotes(sorted(all_symbols), exchanges) if all_symbols else {}
-
-    # book-wide valuation
-    total_invested = sum(invested_by_sym.values())
-    market_by_sym: dict[str, float] = {}
-    total_market = total_unrealized = 0.0
-    for sym, qty in qty_by_sym.items():
-        ltp = quotes.get(sym, {}).get("price")
-        if ltp is None:
-            continue
-        mv = ltp * qty
-        market_by_sym[sym] = mv
-        total_market += mv
-        total_unrealized += mv - invested_by_sym[sym]
-
-    # per-client rollup (market value + total pnl)
-    by_client = []
-    for cid, name, opens in per_client_open:
-        cinv = sum(p.invested_value for p in opens)
-        cmv = sum((quotes.get(p.symbol, {}).get("price") or 0) * p.quantity for p in opens)
-        crealized = sum(p.realized_pnl for p in opens)  # realized on still-open symbols only
-
-        # Get client details safely from the clients list
-        client_obj = next((c for c in clients if c.get("id") == cid), {})
-        client_code = client_obj.get("client_code", "")
-        status = client_obj.get("status", "ACTIVE")
-        trade_count = len(client_obj.get("trades", []))
+            ltp = quotes.get(p.symbol, {}).get("price")
+            if ltp is None:
+                continue        # unpriced: excluded from cost and value alike
+            mv = ltp * p.quantity
+            cmv += mv
+            cinv += p.invested_value
+            invested_by_sym[p.symbol] += p.invested_value
+            market_by_sym[p.symbol] += mv
+        total_invested += cinv
+        total_market += cmv
 
         by_client.append({
-            "id": cid, "name": name,
-            "client_code": client_code,
-            "status": status,
-            "trade_count": trade_count,
-            "invested": round(cinv, 2), "market_value": round(cmv, 2),
-            "unrealized_pnl": round(cmv - cinv, 2) if cmv else 0.0,
+            "id": c["id"], "name": c.get("name", ""),
+            "client_code": c.get("client_code", ""),
+            "status": c.get("status", "ACTIVE"),
+            "trade_count": c.get("trade_count", len(trades)),
+            "peak_capital": round(peak, 2),      # real investment: capital deployed
+            "invested": round(cinv, 2),          # current investment: cost of what is held
+            "market_value": round(cmv, 2),
+            "unrealized_pnl": round(cmv - cinv, 2),
+            "realized_pnl": round(realized, 2),
         })
     by_client.sort(key=lambda x: x["market_value"], reverse=True)
+    total_unrealized = total_market - total_invested
 
     def top(d):
         return max(d.items(), key=lambda kv: kv[1]) if d else None
@@ -627,12 +1004,17 @@ def manager_metrics(clients: list[dict]) -> dict:
     return {
         "totals": {
             "clients": len(clients),
-            "invested_value": round(total_invested, 2),
+            "invested_value": round(total_invested, 2),      # current investment (cost of holdings)
             "market_value": round(total_market, 2),
             "realized_pnl": round(total_realized, 2),
             "unrealized_pnl": round(total_unrealized, 2),
             "total_pnl": round(total_realized + total_unrealized, 2),
-            "return_pct": round((total_realized + total_unrealized) / total_invested * 100, 2) if total_invested else 0.0,
+            # Denominator is peak capital at risk across the book, not open cost basis —
+            # the latter inflates the number on any client with closed trades.
+            "return_pct": round((total_realized + total_unrealized) / book_peak_capital * 100, 2)
+            if book_peak_capital
+            else 0.0,
+            "peak_capital": round(book_peak_capital, 2),
             "unique_stocks": len(all_symbols),
         },
         "most_invested_stock": {"symbol": most_invested[0], "invested_value": round(most_invested[1], 2)} if most_invested else None,
@@ -790,274 +1172,238 @@ def stock_analysis(trades: list[dict], symbol: str, actions: list[dict] | None =
 # Phase 1: Core Performance Analytics
 # ─────────────────────────────────────────────────────────────────────────────
 
-def calculate_cagr(performance_series: list[dict]) -> float | None:
-    """Compound Annual Growth Rate by annualizing the total portfolio return.
-    Formula: (1 + Total Return %) ^ (1/Years) - 1
-    Returns: CAGR as decimal (e.g., 0.1973 = 19.73%)
+def _returns_of(series: list[dict]) -> list[tuple[str, float]]:
+    """(date, daily return) pairs from a series, preferring the TWR nav when present.
+
+    Accepts either a nav series from twr_series() or a raw value series, so callers can
+    pass a benchmark's price history through the same path.
     """
-    if not performance_series or len(performance_series) < 2:
-        return None
-
-    last = performance_series[-1]
-
-    # Get actual invested and realized P&L (core metrics that are reliable)
-    last_invested = last.get("invested_value", 0)
-    last_realized_pnl = last.get("realized_pnl", 0)
-
-    # Calculate current unrealized P&L from total_value
-    # total_value = invested_value + realized_pnl + unrealized_pnl
-    last_total_value = last.get("total_value", 0)
-    last_unrealized_pnl = last_total_value - last_invested - last_realized_pnl if last_total_value else 0
-
-    last_total_pnl = last_realized_pnl + last_unrealized_pnl
-
-    if not last_invested or last_invested <= 0:
-        return None
-
-    from datetime import datetime
-    first = performance_series[0]
-    start_date = datetime.strptime(first["date"], "%Y-%m-%d").date()
-    end_date = datetime.strptime(last["date"], "%Y-%m-%d").date()
-
-    days = (end_date - start_date).days
-    if days <= 0:
-        return None
-
-    years = days / 365.25
-
-    # Total return percentage: total_pnl / invested_value
-    total_return_pct = last_total_pnl / last_invested if last_invested > 0 else 0
-
-    # CAGR = (1 + Total Return %) ^ (1/Years) - 1
-    cagr = (1 + total_return_pct) ** (1 / years) - 1
-    return cagr
+    out: list[tuple[str, float]] = []
+    if not series:
+        return out
+    if "ret" in series[0]:
+        return [(r["date"], r["ret"]) for r in series]
+    prev = None
+    for row in series:
+        v = row.get("nav", row.get("total_value"))
+        if v is not None and prev is not None and prev > 0:
+            out.append((row["date"], (v - prev) / prev))
+        if v is not None:
+            prev = v
+    return out
 
 
 def calculate_daily_returns(performance_series: list[dict]) -> list[float]:
-    """Calculate daily portfolio returns from performance series.
-    Returns: List of daily returns as decimals (e.g., 0.02 = 2% gain)
+    """Daily returns as plain floats. Prefer _returns_of when dates are needed."""
+    return [r for _, r in _returns_of(performance_series)]
+
+
+def calculate_cagr(nav_series: list[dict]) -> float | None:
+    """Annualised time-weighted return, from the NAV curve.
+
+    Taking it from the NAV means deposits and withdrawals don't count as performance. The
+    previous version divided total P&L by the LAST row's open cost basis, so a book that
+    had closed most of its positions showed an enormous return (a 50k gain on a 10k
+    remaining position read as 500%).
+
+    Returns None for periods under a year rather than extrapolating. GIPS forbids
+    annualising a partial year because it invents a return the assets never earned, and
+    Zerodha Console suppresses its own XIRR for the same reason.
     """
-    if not performance_series or len(performance_series) < 2:
-        return []
-
-    returns = []
-    for i in range(1, len(performance_series)):
-        prev_value = performance_series[i-1].get("total_value")
-        curr_value = performance_series[i].get("total_value")
-
-        if prev_value and prev_value > 0 and curr_value:
-            daily_return = (curr_value - prev_value) / prev_value
-            returns.append(daily_return)
-
-    return returns
-
-
-def calculate_volatility(performance_series: list[dict]) -> float | None:
-    """Annual volatility (standard deviation of daily returns, annualized).
-    Returns: Volatility as decimal (e.g., 0.185 = 18.5%)
-    """
-    daily_returns = calculate_daily_returns(performance_series)
-
-    if len(daily_returns) < 2:
+    if not nav_series or len(nav_series) < 2:
         return None
 
+    start_nav = nav_series[0].get("nav")
+    end_nav = nav_series[-1].get("nav")
+    if not start_nav or end_nav is None or start_nav <= 0:
+        return None
+
+    start = datetime.strptime(nav_series[0]["date"], "%Y-%m-%d").date()
+    end = datetime.strptime(nav_series[-1]["date"], "%Y-%m-%d").date()
+    days = (end - start).days
+    if days < 365:
+        return None
+
+    years = days / 365.25
+    growth = end_nav / start_nav
+    if growth <= 0:
+        return None
+    return growth ** (1 / years) - 1
+
+
+def calculate_total_return(nav_series: list[dict]) -> float | None:
+    """Cumulative time-weighted return over the whole period, not annualised.
+
+    This is what to show when the period is under a year and CAGR is withheld.
+    """
+    if not nav_series or len(nav_series) < 2:
+        return None
+    start_nav = nav_series[0].get("nav")
+    end_nav = nav_series[-1].get("nav")
+    if not start_nav or end_nav is None or start_nav <= 0:
+        return None
+    return end_nav / start_nav - 1
+
+
+def calculate_volatility(nav_series: list[dict]) -> float | None:
+    """Annualised standard deviation of daily time-weighted returns.
+
+    Meaningful only now that the series has a point per trading day: annualising by
+    sqrt(252) assumes the observations ARE consecutive trading days, which was false when
+    the series only had a row per trade (gaps of up to 48 days between "daily" returns).
+    """
+    returns = calculate_daily_returns(nav_series)
+    if len(returns) < 2:
+        return None
     import statistics
-    std_dev = statistics.stdev(daily_returns)
-
-    # Annualize: sqrt(252) trading days per year
-    annual_volatility = std_dev * (252 ** 0.5)
-    return annual_volatility
+    return statistics.stdev(returns) * (252 ** 0.5)
 
 
-def calculate_max_drawdown(performance_series: list[dict]) -> float | None:
-    """Maximum drawdown: worst peak-to-trough loss.
-    Returns: Max drawdown as decimal (e.g., -0.234 = -23.4%)
-    """
-    if not performance_series:
+def calculate_max_drawdown(nav_series: list[dict]) -> float | None:
+    """Worst peak-to-trough fall of the NAV, as a negative decimal."""
+    if not nav_series:
         return None
-
-    max_drawdown = 0.0
-    peak_value = 0.0
-
-    for entry in performance_series:
-        value = entry.get("total_value")
-        if value is None:
+    peak = float("-inf")
+    worst = 0.0
+    for row in nav_series:
+        v = row.get("nav")
+        if v is None:
             continue
-
-        if value > peak_value:
-            peak_value = value
-
-        if peak_value > 0:
-            drawdown = (value - peak_value) / peak_value
-            if drawdown < max_drawdown:
-                max_drawdown = drawdown
-
-    return max_drawdown if max_drawdown < 0 else None
+        peak = max(peak, v)
+        if peak > 0:
+            worst = min(worst, (v - peak) / peak)
+    return worst if worst < 0 else None
 
 
-def calculate_current_drawdown(performance_series: list[dict]) -> float | None:
-    """Current drawdown from recent peak.
-    Returns: Current drawdown as decimal (e.g., -0.082 = -8.2%)
+def calculate_current_drawdown(nav_series: list[dict]) -> float | None:
+    """How far below its all-time peak the NAV sits today, as a negative decimal."""
+    if not nav_series:
+        return None
+    navs = [r["nav"] for r in nav_series if r.get("nav") is not None]
+    if not navs:
+        return None
+    peak = max(navs)
+    return (navs[-1] - peak) / peak if peak > 0 else None
+
+
+def calculate_sharpe_ratio(nav_series: list[dict], risk_free_rate: float = RISK_FREE_RATE) -> float | None:
+    """Sharpe from daily excess returns: mean(r - rf_daily) / stdev(r) * sqrt(252).
+
+    Built from the daily series rather than from (CAGR - rf) / volatility, which mixes a
+    geometric numerator with an arithmetic denominator and needs a full year of history
+    before CAGR exists at all. This version works on any period of a few weeks or more.
+
+    There used to be TWO functions with this name in this module; the second silently
+    shadowed the first, expected raw trades, and looked for an "action" key our trades
+    don't have — so it returned None for every portfolio and the Sharpe card was always
+    blank. There is now exactly one.
     """
-    if not performance_series:
+    returns = calculate_daily_returns(nav_series)
+    if len(returns) < 2:
         return None
-
-    current_value = performance_series[-1].get("total_value")
-    if current_value is None or current_value <= 0:
+    import statistics
+    sd = statistics.stdev(returns)
+    if sd == 0:
         return None
-
-    peak_value = 0.0
-    for entry in performance_series:
-        value = entry.get("total_value")
-        if value and value > peak_value:
-            peak_value = value
-
-    if peak_value > 0:
-        return (current_value - peak_value) / peak_value
-
-    return None
+    daily_rf = risk_free_rate / 252
+    mean_excess = statistics.mean(returns) - daily_rf
+    return mean_excess / sd * (252 ** 0.5)
 
 
-def calculate_sharpe_ratio(performance_series: list[dict], risk_free_rate: float = 0.065) -> float | None:
-    """Sharpe Ratio: (Portfolio Return - Risk-Free Rate) / Volatility
-    Args:
-        performance_series: Portfolio performance over time
-        risk_free_rate: Annual risk-free rate (default 6.5% = RBI repo rate)
-    Returns: Sharpe ratio as decimal (e.g., 1.85)
+def calculate_benchmark_cagr(benchmark_nav: list[dict]) -> float | None:
+    return calculate_cagr(benchmark_nav)
+
+
+def calculate_beta(portfolio_returns, benchmark_returns) -> float | None:
+    """Beta = cov(portfolio, benchmark) / var(benchmark).
+
+    Both arguments may be (date, return) pairs, in which case they are matched BY DATE.
+    The old version aligned two plain lists by trailing position after each had already
+    dropped its own missing days, so the pairs could be silently offset — comparing the
+    portfolio's Tuesday against the index's Thursday and reporting the result as beta.
     """
-    cagr = calculate_cagr(performance_series)
-    volatility = calculate_volatility(performance_series)
-
-    if cagr is None or volatility is None or volatility == 0:
+    def _as_map(seq):
+        if seq and isinstance(seq[0], tuple):
+            return dict(seq)
         return None
 
-    sharpe = (cagr - risk_free_rate) / volatility
-    return sharpe
+    pm, bm = _as_map(portfolio_returns), _as_map(benchmark_returns)
+    if pm is not None and bm is not None:
+        shared = sorted(set(pm) & set(bm))
+        port = [pm[d] for d in shared]
+        bench = [bm[d] for d in shared]
+    else:
+        port = [r for _, r in portfolio_returns] if (portfolio_returns and isinstance(portfolio_returns[0], tuple)) else list(portfolio_returns)
+        bench = [r for _, r in benchmark_returns] if (benchmark_returns and isinstance(benchmark_returns[0], tuple)) else list(benchmark_returns)
+        n = min(len(port), len(bench))
+        port, bench = port[-n:], bench[-n:]
 
-
-def calculate_benchmark_cagr(benchmark_series: list[dict]) -> float | None:
-    """Calculate CAGR for benchmark performance series (same as portfolio CAGR)."""
-    return calculate_cagr(benchmark_series)
-
-
-def calculate_beta(portfolio_returns: list[float], benchmark_returns: list[float]) -> float | None:
-    """Beta: Covariance(portfolio, benchmark) / Variance(benchmark)
-    How much portfolio moves relative to benchmark (e.g., beta=1.2 = 20% more volatile)
-    Args:
-        portfolio_returns: Daily returns from performance series
-        benchmark_returns: Daily returns from benchmark series
-    Returns: Beta as decimal (e.g., 1.15)
-    """
-    if not portfolio_returns or not benchmark_returns:
-        return None
-
-    if len(portfolio_returns) != len(benchmark_returns):
-        # Align to shorter length
-        min_len = min(len(portfolio_returns), len(benchmark_returns))
-        portfolio_returns = portfolio_returns[-min_len:]
-        benchmark_returns = benchmark_returns[-min_len:]
-
-    if len(portfolio_returns) < 2:
+    if len(port) < 2 or len(bench) < 2:
         return None
 
     import statistics
+    bench_mean = statistics.mean(bench)
+    port_mean = statistics.mean(port)
+    cov = sum((p - port_mean) * (b - bench_mean) for p, b in zip(port, bench)) / len(port)
+    var = sum((b - bench_mean) ** 2 for b in bench) / len(bench)
+    return cov / var if var else None
 
-    # Calculate means
-    port_mean = statistics.mean(portfolio_returns)
-    bench_mean = statistics.mean(benchmark_returns)
 
-    # Calculate covariance
-    covariance = sum(
-        (portfolio_returns[i] - port_mean) * (benchmark_returns[i] - bench_mean)
-        for i in range(len(portfolio_returns))
-    ) / len(portfolio_returns)
-
-    # Calculate benchmark variance
-    bench_variance = sum(
-        (b - bench_mean) ** 2
-        for b in benchmark_returns
-    ) / len(benchmark_returns)
-
-    if bench_variance == 0:
+def calculate_alpha(portfolio_return: float | None, benchmark_return: float | None,
+                    beta: float | None, risk_free_rate: float = RISK_FREE_RATE) -> float | None:
+    """Jensen's alpha: actual return minus the return beta alone would predict."""
+    if portfolio_return is None or benchmark_return is None or beta is None:
         return None
+    expected = risk_free_rate + beta * (benchmark_return - risk_free_rate)
+    return portfolio_return - expected
 
-    beta = covariance / bench_variance
-    return beta
 
+def compute_performance_metrics(nav_series: list[dict],
+                                benchmark_nav: list[dict] | None = None,
+                                risk_free_rate: float = RISK_FREE_RATE) -> dict:
+    """Every Phase 1 metric, all derived from the time-weighted NAV curve.
 
-def calculate_alpha(cagr: float, benchmark_cagr: float, beta: float,
-                   risk_free_rate: float = 0.065) -> float | None:
-    """Alpha: Excess return vs benchmark (adjusted for risk via Beta)
-    Formula: Portfolio Return - (Risk-Free Rate + Beta * (Benchmark Return - Risk-Free Rate))
-    Returns: Alpha as decimal (e.g., 0.052 = +5.2%)
+    `nav_series` comes from twr_series(); `benchmark_nav` is the same transform applied to
+    the index's own price history, so portfolio and benchmark are measured identically.
     """
-    if cagr is None or benchmark_cagr is None or beta is None:
-        return None
-
-    expected_return = risk_free_rate + beta * (benchmark_cagr - risk_free_rate)
-    alpha = cagr - expected_return
-    return alpha
-
-
-def compute_performance_metrics(performance_series: list[dict],
-                               benchmark_performance: list[dict] | None = None,
-                               risk_free_rate: float = 0.065) -> dict:
-    """Compute all Phase 1 performance metrics at once.
-    Args:
-        performance_series: Portfolio performance history
-        benchmark_performance: Benchmark performance history (if available)
-        risk_free_rate: Annual risk-free rate (default 6.5%)
-    Returns: Dictionary with all metrics
-    """
-    if not performance_series:
+    if not nav_series:
         return {}
 
-    portfolio_cagr = calculate_cagr(performance_series)
-    portfolio_volatility = calculate_volatility(performance_series)
-    sharpe = calculate_sharpe_ratio(performance_series, risk_free_rate)
-    max_drawdown = calculate_max_drawdown(performance_series)
-    current_drawdown = calculate_current_drawdown(performance_series)
+    cagr = calculate_cagr(nav_series)
+    total_return = calculate_total_return(nav_series)
+    volatility = calculate_volatility(nav_series)
+    sharpe = calculate_sharpe_ratio(nav_series, risk_free_rate)
+    max_dd = calculate_max_drawdown(nav_series)
+    current_dd = calculate_current_drawdown(nav_series)
 
-    # Calculate portfolio daily returns for beta calculation
-    portfolio_returns = calculate_daily_returns(performance_series)
+    beta = alpha = benchmark_cagr = benchmark_total_return = None
+    if benchmark_nav and len(benchmark_nav) >= 2:
+        benchmark_cagr = calculate_benchmark_cagr(benchmark_nav)
+        benchmark_total_return = calculate_total_return(benchmark_nav)
+        beta = calculate_beta(_returns_of(nav_series), _returns_of(benchmark_nav))
+        # Compare like with like: annualised against annualised when a full year exists,
+        # otherwise cumulative against cumulative.
+        port_r, bench_r = (cagr, benchmark_cagr) if cagr is not None else (total_return, benchmark_total_return)
+        alpha = calculate_alpha(port_r, bench_r, beta, risk_free_rate)
 
-    # Calculate beta and alpha if benchmark available
-    beta = None
-    alpha = None
-    benchmark_cagr = None
-
-    if benchmark_performance and len(benchmark_performance) >= 2:
-        benchmark_cagr = calculate_benchmark_cagr(benchmark_performance)
-        benchmark_returns = calculate_daily_returns(benchmark_performance)
-
-        if benchmark_returns:
-            beta = calculate_beta(portfolio_returns, benchmark_returns)
-            if beta is not None and benchmark_cagr is not None:
-                alpha = calculate_alpha(portfolio_cagr, benchmark_cagr, beta, risk_free_rate)
-
-    # Time period calculation
-    from datetime import datetime
-    start_date = None
-    end_date = None
-
-    if performance_series:
-        start_date = datetime.strptime(performance_series[0]["date"], "%Y-%m-%d").date()
-        end_date = datetime.strptime(performance_series[-1]["date"], "%Y-%m-%d").date()
-
-    days_held = (end_date - start_date).days if start_date and end_date else None
+    start = datetime.strptime(nav_series[0]["date"], "%Y-%m-%d").date()
+    end = datetime.strptime(nav_series[-1]["date"], "%Y-%m-%d").date()
 
     return {
-        "cagr": round(portfolio_cagr, 4) if portfolio_cagr is not None else None,
-        "volatility": round(portfolio_volatility, 4) if portfolio_volatility is not None else None,
+        "cagr": round(cagr, 4) if cagr is not None else None,
+        "total_return": round(total_return, 4) if total_return is not None else None,
+        "volatility": round(volatility, 4) if volatility is not None else None,
         "sharpe_ratio": round(sharpe, 4) if sharpe is not None else None,
-        "max_drawdown": round(max_drawdown, 4) if max_drawdown is not None else None,
-        "current_drawdown": round(current_drawdown, 4) if current_drawdown is not None else None,
+        "max_drawdown": round(max_dd, 4) if max_dd is not None else None,
+        "current_drawdown": round(current_dd, 4) if current_dd is not None else None,
         "beta": round(beta, 4) if beta is not None else None,
         "alpha": round(alpha, 4) if alpha is not None else None,
         "benchmark_cagr": round(benchmark_cagr, 4) if benchmark_cagr is not None else None,
-        "days_held": days_held,
-        "start_date": str(start_date) if start_date else None,
-        "end_date": str(end_date) if end_date else None,
+        "benchmark_total_return": round(benchmark_total_return, 4) if benchmark_total_return is not None else None,
+        "days_held": (end - start).days,
+        "observations": len(nav_series),
+        "start_date": str(start),
+        "end_date": str(end),
     }
 
 
@@ -1454,44 +1800,58 @@ def compute_trade_analytics(trades: list[dict]) -> dict:
     }
 
 
-def compute_risk_monitoring(performance_series: list[dict], trades: list[dict]) -> dict:
-    """Phase 4: Risk monitoring (concentration, correlation, health score)."""
+def compute_risk_monitoring(nav_series: list[dict], trades: list[dict],
+                            holdings: list[dict] | None = None) -> dict:
+    """Phase 4: Risk monitoring (concentration, health score, alerts).
+
+    `nav_series` is the time-weighted NAV from twr_series(), so volatility and drawdown
+    here mean the same thing they do on the metrics cards.
+    """
     from app.services.engine import compute_positions
     from app.services.securities import classify
 
-    if not performance_series:
+    if not nav_series:
         return {"error": "No data"}
 
-    positions, _ = compute_positions(trades)
-    open_pos = [p for p in positions if p.quantity > 0]
+    # Weight positions by MARKET value when priced holdings are supplied, the same basis the
+    # Concentration panel uses. Weighting by cost here gave two different "Largest sector"
+    # figures on one page (40.9% against 39.0%). Unpriced holdings and the no-holdings
+    # fallback use cost basis so nothing silently drops out.
+    rows: list[tuple[str, float, str, str]] = []   # (symbol, weight value, sector, cap)
+    if holdings:
+        for h in holdings:
+            v = h.get("market_value")
+            if v is None:
+                v = h.get("invested_value") or 0.0
+            rows.append((h["symbol"], float(v), h.get("sector") or "Unclassified", h.get("cap") or "Unknown"))
+    else:
+        positions, _ = compute_positions(trades)
+        for p in positions:
+            if p.quantity > 0:
+                meta = classify(p.symbol)
+                rows.append((p.symbol, float(p.invested_value or 0.0),
+                             meta.get("sector", "Unclassified"), meta.get("cap", "Unknown")))
 
-    if not open_pos:
+    rows = [r for r in rows if r[1] > 0]
+    if not rows:
         return {"error": "No open positions"}
 
-    # Concentration (using invested_value)
-    total_inv = sum(p.invested_value for p in open_pos if p.invested_value)
+    total_inv = sum(r[1] for r in rows)
 
     # Top 10 concentration
-    sorted_pos = sorted(open_pos, key=lambda p: p.invested_value or 0, reverse=True)
-    top_10_pct = round((sum((p.invested_value or 0) for p in sorted_pos[:10]) / total_inv * 100) if total_inv else 0, 1)
+    top_10_pct = round(sum(r[1] for r in sorted(rows, key=lambda r: r[1], reverse=True)[:10]) / total_inv * 100, 1)
 
     # Sector concentration
     by_sector = defaultdict(float)
-    for p in open_pos:
-        sector = classify(p.symbol).get("sector", "Unclassified")
-        by_sector[sector] += (p.invested_value or 0)
+    by_cap = defaultdict(float)
+    for _sym, v, sector, cap in rows:
+        by_sector[sector] += v
+        by_cap[cap] += v
 
-    sector_pcts = {s: round((v / total_inv * 100), 1) for s, v in by_sector.items()} if total_inv else {}
+    sector_pcts = {s: round(v / total_inv * 100, 1) for s, v in by_sector.items()}
     largest_sector = max(sector_pcts.items(), key=lambda x: x[1])[0] if sector_pcts else None
     largest_sector_pct = max(sector_pcts.values()) if sector_pcts else 0
-
-    # Cap concentration
-    by_cap = defaultdict(float)
-    for p in open_pos:
-        cap = classify(p.symbol).get("cap", "Unknown")
-        by_cap[cap] += (p.invested_value or 0)
-
-    cap_pcts = {c: round((v / total_inv * 100), 1) for c, v in by_cap.items()} if total_inv else {}
+    cap_pcts = {c: round(v / total_inv * 100, 1) for c, v in by_cap.items()}
 
     # Health score (0-100)
     score = 100
@@ -1504,22 +1864,25 @@ def compute_risk_monitoring(performance_series: list[dict], trades: list[dict]) 
     elif largest_sector_pct > 30:
         score -= 5
 
-    volatility = calculate_volatility(performance_series) or 0
-    if volatility > 25:
+    # These three are DECIMALS (0.25 == 25%), but were compared against 25, -30 and -15 as
+    # though they were percentages — so no volatility or drawdown penalty could ever fire
+    # and every portfolio scored at least 85 with an empty alert list.
+    volatility = calculate_volatility(nav_series) or 0.0
+    if volatility > 0.25:
         score -= 10
-    elif volatility > 20:
+    elif volatility > 0.20:
         score -= 5
 
-    max_dd = calculate_max_drawdown(performance_series) or 0
-    if max_dd < -30:
+    max_dd = calculate_max_drawdown(nav_series) or 0.0
+    if max_dd < -0.30:
         score -= 15
-    elif max_dd < -20:
+    elif max_dd < -0.20:
         score -= 10
 
-    current_dd = calculate_current_drawdown(performance_series) or 0
-    if current_dd < -15:
+    current_dd = calculate_current_drawdown(nav_series) or 0.0
+    if current_dd < -0.15:
         score -= 10
-    elif current_dd < -10:
+    elif current_dd < -0.10:
         score -= 5
 
     score = max(0, min(100, score))
@@ -1533,94 +1896,11 @@ def compute_risk_monitoring(performance_series: list[dict], trades: list[dict]) 
         },
         "by_sector": sector_pcts,
         "by_cap": cap_pcts,
-        "total_positions": len(open_pos),
+        "total_positions": len(rows),
         "alerts": [a for a in [
             "High concentration" if top_10_pct > 70 else None,
             "Sector overweight" if largest_sector_pct > 40 else None,
-            "High volatility" if volatility > 25 else None,
-            "Deep drawdown" if max_dd < -30 else None,
+            "High volatility" if volatility > 0.25 else None,
+            "Deep drawdown" if max_dd < -0.30 else None,
         ] if a is not None]
     }
-
-
-def calculate_sharpe_ratio(trades: list[dict], cash_flow_history: list[dict] | None = None,
-                          risk_free_rate: float = 0.06) -> float | None:
-    """Calculate Sharpe Ratio: (Return - Risk-Free Rate) / Volatility.
-
-    Args:
-        trades: all trades (buy/sell)
-        cash_flow_history: list of {date, amount, type} for deposits/withdrawals
-        risk_free_rate: annual risk-free rate (default 6% for India)
-
-    Returns:
-        Sharpe ratio (higher = better risk-adjusted returns), or None if insufficient data
-    """
-    if not trades:
-        return None
-
-    # Calculate portfolio values over time from trades
-    from collections import defaultdict
-    import statistics
-
-    # Group trades by date
-    trades_by_date = defaultdict(list)
-    for t in trades:
-        date_key = t.get("trade_date", "")
-        if date_key:
-            trades_by_date[date_key].append(t)
-
-    if len(trades_by_date) < 30:
-        return None  # Need at least 30 data points
-
-    # Calculate daily portfolio values (simplified: sum of invested value)
-    portfolio_values = []
-    total_invested = 0.0
-    total_realized = 0.0
-
-    for date_key in sorted(trades_by_date.keys()):
-        for trade in trades_by_date[date_key]:
-            qty = trade.get("quantity", 0)
-            price = trade.get("price", 0)
-            action = trade.get("action", "")
-
-            if action.upper() == "BUY":
-                total_invested += qty * price
-            elif action.upper() == "SELL":
-                # For realized P&L (simplified)
-                total_invested -= qty * price
-
-        # Current portfolio value estimate
-        portfolio_values.append(total_invested)
-
-    if len(portfolio_values) < 30:
-        return None
-
-    # Calculate returns (daily percentage change)
-    returns = []
-    for i in range(1, len(portfolio_values)):
-        if portfolio_values[i-1] != 0:
-            daily_return = (portfolio_values[i] - portfolio_values[i-1]) / portfolio_values[i-1]
-            returns.append(daily_return)
-
-    if len(returns) < 30:
-        return None
-
-    # Calculate volatility (standard deviation of returns)
-    try:
-        volatility = statistics.stdev(returns)  # Daily volatility
-    except:
-        return None
-
-    if volatility == 0:
-        return None
-
-    # Annualize returns and volatility (252 trading days/year)
-    annual_volatility = volatility * (252 ** 0.5)
-    avg_daily_return = sum(returns) / len(returns)
-    annual_return = ((1 + avg_daily_return) ** 252) - 1
-
-    # Calculate Sharpe Ratio
-    excess_return = annual_return - risk_free_rate
-    sharpe_ratio = excess_return / annual_volatility
-
-    return round(sharpe_ratio, 2)

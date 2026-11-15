@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api, inr, inrFull, pct, pctPlain } from '../api.js'
 import { Loading, ErrorBox, useAsync } from './common.jsx'
+import HoldingsHeatmap from './HoldingsHeatmap.jsx'
 import './MyBoard.css'
 
 // Watching combines two sources: (1) manual ideas (board items with status=watching),
@@ -55,6 +56,7 @@ export default function MyBoard({ managerId }) {
   const [dragOverExit, setDragOverExit] = useState(false)
   const [dragOverWatching, setDragOverWatching] = useState(false)
   const [drag, setDrag] = useState(null) // { key, column } — active within-column reorder
+  const [view, setView] = useState('board') // 'board' | 'heatmap'
 
   // Notion-style ordering + colors persist per-manager in localStorage. Cards come from
   // mixed sources (real holdings, watchlist entries, manual board items) that don't all
@@ -245,7 +247,13 @@ export default function MyBoard({ managerId }) {
     <div className="myboard">
       <div className="myboard-head">
         <h2>MyBoard</h2>
-        <button className="myboard-add-btn" onClick={() => setAdding(true)}>+ Add idea</button>
+        <div className="row" style={{ gap: 10 }}>
+          <div className="hm-seg" role="tablist" aria-label="Board view">
+            <button role="tab" aria-selected={view === 'board'} className={view === 'board' ? 'on' : ''} onClick={() => setView('board')}>Board</button>
+            <button role="tab" aria-selected={view === 'heatmap'} className={view === 'heatmap' ? 'on' : ''} onClick={() => setView('heatmap')}>Heatmap</button>
+          </div>
+          {view === 'board' && <button className="myboard-add-btn" onClick={() => setAdding(true)}>+ Add idea</button>}
+        </div>
       </div>
       {err && <div className="warn-banner">{err}</div>}
 
@@ -285,7 +293,9 @@ export default function MyBoard({ managerId }) {
         </div>
       </div>
 
-      {adding && (
+      {view === 'heatmap' && <HoldingsHeatmap managerId={managerId} clientIds={selectedClientIds} />}
+
+      {view === 'board' && adding && (
         <AddCard
           onCancel={() => setAdding(false)}
           onSave={(vals) => run(async () => {
@@ -295,7 +305,7 @@ export default function MyBoard({ managerId }) {
         />
       )}
 
-      <div className="myboard-cols">
+      {view === 'board' && <div className="myboard-cols">
         <div className="myboard-col">
           <div className="myboard-col-head">
             <span className="myboard-col-title">Watching</span>
@@ -408,7 +418,7 @@ export default function MyBoard({ managerId }) {
             {exitItems.length === 0 && <div className="myboard-empty">Drop a card here</div>}
           </div>
         </div>
-      </div>
+      </div>}
     </div>
   )
 }
