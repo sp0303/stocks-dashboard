@@ -106,6 +106,8 @@ class ParsedTradebook:
     # The account code printed in the file itself (None when the export carries none),
     # kept apart from client_id, which falls back to the caller's hint.
     file_client_id: str | None = None
+    # The account holder's name when the export prints one (Groww: "Name"), else None.
+    file_client_name: str | None = None
 
 
 def _fingerprint(client_id: str, t: dict) -> str:
@@ -145,6 +147,7 @@ def parse_tradebook(source, client_id_hint: str | None = None) -> ParsedTradeboo
     rows = list(ws.iter_rows(values_only=True))
     client_id = client_id_hint
     file_client_id = None
+    file_client_name = None
     date_from = date_to = None
     header_idx = None
     header_cols: list[str] = []
@@ -161,6 +164,10 @@ def parse_tradebook(source, client_id_hint: str | None = None) -> ParsedTradeboo
         for j, c in enumerate(lower):
             if c in ("client id", "ucc", "unique client code") and j + 1 < len(cells) and cells[j + 1]:
                 client_id = file_client_id = cells[j + 1]
+            # a "Name: <holder>" pair in the preamble (a short label row, never the header)
+            if (c in ("name", "client name", "account name", "account holder", "account holder name")
+                    and j + 1 < len(cells) and cells[j + 1] and sum(1 for x in cells if x) <= 4):
+                file_client_name = cells[j + 1]
             if c.startswith("tradebook for"):
                 m = re.search(r"from\s+([\d-]+)\s+to\s+([\d-]+)", cells[j])
                 if m:
@@ -176,7 +183,8 @@ def parse_tradebook(source, client_id_hint: str | None = None) -> ParsedTradeboo
             break
 
     if header_idx is None:
-        return ParsedTradebook(client_id, date_from, date_to, [], ["Header row not found"], file_client_id)
+        return ParsedTradebook(client_id, date_from, date_to, [], ["Header row not found"], file_client_id,
+                               file_client_name)
 
     is_upstox = header_map is UPSTOX_HEADER_MAP
     is_groww = header_map is GROWW_HEADER_MAP
@@ -247,7 +255,8 @@ def parse_tradebook(source, client_id_hint: str | None = None) -> ParsedTradeboo
         except (ValueError, TypeError) as e:
             errors.append(f"row {r_i}: {e}")
 
-    return ParsedTradebook(client_id, date_from, date_to, trades, errors, file_client_id)
+    return ParsedTradebook(client_id, date_from, date_to, trades, errors, file_client_id,
+                           file_client_name)
 
 
 # ── export: the inverse of parse_tradebook ──────────────────────────────────────

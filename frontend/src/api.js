@@ -215,6 +215,13 @@ export const api = {
     return req(`/api/clients/${clientId}/tradebooks${q}`, { method: 'POST', body: fd }).then((r) => r.data)
   },
   uploads: (clientId) => req(`/api/clients/${clientId}/tradebooks`).then((r) => r.data),
+  // any tradebook from the manager's book; the server routes it to the matching client
+  uploadManagerTradebook: (managerId, file, { force = false } = {}) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const q = force ? '?force=true' : ''
+    return req(`/api/managers/${managerId}/tradebooks${q}`, { method: 'POST', body: fd }).then((r) => r.data)
+  },
   deleteUpload: (clientId, uploadId) =>
     req(`/api/clients/${clientId}/tradebooks/${uploadId}`, { method: 'DELETE' }).then((r) => r.data),
   portfolio: (clientId) => req(`/api/clients/${clientId}/portfolio`).then((r) => r.data),

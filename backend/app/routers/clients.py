@@ -445,13 +445,19 @@ async def upload_tradebook(client_id: str, file: UploadFile = File(...),
     client = await store.get_client(client_id)
     if not client:
         raise HTTPException(404, "client not found")
+    return {"data": await _import_tradebook(store, client, await file.read(), file.filename, force)}
 
-    content = await file.read()
+
+async def _import_tradebook(store, client: dict, content: bytes, file_name: str | None,
+                            force: bool) -> dict:
+    """Import one tradebook into one client. Every account guard lives here, so the
+    per-client upload and the manager's auto-routed upload enforce the same rules."""
+    import io
+
+    client_id = client["id"]
     fhash = ingestion.file_hash(content)
     if not force and await store.upload_exists(client_id, fhash):
         raise HTTPException(409, "this exact file was already uploaded")
-
-    import io
 
     parsed = ingestion.parse_tradebook(io.BytesIO(content), client_id_hint=client.get("client_code"))
     if not parsed.trades:
@@ -502,7 +508,7 @@ async def upload_tradebook(client_id: str, file: UploadFile = File(...),
             "id": upload_id,
             "client_id": client_id,
             "version": version,
-            "file_name": file.filename,
+            "file_name": file_name,
             "file_hash": fhash,
             "uploaded_at": _now(),
             "date_from": parsed.date_from,
@@ -519,16 +525,83 @@ async def upload_tradebook(client_id: str, file: UploadFile = File(...),
         await store.update_client(client_id, {"client_code": parsed.client_id})
 
     return {
-        "data": {
-            "upload": upload,
-            "summary": {
-                "parsed": len(parsed.trades),
-                "imported": inserted,
-                "duplicates": dupes,
-                "errors": len(parsed.errors),
-            },
-        }
+        "upload": upload,
+        "summary": {
+            "parsed": len(parsed.trades),
+            "imported": inserted,
+            "duplicates": dupes,
+            "errors": len(parsed.errors),
+        },
     }
+
+
+def _name_key(name: str | None) -> frozenset[str]:
+    """Order- and case-insensitive name tokens: "BILLA SUMANTH" == "Sumanth Billa"."""
+    import re
+    return frozenset(re.findall(r"[a-z0-9]+", (name or "").lower()))
+
+
+@router.post("/managers/{manager_id}/tradebooks")
+async def upload_manager_tradebook(manager_id: str, file: UploadFile = File(...),
+                                   force: bool = Query(False, description="re-import a file already uploaded"),
+                                   _: auth.Identity = Depends(auth.require_manager_scope)):
+    """Upload any tradebook from the manager's book; it is routed to the client it belongs to.
+
+    Match order: the account code printed in the file against the clients' codes, then (only
+    when the file has no code a client already holds) the holder's name, exact on its words.
+    Nothing is guessed: no match, or more than one, is an error that names the candidates."""
+    import io
+
+    store = get_store()
+    content = await file.read()
+    parsed = ingestion.parse_tradebook(io.BytesIO(content))
+    if not parsed.trades:
+        raise HTTPException(422, f"no valid trades found ({'; '.join(parsed.errors[:3])})")
+
+    clients = await store.list_clients(manager_id)
+    file_code = (parsed.file_client_id or "").strip().upper()
+    file_name = (parsed.file_client_name or "").strip()
+    who = " / ".join(x for x in (file_code and f"account {file_code}", file_name and f"name {file_name}") if x)
+
+    target, matched_by = None, None
+    if file_code:
+        by_code = [c for c in clients if (c.get("client_code") or "").strip().upper() == file_code]
+        if len(by_code) > 1:
+            raise HTTPException(409, f"more than one of your clients has account {file_code} "
+                                     f"({', '.join(c.get('name') or c['id'] for c in by_code)}). Fix the codes first.")
+        if by_code:
+            target, matched_by = by_code[0], "account"
+        else:
+            others = [c for c in await store.list_clients()
+                      if c.get("portfolio_manager_id") != manager_id
+                      and (c.get("client_code") or "").strip().upper() == file_code]
+            if others:
+                raise HTTPException(422, f"this tradebook is for account {file_code}, which is not one of your clients.")
+    if not target and file_name and _name_key(file_name):
+        # a client that already has a different code can never take this file (account guard)
+        by_name = [c for c in clients if _name_key(c.get("name")) == _name_key(file_name)
+                   and not (file_code and (c.get("client_code") or "").strip()
+                            and c["client_code"].strip().upper() != file_code)]
+        if len(by_name) > 1:
+            raise HTTPException(409, f"more than one client is named {file_name} "
+                                     f"({', '.join(c.get('client_code') or c['id'] for c in by_name)}). "
+                                     f"Upload it from that client's page.")
+        if by_name:
+            target, matched_by = by_name[0], "name"
+    if not target:
+        if not who:
+            raise HTTPException(422, "this file does not show an account code or holder name, so it "
+                                     "cannot be matched to a client. Upload it from the client's page.")
+        raise HTTPException(422, f"no client in your book matches this tradebook ({who}). "
+                                 f"Add the client with that account code first, or upload it from the client's page.")
+
+    result = await _import_tradebook(store, target, content, file.filename, force)
+    result["client"] = {"id": target["id"], "name": target.get("name"),
+                        "client_code": target.get("client_code") or parsed.file_client_id}
+    result["matched_by"] = matched_by
+    result["file_account"] = parsed.file_client_id
+    result["file_name_on_tradebook"] = parsed.file_client_name
+    return {"data": result}
 
 
 @router.get("/clients/{client_id}/tradebooks")
